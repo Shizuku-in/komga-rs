@@ -1,0 +1,64 @@
+-- This is a compatibility snapshot of the user-related portion of Komga's
+-- current Flyway schema. Every statement is safe against an already-migrated
+-- Kotlin database.
+CREATE TABLE IF NOT EXISTS LIBRARY
+(
+    ID                 varchar  NOT NULL PRIMARY KEY,
+    CREATED_DATE       datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    LAST_MODIFIED_DATE datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    NAME               varchar  NOT NULL DEFAULT '',
+    ROOT               varchar  NOT NULL DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS USER
+(
+    ID                         varchar  NOT NULL PRIMARY KEY,
+    CREATED_DATE               datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    LAST_MODIFIED_DATE         datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    EMAIL                      varchar  NOT NULL UNIQUE,
+    PASSWORD                   varchar  NOT NULL,
+    SHARED_ALL_LIBRARIES       boolean  NOT NULL DEFAULT 1,
+    AGE_RESTRICTION            integer,
+    AGE_RESTRICTION_ALLOW_ONLY boolean
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS IDX__USER__EMAIL_NOCASE ON USER (lower(EMAIL));
+
+CREATE TABLE IF NOT EXISTS USER_ROLE
+(
+    USER_ID varchar NOT NULL,
+    ROLE    varchar NOT NULL,
+    PRIMARY KEY (USER_ID, ROLE),
+    FOREIGN KEY (USER_ID) REFERENCES USER (ID)
+);
+
+CREATE TABLE IF NOT EXISTS USER_LIBRARY_SHARING
+(
+    USER_ID    varchar NOT NULL,
+    LIBRARY_ID varchar NOT NULL,
+    PRIMARY KEY (USER_ID, LIBRARY_ID),
+    FOREIGN KEY (USER_ID) REFERENCES USER (ID),
+    FOREIGN KEY (LIBRARY_ID) REFERENCES LIBRARY (ID)
+);
+
+CREATE TABLE IF NOT EXISTS USER_SHARING
+(
+    LABEL   varchar NOT NULL,
+    ALLOW   boolean NOT NULL,
+    USER_ID varchar NOT NULL,
+    PRIMARY KEY (LABEL, ALLOW, USER_ID),
+    FOREIGN KEY (USER_ID) REFERENCES USER (ID)
+);
+
+CREATE TABLE IF NOT EXISTS USER_API_KEY
+(
+    ID                 varchar  NOT NULL PRIMARY KEY,
+    USER_ID            varchar  NOT NULL,
+    CREATED_DATE       datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    LAST_MODIFIED_DATE datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    API_KEY            varchar  NOT NULL UNIQUE,
+    COMMENT            varchar  NOT NULL,
+    FOREIGN KEY (USER_ID) REFERENCES USER (ID)
+);
+
+CREATE INDEX IF NOT EXISTS IDX__USER_API_KEY__USER_ID ON USER_API_KEY (USER_ID);

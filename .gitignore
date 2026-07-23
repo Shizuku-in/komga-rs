@@ -1,1 +1,5 @@
 komga/
+target/
+.komga/
+*.sqlite-shm
+*.sqlite-wal
