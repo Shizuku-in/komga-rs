@@ -227,7 +227,7 @@ pub struct BookMetadataDto {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReadProgressDto {
-    /// Zero-based page index.
+    /// One-based page number.
     pub page: i32,
     /// Whether the book is complete.
     pub completed: bool,

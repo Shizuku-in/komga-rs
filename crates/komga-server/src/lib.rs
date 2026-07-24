@@ -16,6 +16,7 @@ mod error;
 mod filesystem_routes;
 mod library_routes;
 mod media_routes;
+mod read_progress_routes;
 mod routes;
 mod runtime;
 mod settings_routes;
@@ -116,6 +117,14 @@ pub fn build_app(state: AppState) -> Router {
         .route("/api/v1/series/{series_id}", get(content_routes::get_series))
         .route("/api/v1/books/list", post(content_routes::list_books))
         .route("/api/v1/books/{book_id}", get(content_routes::get_book))
+        .route(
+            "/api/v1/books/{book_id}/read-progress",
+            patch(read_progress_routes::update_read_progress).delete(read_progress_routes::delete_read_progress),
+        )
+        .route(
+            "/api/v1/books/{book_id}/progression",
+            get(read_progress_routes::get_progression).put(read_progress_routes::update_progression),
+        )
         .route(
             "/api/v1/books/{book_id}/file",
             get(book_file_routes::download_book_file),

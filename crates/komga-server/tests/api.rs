@@ -6,8 +6,8 @@ use axum::{
 use base64::{Engine, engine::general_purpose::STANDARD};
 use http_body_util::BodyExt;
 use komga_core::{
-    AgeRestriction, AllowExclude, Book, ContentRestrictions, Library, Media, ThumbnailBook, User, UserRole, new_id,
-    scan_library_files,
+    AgeRestriction, AllowExclude, Book, ContentRestrictions, Library, Media, MediaExtension, ThumbnailBook, User,
+    UserRole, new_id, scan_library_files,
 };
 use komga_media::{analyze_book, generate_thumbnail, image_dimension};
 use komga_server::{AppState, REMEMBER_ME_COOKIE, SESSION_COOKIE, SESSION_HEADER, build_app};
@@ -1706,6 +1706,352 @@ async fn pdf_pages_render_raw_and_negotiate_like_kotlin() {
         .await
         .unwrap();
     assert_eq!(invalid_raw.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn traditional_read_progress_validates_persists_completes_and_deletes() {
+    let (_temporary, storage, tasks, book, mut media) = analyzed_media_fixture("archives/zip.zip", "Volume.cbz").await;
+    media.page_count = 10;
+    storage.replace_media_analysis(&media).await.unwrap();
+    let app = build_app(AppState::new(storage.clone(), tasks).await.unwrap());
+    let path = format!("/api/v1/books/{}/read-progress", book.id);
+
+    let unauthorized = app
+        .clone()
+        .oneshot(
+            Request::patch(&path)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(r#"{"page":5}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+
+    assert_eq!(claim(&app).await.status(), StatusCode::OK);
+    let admin = basic("admin@example.org", "password");
+    for invalid in [r#"{}"#, r#"{"completed":false}"#, r#"{"page":0}"#, r#"{"page":11}"#] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::patch(&path)
+                    .header(header::AUTHORIZATION, &admin)
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(invalid))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "payload: {invalid}");
+    }
+
+    let missing = app
+        .clone()
+        .oneshot(
+            Request::patch("/api/v1/books/missing/read-progress")
+                .header(header::AUTHORIZATION, &admin)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(r#"{"page":1}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+    assert_eq!(body_json(missing).await["message"], "Book not found");
+
+    let updated = app
+        .clone()
+        .oneshot(
+            Request::patch(&path)
+                .header(header::AUTHORIZATION, &admin)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(r#"{"page":5}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(updated.status(), StatusCode::NO_CONTENT);
+    let detail = app
+        .clone()
+        .oneshot(
+            Request::get(format!("/api/v1/books/{}", book.id))
+                .header(header::AUTHORIZATION, &admin)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let detail = body_json(detail).await;
+    assert_eq!(detail["readProgress"]["page"], 5);
+    assert_eq!(detail["readProgress"]["completed"], false);
+
+    let progression = app
+        .clone()
+        .oneshot(
+            Request::get(format!("/api/v1/books/{}/progression", book.id))
+                .header(header::AUTHORIZATION, &admin)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(progression.status(), StatusCode::OK);
+    assert_eq!(
+        progression.headers()[header::CONTENT_TYPE],
+        "application/vnd.readium.progression+json"
+    );
+    let progression = body_json(progression).await;
+    assert_eq!(progression["locator"]["href"], "");
+    assert_eq!(progression["locator"]["type"], "");
+
+    let completed = app
+        .clone()
+        .oneshot(
+            Request::patch(&path)
+                .header(header::AUTHORIZATION, &admin)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(r#"{"page":0,"completed":true}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(completed.status(), StatusCode::NO_CONTENT);
+    let saved = storage
+        .find_read_progress(
+            &book.id,
+            &storage
+                .find_user_by_email("admin@example.org")
+                .await
+                .unwrap()
+                .unwrap()
+                .id,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(saved.page, 10);
+    assert!(saved.completed);
+
+    let password_hash = bcrypt::hash("reader-password", 4).unwrap();
+    let mut restricted = User::new("restricted-progress@example.org".into(), password_hash);
+    restricted.restrictions = ContentRestrictions::new(
+        Some(AgeRestriction {
+            age: 12,
+            restriction: AllowExclude::AllowOnly,
+        }),
+        Vec::<String>::new(),
+        Vec::<String>::new(),
+    );
+    storage.create_user(&restricted).await.unwrap();
+    let forbidden = app
+        .clone()
+        .oneshot(
+            Request::patch(&path)
+                .header(
+                    header::AUTHORIZATION,
+                    basic("restricted-progress@example.org", "reader-password"),
+                )
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(r#"{"page":1}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(forbidden.status(), StatusCode::FORBIDDEN);
+
+    for _ in 0..2 {
+        let deleted = app
+            .clone()
+            .oneshot(
+                Request::delete(&path)
+                    .header(header::AUTHORIZATION, &admin)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(deleted.status(), StatusCode::NO_CONTENT);
+    }
+    let no_progression = app
+        .oneshot(
+            Request::get(format!("/api/v1/books/{}/progression", book.id))
+                .header(header::AUTHORIZATION, admin)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(no_progression.status(), StatusCode::NO_CONTENT);
+}
+
+#[tokio::test]
+async fn pdf_progression_enforces_positions_and_newer_timestamps() {
+    let (_temporary, storage, tasks, book, _media) = analyzed_media_fixture("pdf/komga.pdf", "Volume.pdf").await;
+    let app = build_app(AppState::new(storage, tasks).await.unwrap());
+    assert_eq!(claim(&app).await.status(), StatusCode::OK);
+    let admin = basic("admin@example.org", "password");
+    let path = format!("/api/v1/books/{}/progression", book.id);
+
+    let empty = app
+        .clone()
+        .oneshot(
+            Request::get(&path)
+                .header(header::AUTHORIZATION, &admin)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(empty.status(), StatusCode::NO_CONTENT);
+
+    let request = serde_json::json!({
+        "modified": "2025-01-02T03:04:05Z",
+        "device": {"id": "tablet", "name": "Reader"},
+        "locator": {
+            "href": "",
+            "type": "application/pdf",
+            "locations": {"position": 1, "progression": 0.5, "totalProgression": 1.0}
+        }
+    });
+    let updated = app
+        .clone()
+        .oneshot(
+            Request::put(&path)
+                .header(header::AUTHORIZATION, &admin)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(request.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(updated.status(), StatusCode::NO_CONTENT);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::get(&path)
+                .header(header::AUTHORIZATION, &admin)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers()[header::CONTENT_TYPE],
+        "application/vnd.readium.progression+json"
+    );
+    let response = body_json(response).await;
+    assert_eq!(response["modified"], "2025-01-02T03:04:05Z");
+    assert_eq!(response["device"]["id"], "tablet");
+    assert_eq!(response["locator"]["locations"]["position"], 1);
+
+    let conflict = app
+        .clone()
+        .oneshot(
+            Request::put(&path)
+                .header(header::AUTHORIZATION, &admin)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(request.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(conflict.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        body_json(conflict).await["message"],
+        "Progression is older than existing"
+    );
+
+    let invalid = app
+        .oneshot(
+            Request::put(&path)
+                .header(header::AUTHORIZATION, admin)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "modified": "2025-01-02T03:04:06Z",
+                        "device": {"id": "tablet", "name": "Reader"},
+                        "locator": {"href": "", "type": "application/pdf", "locations": {"position": 2}}
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(invalid.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn epub_progression_normalizes_resources_and_page_updates_use_positions() {
+    let (_temporary, storage, tasks, book, media) = analyzed_media_fixture("archives/epub3.epub", "Volume.epub").await;
+    let MediaExtension::Epub(extension) = media.extension.as_ref().unwrap();
+    let first = extension.positions[0].clone();
+    let second = extension.positions[1].clone();
+    let app = build_app(AppState::new(storage.clone(), tasks).await.unwrap());
+    assert_eq!(claim(&app).await.status(), StatusCode::OK);
+    let admin = basic("admin@example.org", "password");
+    let path = format!("/api/v1/books/{}/progression", book.id);
+
+    let updated = app
+        .clone()
+        .oneshot(
+            Request::put(&path)
+                .header(header::AUTHORIZATION, &admin)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "modified": "2025-02-03T04:05:06+02:00",
+                        "device": {"id": "epub-reader", "name": "Tablet"},
+                        "locator": {
+                            "href": format!("{}#fragment", first.href),
+                            "type": "application/octet-stream",
+                            "locations": {"position": 99, "progression": 0.75, "totalProgression": 0.1}
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(updated.status(), StatusCode::NO_CONTENT);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::get(&path)
+                .header(header::AUTHORIZATION, &admin)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let response = body_json(response).await;
+    assert_eq!(response["modified"], "2025-02-03T02:05:06Z");
+    assert_eq!(response["locator"]["type"], first.media_type);
+    assert_eq!(
+        response["locator"]["locations"]["totalProgression"],
+        serde_json::json!(first.locations.as_ref().unwrap().total_progression.unwrap())
+    );
+
+    let page_update = app
+        .oneshot(
+            Request::patch(format!("/api/v1/books/{}/read-progress", book.id))
+                .header(header::AUTHORIZATION, admin)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(r#"{"page":2}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(page_update.status(), StatusCode::NO_CONTENT);
+    let admin = storage.find_user_by_email("admin@example.org").await.unwrap().unwrap();
+    let progress = storage.find_read_progress(&book.id, &admin.id).await.unwrap().unwrap();
+    assert_eq!(progress.page, 2);
+    assert!(progress.completed);
+    assert_eq!(progress.locator, Some(second));
 }
 
 #[tokio::test]

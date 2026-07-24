@@ -11,6 +11,7 @@ mod content;
 mod content_queries;
 mod library;
 mod media;
+mod read_progress;
 mod schema;
 mod settings;
 mod tasks;

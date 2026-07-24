@@ -9,7 +9,7 @@ The reference baseline is Komga commit `4ef86df`. Porting is organized as vertic
 | Claim and users | Implemented | Claim, current user, CRUD, roles, library sharing fields, age/label restrictions, and password changes. |
 | Authentication | Partial | Basic, in-memory sessions, remember-me cookie, header sessions, logout, and REST API keys are implemented. OAuth2 and authentication activity are pending. |
 | Libraries and scanner | Partial | Library CRUD, filesystem browsing, scan workers, startup/periodic scheduling, Series/Book discovery, change reconciliation, soft deletion, and automatic CBZ/CBR/PDF/EPUB analysis are implemented. Sidecars, metadata providers, and trash execution are pending. |
-| Series/books/read progress | Partial | Skeleton persistence, natural ordering, modern list/detail APIs, Spring pagination, basic recursive filtering, sibling navigation, access restrictions, existing progress hydration, CBZ/CBR/PDF and fixed-layout EPUB pages, EPUB resources/positions, WebPub manifests, generated book thumbnails, and streaming original-file downloads are implemented. Metadata mutations, progress writes, deprecated/specialized lists, and thumbnail management are pending. |
+| Series/books/read progress | Partial | Skeleton persistence, natural ordering, modern list/detail APIs, Spring pagination, basic recursive filtering, sibling navigation, access restrictions, progress hydration and per-book writes, REST Readium progression, CBZ/CBR/PDF and fixed-layout EPUB pages, EPUB resources/positions, WebPub manifests, generated book thumbnails, and streaming original-file downloads are implemented. Metadata mutations, series/bulk progress operations, deprecated/specialized lists, and thumbnail management are pending. |
 | Collections/read lists | Pending | CRUD, matching, thumbnails, generated archives, and progress aggregation. |
 | Media | Partial | ZIP/CBZ, RAR4/RAR5/CBR (including solid archives), PDF, and EPUB analysis are implemented without external runtime commands. PDF supports rendered and raw pages; EPUB supports OPF/NAV/NCX discovery, resources, Readium positions, native KEPUB detection, fixed-layout pages, and package covers. Divina, PDF, and EPUB WebPub manifests are available. EPUB metadata import, uncommon image codecs, hashing, and duplicate pages are pending. |
 | Search | Pending | Lucene-equivalent multilingual indexing and lifecycle. |
@@ -37,13 +37,18 @@ The reference baseline is Komga commit `4ef86df`. Porting is organized as vertic
 
 ## Next slice
 
-The next dependency-ordered slice is read-progress writes:
+The next dependency-ordered slice is book and series metadata mutations:
 
-1. expose `PATCH` and `DELETE /api/v1/books/{bookId}/read-progress`;
-2. expose the REST WebPub `GET` and `PUT /api/v1/books/{bookId}/progression` contract;
-3. preserve Kotlin page bounds, completion inference, progression validation, and conflict behavior;
-4. apply existing library, age, and sharing-label restrictions before reading or mutating progress;
-5. port persistence and HTTP contract tests for create, update, completion, deletion, and missing progress.
+1. expose the single-book, bulk-book, and series metadata `PATCH` routes;
+2. preserve omitted-versus-null patch behavior, field locks, and Kotlin validation rules;
+3. update authors, tags, genres, links, alternate titles, and sharing labels transactionally;
+4. rebuild the affected series metadata aggregation after book updates;
+5. port authorization, persistence, partial-update, explicit-null, and lock contract tests.
+
+Per-book reading progress now supports one-based page updates, completion, idempotent deletion, and REST Readium
+progression retrieval and synchronization. Locators are validated against analyzed media, serialized as Kotlin-compatible
+gzip JSON, and series progress counts are rebuilt in the same transaction. Equal or older progression timestamps return
+`409 Conflict`; book visibility restrictions are applied before progress is read or changed.
 
 Original book files are served from both the canonical REST path and its filename-suffix compatibility alias. The
 response uses the analyzed media type and current filesystem length, preserves Spring-compatible UTF-8 attachment
