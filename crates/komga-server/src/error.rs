@@ -96,6 +96,7 @@ impl From<StorageError> for ApiError {
                 tracing::error!(%error, "invalid persisted data");
                 Self::internal("Invalid persisted data")
             }
+            StorageError::InvalidQuery(error) => Self::bad_request(error),
             StorageError::Database(error) => {
                 tracing::error!(%error, "database request failed");
                 Self::internal("Database request failed")

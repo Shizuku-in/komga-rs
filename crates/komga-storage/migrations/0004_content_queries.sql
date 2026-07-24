@@ -1,0 +1,129 @@
+-- Relations required to hydrate Kotlin-compatible SeriesDto and BookDto
+-- responses. Existing Flyway databases already contain these tables, so this
+-- migration only fills the gap for databases initialized by Rust.
+CREATE TABLE IF NOT EXISTS SERIES_METADATA_GENRE
+(
+    GENRE     varchar NOT NULL,
+    SERIES_ID varchar NOT NULL,
+    FOREIGN KEY (SERIES_ID) REFERENCES SERIES (ID)
+);
+CREATE INDEX IF NOT EXISTS idx__series_metadata_genre__series_id
+    ON SERIES_METADATA_GENRE (SERIES_ID);
+
+CREATE TABLE IF NOT EXISTS SERIES_METADATA_TAG
+(
+    TAG       varchar NOT NULL,
+    SERIES_ID varchar NOT NULL,
+    FOREIGN KEY (SERIES_ID) REFERENCES SERIES (ID)
+);
+CREATE INDEX IF NOT EXISTS idx__series_metadata_tag__series_id
+    ON SERIES_METADATA_TAG (SERIES_ID);
+
+CREATE TABLE IF NOT EXISTS SERIES_METADATA_SHARING
+(
+    LABEL     varchar NOT NULL,
+    SERIES_ID varchar NOT NULL,
+    FOREIGN KEY (SERIES_ID) REFERENCES SERIES (ID)
+);
+CREATE INDEX IF NOT EXISTS idx__series_metadata_sharing__series_id
+    ON SERIES_METADATA_SHARING (SERIES_ID);
+
+CREATE TABLE IF NOT EXISTS SERIES_METADATA_LINK
+(
+    LABEL     varchar NOT NULL,
+    URL       varchar NOT NULL,
+    SERIES_ID varchar NOT NULL,
+    FOREIGN KEY (SERIES_ID) REFERENCES SERIES (ID)
+);
+CREATE INDEX IF NOT EXISTS idx__series_metadata_link__series_id
+    ON SERIES_METADATA_LINK (SERIES_ID);
+
+CREATE TABLE IF NOT EXISTS SERIES_METADATA_ALTERNATE_TITLE
+(
+    LABEL     varchar NOT NULL,
+    TITLE     varchar NOT NULL,
+    SERIES_ID varchar NOT NULL,
+    FOREIGN KEY (SERIES_ID) REFERENCES SERIES (ID)
+);
+CREATE INDEX IF NOT EXISTS idx__series_metadata_alternate_title__series_id
+    ON SERIES_METADATA_ALTERNATE_TITLE (SERIES_ID);
+
+CREATE TABLE IF NOT EXISTS BOOK_METADATA_AUTHOR
+(
+    NAME    varchar NOT NULL,
+    ROLE    varchar NOT NULL,
+    BOOK_ID varchar NOT NULL,
+    FOREIGN KEY (BOOK_ID) REFERENCES BOOK (ID)
+);
+CREATE INDEX IF NOT EXISTS idx__book_metadata_author__book_id
+    ON BOOK_METADATA_AUTHOR (BOOK_ID);
+
+CREATE TABLE IF NOT EXISTS BOOK_METADATA_TAG
+(
+    TAG     varchar NOT NULL,
+    BOOK_ID varchar NOT NULL,
+    FOREIGN KEY (BOOK_ID) REFERENCES BOOK (ID)
+);
+CREATE INDEX IF NOT EXISTS idx__book_metadata_tag__book_id
+    ON BOOK_METADATA_TAG (BOOK_ID);
+
+CREATE TABLE IF NOT EXISTS BOOK_METADATA_LINK
+(
+    LABEL   varchar NOT NULL,
+    URL     varchar NOT NULL,
+    BOOK_ID varchar NOT NULL,
+    FOREIGN KEY (BOOK_ID) REFERENCES BOOK (ID)
+);
+CREATE INDEX IF NOT EXISTS idx__book_metadata_link__book_id
+    ON BOOK_METADATA_LINK (BOOK_ID);
+
+CREATE TABLE IF NOT EXISTS BOOK_METADATA_AGGREGATION_AUTHOR
+(
+    NAME      varchar NOT NULL,
+    ROLE      varchar NOT NULL,
+    SERIES_ID varchar NOT NULL,
+    FOREIGN KEY (SERIES_ID) REFERENCES SERIES (ID)
+);
+CREATE INDEX IF NOT EXISTS idx__book_metadata_aggregation_author__series_id
+    ON BOOK_METADATA_AGGREGATION_AUTHOR (SERIES_ID);
+
+CREATE TABLE IF NOT EXISTS BOOK_METADATA_AGGREGATION_TAG
+(
+    TAG       varchar NOT NULL,
+    SERIES_ID varchar NOT NULL,
+    FOREIGN KEY (SERIES_ID) REFERENCES SERIES (ID)
+);
+CREATE INDEX IF NOT EXISTS idx__book_metadata_aggregation_tag__series_id
+    ON BOOK_METADATA_AGGREGATION_TAG (SERIES_ID);
+
+CREATE TABLE IF NOT EXISTS READ_PROGRESS
+(
+    BOOK_ID            varchar  NOT NULL,
+    USER_ID            varchar  NOT NULL,
+    CREATED_DATE       datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    LAST_MODIFIED_DATE datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PAGE               int      NOT NULL,
+    COMPLETED          boolean  NOT NULL,
+    READ_DATE          datetime NULL DEFAULT CURRENT_TIMESTAMP,
+    DEVICE_ID          varchar  DEFAULT '',
+    DEVICE_NAME        varchar  DEFAULT '',
+    LOCATOR            blob     NULL,
+    PRIMARY KEY (BOOK_ID, USER_ID),
+    FOREIGN KEY (BOOK_ID) REFERENCES BOOK (ID),
+    FOREIGN KEY (USER_ID) REFERENCES USER (ID)
+);
+CREATE INDEX IF NOT EXISTS idx__read_progress__last_modified_date
+    ON READ_PROGRESS (LAST_MODIFIED_DATE);
+
+CREATE TABLE IF NOT EXISTS READ_PROGRESS_SERIES
+(
+    SERIES_ID            varchar  NOT NULL,
+    USER_ID              varchar  NOT NULL,
+    READ_COUNT           int      NOT NULL,
+    IN_PROGRESS_COUNT    int      NOT NULL,
+    MOST_RECENT_READ_DATE datetime NULL,
+    LAST_MODIFIED_DATE   datetime NULL,
+    PRIMARY KEY (SERIES_ID, USER_ID),
+    FOREIGN KEY (SERIES_ID) REFERENCES SERIES (ID),
+    FOREIGN KEY (USER_ID) REFERENCES USER (ID)
+);

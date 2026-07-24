@@ -1,6 +1,6 @@
 use std::{fs, path::PathBuf};
 
-use komga_core::{ScanInterval, scan_library_files};
+use komga_core::{BookSearch, PageRequest, ScanInterval, SeriesSearch, User, scan_library_files};
 use komga_storage::{Storage, TaskStorage};
 use url::Url;
 
@@ -48,6 +48,19 @@ async fn opens_kotlin_flyway_databases_and_maps_current_rows() {
         storage.list_books_by_series_id(&series[0].id).await.unwrap()[0].name,
         "Volume 1"
     );
+    let user = User::new("fixture-reader@example.org".into(), "$2b$10$fixture".into());
+    storage.create_user(&user).await.unwrap();
+    let series_page = storage
+        .query_series(&SeriesSearch::default(), &PageRequest::default(), &user)
+        .await
+        .unwrap();
+    assert_eq!(series_page.content[0].metadata.title, "Kotlin Series");
+    let book_page = storage
+        .query_books(&BookSearch::default(), &PageRequest::default(), &user)
+        .await
+        .unwrap();
+    assert_eq!(book_page.content[0].series_title, "Kotlin Series");
+    assert_eq!(book_page.content[0].media.status, "UNKNOWN");
 
     let tasks = TaskStorage::connect_path(&tasks_database).await.unwrap();
     let queued = tasks.list().await.unwrap();

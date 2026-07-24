@@ -8,6 +8,7 @@
 #![warn(missing_docs)]
 
 mod content;
+mod content_queries;
 mod library;
 mod schema;
 mod settings;
@@ -39,6 +40,9 @@ pub enum StorageError {
     /// Persisted data could not be converted to the current domain model.
     #[error("invalid persisted data: {0}")]
     InvalidData(String),
+    /// A content query requested a feature or value not supported by this slice.
+    #[error("invalid content query: {0}")]
+    InvalidQuery(String),
     /// A query, transaction, connection, or SQLite constraint failed.
     #[error("database error: {0}")]
     Database(#[from] sqlx::Error),
@@ -662,7 +666,11 @@ mod tests {
     use std::fs;
 
     use super::*;
-    use komga_core::{ALL_ROLES, Library, ScanInterval, new_id, scan_library_files};
+    use komga_core::{
+        ALL_ROLES, AgeRestriction, AllowExclude, BookCondition, BookSearch, ContentRestrictions, EqualityOperator,
+        Library, PageRequest, ReadStatus, ReadStatusOperator, ScanInterval, SeriesSearch, SortDirection, SortOrder,
+        new_id, scan_library_files,
+    };
     use url::Url;
 
     #[tokio::test]
@@ -971,6 +979,207 @@ mod tests {
             storage.list_books_by_series_id(&original_series.id).await.unwrap()[0]
                 .deleted_date
                 .is_some()
+        );
+    }
+
+    #[tokio::test]
+    async fn content_queries_hydrate_filter_page_and_apply_restrictions() {
+        let storage = Storage::connect_memory().await.unwrap();
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("library");
+        let series_directory = root.join("Series");
+        fs::create_dir_all(&series_directory).unwrap();
+        fs::write(series_directory.join("Volume 1.cbz"), vec![0_u8; 1536]).unwrap();
+        fs::write(series_directory.join("Volume 2.cbz"), vec![0_u8; 2048]).unwrap();
+        let library = Library::new("Library".into(), Url::from_directory_path(&root).unwrap());
+        storage.create_library(&library).await.unwrap();
+        let scan = scan_library_files(&library, || false).unwrap();
+        storage.apply_library_scan(&library.id, &scan, false).await.unwrap();
+
+        let series = storage.list_series_by_library_id(&library.id).await.unwrap().remove(0);
+        let books = storage.list_books_by_series_id(&series.id).await.unwrap();
+        let mut user = User::new("reader@example.org".into(), "$2b$10$hash".into());
+        storage.create_user(&user).await.unwrap();
+
+        sqlx::query("UPDATE SERIES_METADATA SET AGE_RATING = 16 WHERE SERIES_ID = ?")
+            .bind(&series.id)
+            .execute(storage.pool())
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO SERIES_METADATA_GENRE (SERIES_ID, GENRE) VALUES (?, 'Fantasy')")
+            .bind(&series.id)
+            .execute(storage.pool())
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO SERIES_METADATA_TAG (SERIES_ID, TAG) VALUES (?, 'Favorite')")
+            .bind(&series.id)
+            .execute(storage.pool())
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO SERIES_METADATA_SHARING (SERIES_ID, LABEL) VALUES (?, 'teen')")
+            .bind(&series.id)
+            .execute(storage.pool())
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO SERIES_METADATA_LINK (SERIES_ID, LABEL, URL) VALUES (?, 'Source', 'https://example.org')",
+        )
+        .bind(&series.id)
+        .execute(storage.pool())
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO SERIES_METADATA_ALTERNATE_TITLE (SERIES_ID, LABEL, TITLE) VALUES (?, 'ja', 'Alternative')",
+        )
+        .bind(&series.id)
+        .execute(storage.pool())
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO BOOK_METADATA_AGGREGATION_AUTHOR (SERIES_ID, NAME, ROLE) VALUES (?, 'Author', 'writer')",
+        )
+        .bind(&series.id)
+        .execute(storage.pool())
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO BOOK_METADATA_AGGREGATION_TAG (SERIES_ID, TAG) VALUES (?, 'Collected')")
+            .bind(&series.id)
+            .execute(storage.pool())
+            .await
+            .unwrap();
+
+        for book in &books {
+            sqlx::query(
+                "UPDATE MEDIA SET STATUS = 'READY', MEDIA_TYPE = 'application/pdf', PAGE_COUNT = 4 WHERE BOOK_ID = ?",
+            )
+            .bind(&book.id)
+            .execute(storage.pool())
+            .await
+            .unwrap();
+        }
+        sqlx::query("INSERT INTO BOOK_METADATA_AUTHOR (BOOK_ID, NAME, ROLE) VALUES (?, 'Author', 'writer')")
+            .bind(&books[0].id)
+            .execute(storage.pool())
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO BOOK_METADATA_TAG (BOOK_ID, TAG) VALUES (?, 'BookTag')")
+            .bind(&books[0].id)
+            .execute(storage.pool())
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO BOOK_METADATA_LINK (BOOK_ID, LABEL, URL) VALUES (?, 'Info', 'https://example.org/book')",
+        )
+        .bind(&books[0].id)
+        .execute(storage.pool())
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO READ_PROGRESS (BOOK_ID, USER_ID, PAGE, COMPLETED, DEVICE_ID, DEVICE_NAME) VALUES (?, ?, 3, 1, 'device', 'Reader')",
+        )
+        .bind(&books[0].id)
+        .bind(&user.id)
+        .execute(storage.pool())
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO READ_PROGRESS_SERIES (SERIES_ID, USER_ID, READ_COUNT, IN_PROGRESS_COUNT) VALUES (?, ?, 1, 0)",
+        )
+        .bind(&series.id)
+        .bind(&user.id)
+        .execute(storage.pool())
+        .await
+        .unwrap();
+
+        let series_page = storage
+            .query_series(&SeriesSearch::default(), &PageRequest::default(), &user)
+            .await
+            .unwrap();
+        assert_eq!(series_page.total_elements, 1);
+        let dto = &series_page.content[0];
+        assert_eq!(dto.books_read_count, 1);
+        assert_eq!(dto.books_unread_count, 1);
+        assert!(dto.metadata.genres.contains("Fantasy"));
+        assert_eq!(dto.metadata.links[0].label, "Source");
+        assert_eq!(dto.books_metadata.authors[0].name, "Author");
+
+        let read_search = BookSearch {
+            condition: Some(BookCondition::ReadStatus {
+                operator: ReadStatusOperator::Is {
+                    value: ReadStatus::Read,
+                },
+            }),
+            full_text_search: None,
+        };
+        let page_request = PageRequest {
+            page: 0,
+            size: 1,
+            unpaged: false,
+            sort: vec![SortOrder {
+                property: "metadata.numberSort".into(),
+                direction: SortDirection::Ascending,
+            }],
+        };
+        let book_page = storage.query_books(&read_search, &page_request, &user).await.unwrap();
+        assert_eq!(book_page.total_elements, 1);
+        assert_eq!(book_page.content[0].media.media_profile, "PDF");
+        assert_eq!(book_page.content[0].metadata.tags, BTreeSet::from(["BookTag".into()]));
+        assert_eq!(book_page.content[0].read_progress.as_ref().unwrap().device_id, "device");
+        assert_eq!(book_page.content[0].size, "1.5 KiB");
+        assert_eq!(
+            storage
+                .find_book_sibling_dto(&books[0].id, &user.id, true)
+                .await
+                .unwrap()
+                .unwrap()
+                .id,
+            books[1].id
+        );
+
+        user.restrictions = ContentRestrictions::new(
+            Some(AgeRestriction {
+                age: 12,
+                restriction: AllowExclude::AllowOnly,
+            }),
+            BTreeSet::new(),
+            BTreeSet::new(),
+        );
+        assert_eq!(
+            storage
+                .query_series(&SeriesSearch::default(), &PageRequest::default(), &user)
+                .await
+                .unwrap()
+                .total_elements,
+            0
+        );
+        user.restrictions = ContentRestrictions::default();
+        user.shared_all_libraries = false;
+        assert_eq!(
+            storage
+                .query_books(&BookSearch::default(), &PageRequest::default(), &user)
+                .await
+                .unwrap()
+                .total_elements,
+            0
+        );
+
+        let media_search = BookSearch {
+            condition: Some(BookCondition::MediaStatus {
+                operator: EqualityOperator::Is { value: "READY".into() },
+            }),
+            full_text_search: None,
+        };
+        assert_eq!(
+            storage
+                .query_books(
+                    &media_search,
+                    &PageRequest::default(),
+                    &User::new("all@example.org".into(), "hash".into())
+                )
+                .await
+                .unwrap()
+                .total_elements,
+            2
         );
     }
 

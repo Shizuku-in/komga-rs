@@ -9,6 +9,7 @@
 mod auth;
 /// Command-line and environment configuration.
 pub mod config;
+mod content_routes;
 mod dto;
 mod error;
 mod filesystem_routes;
@@ -108,6 +109,15 @@ pub fn build_app(state: AppState) -> Router {
         .route("/api/v2/users/{user_id}/password", patch(routes::update_user_password))
         .route("/api/v1/login/set-cookie", get(routes::set_cookie))
         .route("/api/logout", get(routes::logout).post(routes::logout))
+        .route("/api/v1/series/list", post(content_routes::list_series))
+        .route("/api/v1/series/{series_id}", get(content_routes::get_series))
+        .route("/api/v1/books/list", post(content_routes::list_books))
+        .route("/api/v1/books/{book_id}", get(content_routes::get_book))
+        .route(
+            "/api/v1/books/{book_id}/previous",
+            get(content_routes::get_previous_book),
+        )
+        .route("/api/v1/books/{book_id}/next", get(content_routes::get_next_book))
         .route(
             "/api/v1/libraries",
             get(library_routes::list_libraries).post(library_routes::create_library),

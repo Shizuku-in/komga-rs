@@ -6,6 +6,7 @@
 
 #![warn(missing_docs)]
 
+mod content;
 mod scanner;
 
 use std::collections::BTreeSet;
@@ -14,6 +15,12 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 use uuid::Uuid;
 
+pub use content::{
+    AlternateTitleDto, AuthorDto, BookCondition, BookDto, BookMetadataAggregationDto, BookMetadataDto, BookSearch,
+    BooleanOperator, ContentPage, EqualityOperator, MediaDto, PageRequest, ReadProgressDto, ReadStatus,
+    ReadStatusOperator, SeriesCondition, SeriesDto, SeriesMetadataDto, SeriesSearch, SortDirection, SortOrder,
+    StringOperator, WebLinkDto,
+};
 pub use scanner::{Book, ScanError, ScanResult, ScannedSeries, Series, scan_library_files};
 
 /// Every application role recognized by the current Komga compatibility layer.
