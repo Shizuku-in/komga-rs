@@ -11,10 +11,18 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use chrono::Utc;
-use komga_core::{Media, R2Progression, ReadProgressError, completed_progress, page_progress, progression};
+use komga_core::{
+    Media, R2Progression, ReadProgressError, SeriesReadProgressDto, completed_progress, page_progress, progression,
+};
 use serde::Deserialize;
 
-use crate::{AppState, auth::AuthContext, content_routes::load_visible_book, error::ApiError, routes::ApiJson};
+use crate::{
+    AppState,
+    auth::AuthContext,
+    content_routes::{load_visible_book, load_visible_series},
+    error::ApiError,
+    routes::ApiJson,
+};
 
 const PROGRESSION_MEDIA_TYPE: &str = "application/vnd.readium.progression+json";
 
@@ -23,6 +31,78 @@ const PROGRESSION_MEDIA_TYPE: &str = "application/vnd.readium.progression+json";
 pub(crate) struct ReadProgressUpdateDto {
     page: Option<i32>,
     completed: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct TachiyomiReadProgressUpdateDto {
+    last_book_number_sort_read: f64,
+}
+
+/// Marks every incomplete book in a visible series complete.
+pub(crate) async fn mark_series_read_completed(
+    State(state): State<AppState>,
+    Extension(auth): Extension<AuthContext>,
+    Path(series_id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    load_visible_series(&state, &auth.user, &series_id).await?;
+    state
+        .storage
+        .mark_series_read_completed(&series_id, &auth.user.id, None, Utc::now().naive_utc())
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Deletes all progress for a visible series.
+pub(crate) async fn delete_series_read_progress(
+    State(state): State<AppState>,
+    Extension(auth): Extension<AuthContext>,
+    Path(series_id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    load_visible_series(&state, &auth.user, &series_id).await?;
+    state
+        .storage
+        .delete_series_read_progress(&series_id, &auth.user.id)
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Returns the Mihon/Tachiyomi series progress contract.
+pub(crate) async fn get_tachiyomi_series_read_progress(
+    State(state): State<AppState>,
+    Extension(auth): Extension<AuthContext>,
+    Path(series_id): Path<String>,
+) -> Result<Json<SeriesReadProgressDto>, ApiError> {
+    load_visible_series(&state, &auth.user, &series_id).await?;
+    Ok(Json(
+        state
+            .storage
+            .find_series_read_progress(&series_id, &auth.user.id)
+            .await?,
+    ))
+}
+
+/// Marks books through the supplied Mihon/Tachiyomi sort number complete.
+pub(crate) async fn update_tachiyomi_series_read_progress(
+    State(state): State<AppState>,
+    Extension(auth): Extension<AuthContext>,
+    Path(series_id): Path<String>,
+    ApiJson(update): ApiJson<TachiyomiReadProgressUpdateDto>,
+) -> Result<StatusCode, ApiError> {
+    if !update.last_book_number_sort_read.is_finite() {
+        return Err(ApiError::bad_request("lastBookNumberSortRead must be finite"));
+    }
+    load_visible_series(&state, &auth.user, &series_id).await?;
+    state
+        .storage
+        .mark_series_read_completed(
+            &series_id,
+            &auth.user.id,
+            Some(update.last_book_number_sort_read),
+            Utc::now().naive_utc(),
+        )
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// Updates one user's traditional one-based page progress.

@@ -5,11 +5,11 @@ The reference baseline is Komga commit `4ef86df`. Porting is organized as vertic
 | Area | Status | Notes |
 | --- | --- | --- |
 | Process/configuration | Partial | Default config directory, main/task database files, address, coordinated background-service shutdown, and tracing are implemented. Spring YAML compatibility is pending. |
-| SQLite | Partial | User, library, settings, task queue, Series/Book, media pages/files, book thumbnails, metadata relations, and read-progress schema are compatible with current Flyway databases. The complete schema and all historical migration paths are pending. |
+| SQLite | Partial | User, library, settings, task queue, Series/Book, media pages/files, book/series thumbnails, metadata relations, and read-progress schema are compatible with current Flyway databases. The complete schema and all historical migration paths are pending. |
 | Claim and users | Implemented | Claim, current user, CRUD, roles, library sharing fields, age/label restrictions, and password changes. |
 | Authentication | Partial | Basic, in-memory sessions, remember-me cookie, header sessions, logout, and REST API keys are implemented. OAuth2 and authentication activity are pending. |
 | Libraries and scanner | Partial | Library CRUD, filesystem browsing, scan workers, startup/periodic scheduling, Series/Book discovery, change reconciliation, soft deletion, and automatic CBZ/CBR/PDF/EPUB analysis are implemented. Sidecars, metadata providers, and trash execution are pending. |
-| Series/books/read progress | Partial | Skeleton persistence, natural ordering, modern list/detail APIs, Spring pagination, basic recursive filtering, sibling navigation, access restrictions, progress hydration and per-book writes, REST Readium progression, administrator book/series metadata mutations, CBZ/CBR/PDF and fixed-layout EPUB pages, EPUB resources/positions, WebPub manifests, generated book thumbnails, and streaming original-file downloads are implemented. Series/bulk progress operations, deprecated/specialized lists, and thumbnail management are pending. |
+| Series/books/read progress | Partial | Skeleton persistence, natural ordering, modern list/detail APIs, Spring pagination, basic recursive filtering, sibling navigation, access restrictions, progress hydration, per-book and series-level writes, REST Readium progression, Mihon/Tachiyomi series synchronization, administrator book/series metadata mutations, book/series thumbnail management and regeneration, CBZ/CBR/PDF and fixed-layout EPUB pages, EPUB resources/positions, WebPub manifests, and streaming original-file downloads are implemented. Deprecated/specialized lists remain pending. |
 | Collections/read lists | Pending | CRUD, matching, thumbnails, generated archives, and progress aggregation. |
 | Media | Partial | ZIP/CBZ, RAR4/RAR5/CBR (including solid archives), PDF, and EPUB analysis are implemented without external runtime commands. PDF supports rendered and raw pages; EPUB supports OPF/NAV/NCX discovery, resources, Readium positions, native KEPUB detection, fixed-layout pages, and package covers. Divina, PDF, and EPUB WebPub manifests are available. EPUB metadata import, uncommon image codecs, hashing, and duplicate pages are pending. |
 | Search | Pending | Lucene-equivalent multilingual indexing and lifecycle. |
@@ -37,13 +37,8 @@ The reference baseline is Komga commit `4ef86df`. Porting is organized as vertic
 
 ## Next slice
 
-The next dependency-ordered slice is series-level reading progress:
-
-1. expose the series mark-read and mark-unread routes;
-2. update every visible book in one storage transaction and rebuild the series progress counters;
-3. port the Mihon/Tachiyomi series progress read and update contract on top of the same lifecycle;
-4. preserve content restrictions, idempotency, and missing-series behavior;
-5. add HTTP tests for complete, reset, partial synchronization, authorization, and rollback behavior.
+The next dependency-ordered slice is collections and read lists: CRUD, membership and matching, progress aggregation,
+and their thumbnail contracts using the poster lifecycle now available for books and series.
 
 Book and series metadata can be patched through the Kotlin-compatible administrator routes. The HTTP boundary preserves
 each field's distinct omitted-versus-null behavior, while `komga-core` owns normalization and validation. Bulk book

@@ -4,7 +4,7 @@ use std::io::Write;
 
 use chrono::NaiveDateTime;
 use flate2::{Compression, read::GzDecoder, write::GzEncoder};
-use komga_core::{R2Locator, ReadProgress};
+use komga_core::{R2Locator, ReadProgress, SeriesReadProgressDto, series_read_progress};
 use sqlx::{FromRow, Sqlite, Transaction};
 
 use crate::{Result, Storage, StorageError};
@@ -23,6 +23,87 @@ struct ReadProgressRow {
 }
 
 impl Storage {
+    /// Computes one user's progress summary across all books in a series.
+    pub async fn find_series_read_progress(&self, series_id: &str, user_id: &str) -> Result<SeriesReadProgressDto> {
+        let books = sqlx::query_as::<_, (f64, Option<bool>)>(
+            r#"SELECT bm.NUMBER_SORT, rp.COMPLETED
+                 FROM BOOK b
+                 JOIN BOOK_METADATA bm ON bm.BOOK_ID = b.ID
+                 LEFT JOIN READ_PROGRESS rp ON rp.BOOK_ID = b.ID AND rp.USER_ID = ?
+                WHERE b.SERIES_ID = ?"#,
+        )
+        .bind(user_id)
+        .bind(series_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(series_read_progress(books))
+    }
+
+    /// Marks incomplete books in a series complete, optionally through a sort number.
+    ///
+    /// Returns the number of inserted or updated rows.
+    pub async fn mark_series_read_completed(
+        &self,
+        series_id: &str,
+        user_id: &str,
+        through_number_sort: Option<f64>,
+        read_date: NaiveDateTime,
+    ) -> Result<u64> {
+        let mut tx = self.pool.begin().await?;
+        let changed = sqlx::query(
+            r#"INSERT INTO READ_PROGRESS
+                 (BOOK_ID, USER_ID, PAGE, COMPLETED, READ_DATE, DEVICE_ID, DEVICE_NAME, LOCATOR)
+               SELECT b.ID, ?, m.PAGE_COUNT, 1, ?, '', '', NULL
+                 FROM BOOK b
+                 JOIN BOOK_METADATA bm ON bm.BOOK_ID = b.ID
+                 JOIN MEDIA m ON m.BOOK_ID = b.ID
+                 LEFT JOIN READ_PROGRESS rp ON rp.BOOK_ID = b.ID AND rp.USER_ID = ?
+                WHERE b.SERIES_ID = ?
+                  AND (? IS NULL OR bm.NUMBER_SORT <= ?)
+                  AND (rp.BOOK_ID IS NULL OR rp.COMPLETED = 0)
+               ON CONFLICT(BOOK_ID, USER_ID) DO UPDATE SET
+                 PAGE = excluded.PAGE,
+                 COMPLETED = 1,
+                 READ_DATE = excluded.READ_DATE,
+                 LAST_MODIFIED_DATE = CURRENT_TIMESTAMP,
+                 DEVICE_ID = '',
+                 DEVICE_NAME = '',
+                 LOCATOR = NULL"#,
+        )
+        .bind(user_id)
+        .bind(read_date)
+        .bind(user_id)
+        .bind(series_id)
+        .bind(through_number_sort)
+        .bind(through_number_sort)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+        if changed > 0 {
+            aggregate_series_progress_by_series(&mut tx, series_id, user_id).await?;
+        }
+        tx.commit().await?;
+        Ok(changed)
+    }
+
+    /// Deletes all of one user's progress rows in a series atomically.
+    pub async fn delete_series_read_progress(&self, series_id: &str, user_id: &str) -> Result<u64> {
+        let mut tx = self.pool.begin().await?;
+        let changed = sqlx::query(
+            "DELETE FROM READ_PROGRESS WHERE USER_ID = ? AND BOOK_ID IN (SELECT ID FROM BOOK WHERE SERIES_ID = ?)",
+        )
+        .bind(user_id)
+        .bind(series_id)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+        if changed > 0 {
+            aggregate_series_progress_by_series(&mut tx, series_id, user_id).await?;
+        }
+        tx.commit().await?;
+        Ok(changed)
+    }
+
     /// Loads one user's progress for a book, including its Readium locator.
     ///
     /// Historical rows with a null read date fall back to their modification
@@ -133,8 +214,16 @@ async fn aggregate_series_progress(tx: &mut Transaction<'_, Sqlite>, book_id: &s
     let Some(series_id) = series_id else {
         return Ok(());
     };
+    aggregate_series_progress_by_series(tx, &series_id, user_id).await
+}
+
+async fn aggregate_series_progress_by_series(
+    tx: &mut Transaction<'_, Sqlite>,
+    series_id: &str,
+    user_id: &str,
+) -> Result<()> {
     sqlx::query("DELETE FROM READ_PROGRESS_SERIES WHERE SERIES_ID = ? AND USER_ID = ?")
-        .bind(&series_id)
+        .bind(series_id)
         .bind(user_id)
         .execute(&mut **tx)
         .await?;
@@ -324,5 +413,108 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(row.read_date, last_modified);
+    }
+
+    #[tokio::test]
+    async fn series_progress_completion_threshold_and_deletion_are_atomic_and_idempotent() {
+        let storage = Storage::connect_memory().await.unwrap();
+        let temporary = tempfile::tempdir().unwrap();
+        let (user, books) = fixture(&storage, temporary.path()).await;
+        sqlx::query("UPDATE MEDIA SET PAGE_COUNT = CASE BOOK_ID WHEN ? THEN 12 ELSE 24 END")
+            .bind(&books[0].id)
+            .execute(&storage.pool)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE BOOK_METADATA SET NUMBER_SORT = CASE BOOK_ID WHEN ? THEN 1.25 ELSE 2.5 END")
+            .bind(&books[0].id)
+            .execute(&storage.pool)
+            .await
+            .unwrap();
+        let original = progress(&books[0].id, &user.id, 12, true);
+        storage.save_read_progress(&original).await.unwrap();
+        let in_progress = progress(&books[1].id, &user.id, 4, false);
+        storage.save_read_progress(&in_progress).await.unwrap();
+
+        let changed = storage
+            .mark_series_read_completed(&books[0].series_id, &user.id, Some(2.5), Utc::now().naive_utc())
+            .await
+            .unwrap();
+        assert_eq!(changed, 1);
+        assert_eq!(
+            storage.find_read_progress(&books[0].id, &user.id).await.unwrap(),
+            Some(original)
+        );
+        let second = storage
+            .find_read_progress(&books[1].id, &user.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(second.completed);
+        assert_eq!(second.page, 24);
+        assert_eq!(second.device_id, "");
+        assert_eq!(second.locator, None);
+        assert_eq!(
+            storage
+                .mark_series_read_completed(&books[0].series_id, &user.id, None, Utc::now().naive_utc())
+                .await
+                .unwrap(),
+            0
+        );
+        let summary = storage
+            .find_series_read_progress(&books[0].series_id, &user.id)
+            .await
+            .unwrap();
+        assert_eq!((summary.books_count, summary.books_read_count), (2, 2));
+        assert_eq!(
+            storage
+                .delete_series_read_progress(&books[0].series_id, &user.id)
+                .await
+                .unwrap(),
+            2
+        );
+        assert_eq!(
+            storage
+                .delete_series_read_progress(&books[0].series_id, &user.id)
+                .await
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            storage
+                .find_series_read_progress(&books[0].series_id, &user.id)
+                .await
+                .unwrap(),
+            SeriesReadProgressDto {
+                books_count: 2,
+                books_unread_count: 2,
+                max_number_sort: 2.5,
+                ..Default::default()
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn series_progress_rolls_back_when_aggregation_fails() {
+        let storage = Storage::connect_memory().await.unwrap();
+        let temporary = tempfile::tempdir().unwrap();
+        let (user, books) = fixture(&storage, temporary.path()).await;
+        sqlx::query(
+            "CREATE TRIGGER fail_series_progress BEFORE INSERT ON READ_PROGRESS_SERIES BEGIN SELECT RAISE(FAIL, 'fail'); END",
+        )
+        .execute(&storage.pool)
+        .await
+        .unwrap();
+        assert!(
+            storage
+                .mark_series_read_completed(&books[0].series_id, &user.id, None, Utc::now().naive_utc())
+                .await
+                .is_err()
+        );
+        let count = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM READ_PROGRESS WHERE USER_ID = ?")
+            .bind(&user.id)
+            .fetch_one(&storage.pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 0);
     }
 }

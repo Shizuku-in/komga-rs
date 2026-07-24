@@ -53,6 +53,17 @@ async fn body_frames(response: Response<Body>) -> (usize, Vec<u8>) {
     (frame_count, bytes)
 }
 
+fn multipart_file(bytes: &[u8]) -> (String, Vec<u8>) {
+    let boundary = "komga-rs-test-boundary";
+    let mut body = format!(
+        "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"cover.jpg\"\r\nContent-Type: image/jpeg\r\n\r\n"
+    )
+    .into_bytes();
+    body.extend_from_slice(bytes);
+    body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+    (format!("multipart/form-data; boundary={boundary}"), body)
+}
+
 async fn claim(app: &Router) -> Response<Body> {
     app.clone()
         .oneshot(
@@ -1117,6 +1128,207 @@ async fn cbz_pages_conversion_thumbnail_cache_and_manual_analysis_match_contract
 }
 
 #[tokio::test]
+async fn book_and_series_thumbnail_management_contract() {
+    let (_temporary, storage, tasks, book, media) = analyzed_media_fixture("archives/zip.zip", "Volume.cbz").await;
+    let generated = generate_thumbnail(&book, &media, 300).unwrap();
+    let generated_thumbnail = ThumbnailBook {
+        id: "generated-cover".into(),
+        thumbnail: Some(generated.bytes.clone()),
+        url: None,
+        selected: true,
+        thumbnail_type: "GENERATED".into(),
+        media_type: generated.media_type,
+        file_size: i64::try_from(generated.bytes.len()).unwrap(),
+        dimension: image_dimension(&generated.bytes).unwrap(),
+        book_id: book.id.clone(),
+    };
+    storage.replace_generated_thumbnail(&generated_thumbnail).await.unwrap();
+    let app = build_app(AppState::new(storage.clone(), tasks.clone()).await.unwrap());
+    assert_eq!(claim(&app).await.status(), StatusCode::OK);
+    let admin = basic("admin@example.org", "password");
+    let thumbnails_path = format!("/api/v1/books/{}/thumbnails", book.id);
+
+    let (content_type, body) = multipart_file(&generated.bytes);
+    let uploaded = app
+        .clone()
+        .oneshot(
+            Request::post(format!("{thumbnails_path}?selected=false"))
+                .header(header::AUTHORIZATION, &admin)
+                .header(header::CONTENT_TYPE, content_type)
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(uploaded.status(), StatusCode::OK);
+    let uploaded = body_json(uploaded).await;
+    assert_eq!(uploaded["type"], "USER_UPLOADED");
+    assert_eq!(uploaded["selected"], false);
+    assert_eq!(uploaded["width"], generated_thumbnail.dimension.width);
+    let uploaded_id = uploaded["id"].as_str().unwrap();
+
+    let listed = app
+        .clone()
+        .oneshot(
+            Request::get(&thumbnails_path)
+                .header(header::AUTHORIZATION, &admin)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(body_json(listed).await.as_array().unwrap().len(), 2);
+    let selected_path = format!("{thumbnails_path}/{uploaded_id}/selected");
+    assert_eq!(
+        app.clone()
+            .oneshot(
+                Request::put(selected_path)
+                    .header(header::AUTHORIZATION, &admin)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::ACCEPTED
+    );
+
+    let image = app
+        .clone()
+        .oneshot(
+            Request::get(format!("/api/v1/books/{}/thumbnail", book.id))
+                .header(header::AUTHORIZATION, &admin)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(image.status(), StatusCode::OK);
+    assert_eq!(
+        image.headers()[header::CACHE_CONTROL],
+        "private, max-age=0, must-revalidate"
+    );
+    let etag = image.headers()[header::ETAG].clone();
+    let cached = app
+        .clone()
+        .oneshot(
+            Request::get(format!("/api/v1/books/{}/thumbnail", book.id))
+                .header(header::AUTHORIZATION, &admin)
+                .header(header::IF_NONE_MATCH, etag)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(cached.status(), StatusCode::NOT_MODIFIED);
+
+    let generated_delete = app
+        .clone()
+        .oneshot(
+            Request::delete(format!("{thumbnails_path}/generated-cover"))
+                .header(header::AUTHORIZATION, &admin)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(generated_delete.status(), StatusCode::BAD_REQUEST);
+
+    let series_path = format!("/api/v1/series/{}/thumbnails", book.series_id);
+    let (content_type, body) = multipart_file(&generated.bytes);
+    let series_upload = app
+        .clone()
+        .oneshot(
+            Request::post(&series_path)
+                .header(header::AUTHORIZATION, &admin)
+                .header(header::CONTENT_TYPE, content_type)
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(series_upload.status(), StatusCode::OK);
+    let series_upload = body_json(series_upload).await;
+    assert_eq!(series_upload["seriesId"], book.series_id);
+    let series_thumbnail = app
+        .clone()
+        .oneshot(
+            Request::get(format!("/api/v1/series/{}/thumbnail", book.series_id))
+                .header(header::AUTHORIZATION, &admin)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(series_thumbnail.status(), StatusCode::OK);
+
+    let (content_type, body) = multipart_file(b"not an image");
+    let unsupported = app
+        .clone()
+        .oneshot(
+            Request::post(&thumbnails_path)
+                .header(header::AUTHORIZATION, &admin)
+                .header(header::CONTENT_TYPE, content_type)
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(unsupported.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+
+    let mut larger_than_default_limit = generated.bytes.clone();
+    larger_than_default_limit.resize(3 * 1024 * 1024, 0);
+    let (content_type, body) = multipart_file(&larger_than_default_limit);
+    let larger_upload = app
+        .clone()
+        .oneshot(
+            Request::post(format!("{thumbnails_path}?selected=false"))
+                .header(header::AUTHORIZATION, &admin)
+                .header(header::CONTENT_TYPE, content_type)
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(larger_upload.status(), StatusCode::OK);
+
+    let mut above_upload_limit = generated.bytes.clone();
+    above_upload_limit.resize(11 * 1024 * 1024, 0);
+    let (content_type, body) = multipart_file(&above_upload_limit);
+    let oversized = app
+        .clone()
+        .oneshot(
+            Request::post(&thumbnails_path)
+                .header(header::AUTHORIZATION, &admin)
+                .header(header::CONTENT_TYPE, content_type)
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(oversized.status(), StatusCode::PAYLOAD_TOO_LARGE);
+
+    let regenerated = app
+        .oneshot(
+            Request::put("/api/v1/books/thumbnails?for_bigger_result_only=true")
+                .header(header::AUTHORIZATION, admin)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(regenerated.status(), StatusCode::ACCEPTED);
+    assert_eq!(
+        tasks
+            .count_by_simple_type()
+            .await
+            .unwrap()
+            .get("FindBookThumbnailsToRegenerate"),
+        Some(&1)
+    );
+}
+
+#[tokio::test]
 async fn divina_webpub_manifest_matches_kotlin_contract() {
     let (_temporary, storage, tasks, book, _media) = analyzed_media_fixture("archives/zip.zip", "Volume 1.cbz").await;
     let app = build_app(AppState::new(storage, tasks).await.unwrap());
@@ -1882,6 +2094,180 @@ async fn traditional_read_progress_validates_persists_completes_and_deletes() {
         .await
         .unwrap();
     assert_eq!(no_progression.status(), StatusCode::NO_CONTENT);
+}
+
+#[tokio::test]
+async fn series_and_tachiyomi_read_progress_contract() {
+    let storage = Storage::connect_memory().await.unwrap();
+    let tasks = TaskStorage::connect_memory().await.unwrap();
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path().join("library");
+    fs::create_dir_all(root.join("Series")).unwrap();
+    for number in 1..=3 {
+        fs::write(root.join("Series").join(format!("Book {number}.cbz")), [number]).unwrap();
+    }
+    let library = Library::new("Library".into(), Url::from_directory_path(&root).unwrap());
+    storage.create_library(&library).await.unwrap();
+    storage
+        .apply_library_scan(&library.id, &scan_library_files(&library, || false).unwrap(), false)
+        .await
+        .unwrap();
+    let series = storage.list_series_by_library_id(&library.id).await.unwrap().remove(0);
+    let books = storage.list_books_by_series_id(&series.id).await.unwrap();
+    for (index, book) in books.iter().enumerate() {
+        let mut metadata = storage.find_book_metadata(&book.id).await.unwrap().unwrap();
+        metadata.number_sort = index as f64 + 1.5;
+        storage.save_book_metadata(&metadata).await.unwrap();
+        let mut media = storage.find_media_by_book_id(&book.id).await.unwrap().unwrap();
+        media.page_count = (index as i32 + 1) * 10;
+        storage.replace_media_analysis(&media).await.unwrap();
+    }
+
+    let app = build_app(AppState::new(storage.clone(), tasks).await.unwrap());
+    let v1 = format!("/api/v1/series/{}/read-progress", series.id);
+    let tachiyomi = format!("/api/v2/series/{}/read-progress/tachiyomi", series.id);
+    assert_eq!(
+        app.clone()
+            .oneshot(Request::get(&tachiyomi).body(Body::empty()).unwrap())
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(claim(&app).await.status(), StatusCode::OK);
+    let admin = basic("admin@example.org", "password");
+
+    let initial = app
+        .clone()
+        .oneshot(
+            Request::get(&tachiyomi)
+                .header(header::AUTHORIZATION, &admin)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        body_json(initial).await,
+        serde_json::json!({
+            "booksCount": 3,
+            "booksReadCount": 0,
+            "booksUnreadCount": 3,
+            "booksInProgressCount": 0,
+            "lastReadContinuousNumberSort": 0.0,
+            "maxNumberSort": 3.5
+        })
+    );
+
+    for invalid in [r#"{}"#, r#"{"lastBookNumberSortRead":"bad"}"#, "not-json"] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::put(&tachiyomi)
+                    .header(header::AUTHORIZATION, &admin)
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(invalid))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+    let admin_user = storage.find_user_by_email("admin@example.org").await.unwrap().unwrap();
+    assert_eq!(
+        storage
+            .find_series_read_progress(&series.id, &admin_user.id)
+            .await
+            .unwrap()
+            .books_read_count,
+        0
+    );
+
+    let partial = app
+        .clone()
+        .oneshot(
+            Request::put(&tachiyomi)
+                .header(header::AUTHORIZATION, &admin)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(r#"{"lastBookNumberSortRead":2.5}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(partial.status(), StatusCode::NO_CONTENT);
+    let summary = storage
+        .find_series_read_progress(&series.id, &admin_user.id)
+        .await
+        .unwrap();
+    assert_eq!((summary.books_read_count, summary.books_unread_count), (2, 1));
+    assert_eq!(summary.last_read_continuous_number_sort, 2.5);
+
+    assert_eq!(
+        app.clone()
+            .oneshot(
+                Request::post(&v1)
+                    .header(header::AUTHORIZATION, &admin)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        storage
+            .find_series_read_progress(&series.id, &admin_user.id)
+            .await
+            .unwrap()
+            .books_read_count,
+        3
+    );
+    for _ in 0..2 {
+        assert_eq!(
+            app.clone()
+                .oneshot(
+                    Request::delete(&v1)
+                        .header(header::AUTHORIZATION, &admin)
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::NO_CONTENT
+        );
+    }
+
+    let missing = app
+        .clone()
+        .oneshot(
+            Request::get("/api/v2/series/missing/read-progress/tachiyomi")
+                .header(header::AUTHORIZATION, &admin)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+
+    let password_hash = bcrypt::hash("reader-password", 4).unwrap();
+    let mut restricted = User::new("restricted-series-progress@example.org".into(), password_hash);
+    restricted.shared_all_libraries = false;
+    storage.create_user(&restricted).await.unwrap();
+    let forbidden = app
+        .oneshot(
+            Request::get(&tachiyomi)
+                .header(
+                    header::AUTHORIZATION,
+                    basic("restricted-series-progress@example.org", "reader-password"),
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(forbidden.status(), StatusCode::FORBIDDEN);
 }
 
 #[tokio::test]

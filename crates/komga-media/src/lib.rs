@@ -395,6 +395,13 @@ pub fn image_dimension(bytes: &[u8]) -> Option<Dimension> {
     image_ops::dimension(bytes)
 }
 
+/// Detects an image media type from encoded bytes.
+pub fn detect_image_media_type(bytes: &[u8]) -> Option<String> {
+    infer::get(bytes)
+        .filter(|kind| kind.mime_type().starts_with("image/"))
+        .map(|kind| kind.mime_type().to_owned())
+}
+
 #[cfg(test)]
 mod tests {
     use std::{

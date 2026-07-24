@@ -321,6 +321,107 @@ pub struct ThumbnailBook {
     pub book_id: String,
 }
 
+impl ThumbnailBook {
+    /// Converts this thumbnail to the public REST representation.
+    pub fn to_dto(&self) -> ThumbnailBookDto {
+        ThumbnailBookDto {
+            id: self.id.clone(),
+            book_id: self.book_id.clone(),
+            thumbnail_type: self.thumbnail_type.clone(),
+            selected: self.selected,
+            media_type: self.media_type.clone(),
+            file_size: self.file_size,
+            width: self.dimension.width,
+            height: self.dimension.height,
+        }
+    }
+}
+
+/// Series poster stored in `THUMBNAIL_SERIES`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ThumbnailSeries {
+    /// Stable thumbnail identifier.
+    pub id: String,
+    /// Inline thumbnail bytes, if database-backed.
+    pub thumbnail: Option<Vec<u8>>,
+    /// Sidecar file URL, if filesystem-backed.
+    pub url: Option<String>,
+    /// Whether clients should display this thumbnail.
+    pub selected: bool,
+    /// Kotlin thumbnail type such as `USER_UPLOADED`.
+    pub thumbnail_type: String,
+    /// Encoded image media type.
+    pub media_type: String,
+    /// Encoded byte length.
+    pub file_size: i64,
+    /// Encoded image dimensions.
+    pub dimension: Dimension,
+    /// Owning series identifier.
+    pub series_id: String,
+}
+
+impl ThumbnailSeries {
+    /// Converts this thumbnail to the public REST representation.
+    pub fn to_dto(&self) -> ThumbnailSeriesDto {
+        ThumbnailSeriesDto {
+            id: self.id.clone(),
+            series_id: self.series_id.clone(),
+            thumbnail_type: self.thumbnail_type.clone(),
+            selected: self.selected,
+            media_type: self.media_type.clone(),
+            file_size: self.file_size,
+            width: self.dimension.width,
+            height: self.dimension.height,
+        }
+    }
+}
+
+/// Book thumbnail metadata returned by the REST API.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThumbnailBookDto {
+    /// Stable thumbnail identifier.
+    pub id: String,
+    /// Owning book identifier.
+    pub book_id: String,
+    /// Kotlin thumbnail type.
+    #[serde(rename = "type")]
+    pub thumbnail_type: String,
+    /// Whether this thumbnail is selected.
+    pub selected: bool,
+    /// Encoded image media type.
+    pub media_type: String,
+    /// Encoded byte length.
+    pub file_size: i64,
+    /// Encoded width.
+    pub width: i32,
+    /// Encoded height.
+    pub height: i32,
+}
+
+/// Series thumbnail metadata returned by the REST API.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThumbnailSeriesDto {
+    /// Stable thumbnail identifier.
+    pub id: String,
+    /// Owning series identifier.
+    pub series_id: String,
+    /// Kotlin thumbnail type.
+    #[serde(rename = "type")]
+    pub thumbnail_type: String,
+    /// Whether this thumbnail is selected.
+    pub selected: bool,
+    /// Encoded image media type.
+    pub media_type: String,
+    /// Encoded byte length.
+    pub file_size: i64,
+    /// Encoded width.
+    pub width: i32,
+    /// Encoded height.
+    pub height: i32,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

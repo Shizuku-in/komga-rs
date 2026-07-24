@@ -946,6 +946,12 @@ mod tests {
         let payload: serde_json::Value = serde_json::from_str(&claimed.payload).unwrap();
         assert_eq!(payload["bookId"], "book");
         assert_eq!(tasks.count_by_simple_type().await.unwrap()["EmptyTrash"], 1);
+
+        let discovery = TaskRecord::find_book_thumbnails_to_regenerate(true, 0);
+        assert_eq!(discovery.id, "FIND_BOOK_THUMBNAILS_TO_REGENERATE");
+        assert_eq!(discovery.simple_type, "FindBookThumbnailsToRegenerate");
+        let payload: serde_json::Value = serde_json::from_str(&discovery.payload).unwrap();
+        assert_eq!(payload["forBiggerResultOnly"], true);
     }
 
     #[tokio::test]

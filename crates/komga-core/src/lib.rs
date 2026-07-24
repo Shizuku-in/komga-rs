@@ -27,14 +27,16 @@ pub use content::{
 pub use media::{
     BookPage, Dimension, EPUB_ASSET_SUBTYPE, EPUB_EXTENSION_CLASS, EPUB_MEDIA_TYPE, EPUB_PAGE_SUBTYPE, EpubTocEntry,
     JPEG_MEDIA_TYPE, Media, MediaExtension, MediaExtensionEpub, MediaFile, MediaProfile, MediaStatus, PDF_MEDIA_TYPE,
-    R2Location, R2Locator, R2Text, RAR_MEDIA_TYPE, RAR4_MEDIA_TYPE, RAR5_MEDIA_TYPE, ThumbnailBook, ZIP_MEDIA_TYPE,
+    R2Location, R2Locator, R2Text, RAR_MEDIA_TYPE, RAR4_MEDIA_TYPE, RAR5_MEDIA_TYPE, ThumbnailBook, ThumbnailBookDto,
+    ThumbnailSeries, ThumbnailSeriesDto, ZIP_MEDIA_TYPE,
 };
 pub use metadata::{
     AlternateTitle, Author, BookMetadata, BookMetadataAggregation, BookMetadataPatch, MetadataError, MetadataUpdate,
     ReadingDirection, SeriesMetadata, SeriesMetadataPatch, SeriesStatus, WebLink, aggregate_book_metadata,
 };
 pub use progress::{
-    R2Device, R2Progression, ReadProgress, ReadProgressError, completed_progress, page_progress, progression,
+    R2Device, R2Progression, ReadProgress, ReadProgressError, SeriesReadProgressDto, completed_progress, page_progress,
+    progression, series_read_progress,
 };
 pub use scanner::{Book, ScanError, ScanResult, ScannedSeries, Series, scan_library_files};
 

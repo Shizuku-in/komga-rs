@@ -12,6 +12,49 @@ use thiserror::Error;
 
 use crate::{Media, MediaExtension, MediaProfile, R2Locator};
 
+/// Reading-progress summary for every book in a series.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SeriesReadProgressDto {
+    /// Total number of books in the series.
+    pub books_count: i32,
+    /// Number of completed books.
+    pub books_read_count: i32,
+    /// Number of books without progress.
+    pub books_unread_count: i32,
+    /// Number of books with incomplete progress.
+    pub books_in_progress_count: i32,
+    /// Sort number of the last completed book before the first gap.
+    pub last_read_continuous_number_sort: f64,
+    /// Greatest book sort number, or zero for an empty series.
+    pub max_number_sort: f64,
+}
+
+/// Computes a Mihon-compatible series summary from book sort numbers and completion states.
+pub fn series_read_progress(books: impl IntoIterator<Item = (f64, Option<bool>)>) -> SeriesReadProgressDto {
+    let mut books = books.into_iter().collect::<Vec<_>>();
+    books.sort_by(|left, right| left.0.total_cmp(&right.0));
+    let mut result = SeriesReadProgressDto::default();
+    let mut continuous = true;
+    for (number_sort, completed) in books {
+        if result.books_count == 0 || number_sort > result.max_number_sort {
+            result.max_number_sort = number_sort;
+        }
+        result.books_count += 1;
+        match completed {
+            None => result.books_unread_count += 1,
+            Some(false) => result.books_in_progress_count += 1,
+            Some(true) => result.books_read_count += 1,
+        }
+        if continuous && completed == Some(true) {
+            result.last_read_continuous_number_sort = number_sort;
+        } else {
+            continuous = false;
+        }
+    }
+    result
+}
+
 /// Device identity attached to a Readium progression update.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -366,6 +409,27 @@ mod tests {
             },
             locator,
         }
+    }
+
+    #[test]
+    fn series_summary_counts_states_and_stops_continuity_at_first_gap() {
+        let summary = series_read_progress([
+            (3.5, Some(true)),
+            (1.0, Some(true)),
+            (2.0, Some(false)),
+            (3.5, None),
+            (4.0, Some(true)),
+        ]);
+        assert_eq!(summary.books_count, 5);
+        assert_eq!(summary.books_read_count, 3);
+        assert_eq!(summary.books_unread_count, 1);
+        assert_eq!(summary.books_in_progress_count, 1);
+        assert_eq!(summary.last_read_continuous_number_sort, 1.0);
+        assert_eq!(summary.max_number_sort, 4.0);
+
+        assert_eq!(series_read_progress([]), SeriesReadProgressDto::default());
+        let complete = series_read_progress([(1.25, Some(true)), (2.5, Some(true))]);
+        assert_eq!(complete.last_read_continuous_number_sort, 2.5);
     }
 
     #[test]

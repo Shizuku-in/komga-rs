@@ -51,6 +51,16 @@ impl ApiError {
         Self::new(StatusCode::CONFLICT, message)
     }
 
+    /// Creates an unsupported-media response.
+    pub(crate) fn unsupported_media_type() -> Self {
+        Self::new(StatusCode::UNSUPPORTED_MEDIA_TYPE, "Unsupported Media Type")
+    }
+
+    /// Creates a request-body size failure.
+    pub(crate) fn payload_too_large() -> Self {
+        Self::new(StatusCode::PAYLOAD_TOO_LARGE, "Payload Too Large")
+    }
+
     /// Creates an internal failure response without leaking its cause.
     pub(crate) fn internal(message: impl Into<String>) -> Self {
         Self::new(StatusCode::INTERNAL_SERVER_ERROR, message)

@@ -30,16 +30,22 @@ pub(crate) async fn get_series(
     Extension(auth): Extension<AuthContext>,
     Path(series_id): Path<String>,
 ) -> Result<Json<SeriesDto>, ApiError> {
-    let mut series = state
-        .storage
-        .find_series_dto_by_id(&series_id, &auth.user.id)
-        .await?
-        .ok_or_else(|| ApiError::not_found("Series not found"))?;
-    ensure_series_visible(&auth.user, &series)?;
+    let mut series = load_visible_series(&state, &auth.user, &series_id).await?;
     if !auth.user.is_admin() {
         series.url.clear();
     }
     Ok(Json(series))
+}
+
+/// Loads a series and applies library, age, and sharing-label restrictions.
+pub(crate) async fn load_visible_series(state: &AppState, user: &User, series_id: &str) -> Result<SeriesDto, ApiError> {
+    let series = state
+        .storage
+        .find_series_dto_by_id(series_id, &user.id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("Series not found"))?;
+    ensure_series_visible(user, &series)?;
+    Ok(series)
 }
 
 pub(crate) async fn list_books(

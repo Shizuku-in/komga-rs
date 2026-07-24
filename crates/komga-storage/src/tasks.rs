@@ -110,6 +110,26 @@ impl TaskRecord {
         }
     }
 
+    /// Builds a Kotlin-compatible generated-thumbnail discovery task.
+    pub fn find_book_thumbnails_to_regenerate(for_bigger_result_only: bool, priority: i32) -> Self {
+        let id = "FIND_BOOK_THUMBNAILS_TO_REGENERATE".to_owned();
+        Self {
+            id: id.clone(),
+            priority,
+            group_id: None,
+            class: "org.gotson.komga.application.tasks.Task$FindBookThumbnailsToRegenerate".into(),
+            simple_type: "FindBookThumbnailsToRegenerate".into(),
+            payload: serde_json::json!({
+                "forBiggerResultOnly": for_bigger_result_only,
+                "priority": priority,
+                "groupId": null,
+                "uniqueId": id,
+            })
+            .to_string(),
+            owner: None,
+        }
+    }
+
     /// Builds a Kotlin-compatible series metadata aggregation task.
     pub fn aggregate_series_metadata(series_id: &str, priority: i32) -> Self {
         let id = format!("AGGREGATE_SERIES_METADATA_{series_id}");

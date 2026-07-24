@@ -2,9 +2,9 @@ use chrono::NaiveDateTime;
 use flate2::{Compression, read::GzDecoder, write::GzEncoder};
 use komga_core::{
     BookPage, Dimension, EPUB_EXTENSION_CLASS, Media, MediaExtension, MediaExtensionEpub, MediaFile, MediaStatus,
-    ThumbnailBook,
+    SeriesCover, ThumbnailBook, ThumbnailSeries,
 };
-use sqlx::FromRow;
+use sqlx::{FromRow, Sqlite, Transaction};
 
 use crate::{Result, Storage, StorageError};
 
@@ -53,6 +53,20 @@ struct ThumbnailRow {
     width: i32,
     height: i32,
     book_id: String,
+}
+
+#[derive(Debug, FromRow)]
+struct SeriesThumbnailRow {
+    id: String,
+    thumbnail: Option<Vec<u8>>,
+    url: Option<String>,
+    selected: bool,
+    thumbnail_type: String,
+    media_type: String,
+    file_size: i64,
+    width: i32,
+    height: i32,
+    series_id: String,
 }
 
 impl Storage {
@@ -210,6 +224,239 @@ impl Storage {
         Ok(())
     }
 
+    /// Lists every thumbnail belonging to a book.
+    pub async fn list_book_thumbnails(&self, book_id: &str) -> Result<Vec<ThumbnailBook>> {
+        Ok(sqlx::query_as::<_, ThumbnailRow>(&format!(
+            "{} WHERE BOOK_ID = ? ORDER BY CREATED_DATE, ID",
+            thumbnail_select("THUMBNAIL_BOOK", "BOOK_ID", "book_id")
+        ))
+        .bind(book_id)
+        .fetch_all(&self.pool)
+        .await?
+        .into_iter()
+        .map(ThumbnailRow::into_domain)
+        .collect())
+    }
+
+    /// Finds a thumbnail only when it belongs to the requested book.
+    pub async fn find_book_thumbnail(&self, book_id: &str, thumbnail_id: &str) -> Result<Option<ThumbnailBook>> {
+        Ok(sqlx::query_as::<_, ThumbnailRow>(&format!(
+            "{} WHERE BOOK_ID = ? AND ID = ?",
+            thumbnail_select("THUMBNAIL_BOOK", "BOOK_ID", "book_id")
+        ))
+        .bind(book_id)
+        .bind(thumbnail_id)
+        .fetch_optional(&self.pool)
+        .await?
+        .map(ThumbnailRow::into_domain))
+    }
+
+    /// Inserts a user-uploaded book thumbnail and applies selection policy atomically.
+    pub async fn insert_book_thumbnail(&self, thumbnail: &ThumbnailBook, selected: bool) -> Result<ThumbnailBook> {
+        let mut tx = self.pool.begin().await?;
+        insert_thumbnail(&mut tx, thumbnail).await?;
+        if selected {
+            mark_book_thumbnail_selected(&mut tx, &thumbnail.book_id, &thumbnail.id).await?;
+        } else {
+            ensure_book_thumbnail_selected(&mut tx, &thumbnail.book_id).await?;
+        }
+        tx.commit().await?;
+        let mut saved = thumbnail.clone();
+        saved.selected = selected;
+        Ok(saved)
+    }
+
+    /// Selects a thumbnail belonging to a book.
+    pub async fn select_book_thumbnail(&self, book_id: &str, thumbnail_id: &str) -> Result<bool> {
+        let mut tx = self.pool.begin().await?;
+        let exists = thumbnail_exists(&mut tx, "THUMBNAIL_BOOK", "BOOK_ID", book_id, thumbnail_id).await?;
+        if exists {
+            mark_book_thumbnail_selected(&mut tx, book_id, thumbnail_id).await?;
+        }
+        tx.commit().await?;
+        Ok(exists)
+    }
+
+    /// Deletes a user-uploaded book thumbnail and restores a selected cover.
+    pub async fn delete_book_thumbnail(&self, book_id: &str, thumbnail_id: &str) -> Result<bool> {
+        let mut tx = self.pool.begin().await?;
+        let deleted = sqlx::query("DELETE FROM THUMBNAIL_BOOK WHERE BOOK_ID = ? AND ID = ? AND TYPE = 'USER_UPLOADED'")
+            .bind(book_id)
+            .bind(thumbnail_id)
+            .execute(&mut *tx)
+            .await?
+            .rows_affected()
+            > 0;
+        if deleted {
+            ensure_book_thumbnail_selected(&mut tx, book_id).await?;
+        }
+        tx.commit().await?;
+        Ok(deleted)
+    }
+
+    /// Removes a missing filesystem-backed thumbnail and restores book selection.
+    pub async fn remove_stale_book_thumbnail(&self, book_id: &str, thumbnail_id: &str) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("DELETE FROM THUMBNAIL_BOOK WHERE BOOK_ID = ? AND ID = ? AND URL IS NOT NULL")
+            .bind(book_id)
+            .bind(thumbnail_id)
+            .execute(&mut *tx)
+            .await?;
+        ensure_book_thumbnail_selected(&mut tx, book_id).await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// Lists every thumbnail belonging to a series.
+    pub async fn list_series_thumbnails(&self, series_id: &str) -> Result<Vec<ThumbnailSeries>> {
+        Ok(sqlx::query_as::<_, SeriesThumbnailRow>(&format!(
+            "{} WHERE SERIES_ID = ? ORDER BY CREATED_DATE, ID",
+            thumbnail_select("THUMBNAIL_SERIES", "SERIES_ID", "series_id")
+        ))
+        .bind(series_id)
+        .fetch_all(&self.pool)
+        .await?
+        .into_iter()
+        .map(SeriesThumbnailRow::into_domain)
+        .collect())
+    }
+
+    /// Finds a thumbnail only when it belongs to the requested series.
+    pub async fn find_series_thumbnail(&self, series_id: &str, thumbnail_id: &str) -> Result<Option<ThumbnailSeries>> {
+        Ok(sqlx::query_as::<_, SeriesThumbnailRow>(&format!(
+            "{} WHERE SERIES_ID = ? AND ID = ?",
+            thumbnail_select("THUMBNAIL_SERIES", "SERIES_ID", "series_id")
+        ))
+        .bind(series_id)
+        .bind(thumbnail_id)
+        .fetch_optional(&self.pool)
+        .await?
+        .map(SeriesThumbnailRow::into_domain))
+    }
+
+    /// Loads the selected series-specific thumbnail.
+    pub async fn find_selected_series_thumbnail(&self, series_id: &str) -> Result<Option<ThumbnailSeries>> {
+        Ok(sqlx::query_as::<_, SeriesThumbnailRow>(&format!(
+            "{} WHERE SERIES_ID = ? AND SELECTED = 1 LIMIT 1",
+            thumbnail_select("THUMBNAIL_SERIES", "SERIES_ID", "series_id")
+        ))
+        .bind(series_id)
+        .fetch_optional(&self.pool)
+        .await?
+        .map(SeriesThumbnailRow::into_domain))
+    }
+
+    /// Inserts a user-uploaded series thumbnail and optionally selects it.
+    pub async fn insert_series_thumbnail(
+        &self,
+        thumbnail: &ThumbnailSeries,
+        selected: bool,
+    ) -> Result<ThumbnailSeries> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query(
+            r#"INSERT INTO THUMBNAIL_SERIES
+                 (ID, THUMBNAIL, URL, SELECTED, TYPE, SERIES_ID, WIDTH, HEIGHT, MEDIA_TYPE, FILE_SIZE)
+               VALUES (?, ?, ?, 0, ?, ?, ?, ?, ?, ?)"#,
+        )
+        .bind(&thumbnail.id)
+        .bind(&thumbnail.thumbnail)
+        .bind(&thumbnail.url)
+        .bind(&thumbnail.thumbnail_type)
+        .bind(&thumbnail.series_id)
+        .bind(thumbnail.dimension.width)
+        .bind(thumbnail.dimension.height)
+        .bind(&thumbnail.media_type)
+        .bind(thumbnail.file_size)
+        .execute(&mut *tx)
+        .await?;
+        if selected {
+            mark_series_thumbnail_selected(&mut tx, &thumbnail.series_id, &thumbnail.id).await?;
+        }
+        tx.commit().await?;
+        let mut saved = thumbnail.clone();
+        saved.selected = selected;
+        Ok(saved)
+    }
+
+    /// Selects a thumbnail belonging to a series.
+    pub async fn select_series_thumbnail(&self, series_id: &str, thumbnail_id: &str) -> Result<bool> {
+        let mut tx = self.pool.begin().await?;
+        let exists = thumbnail_exists(&mut tx, "THUMBNAIL_SERIES", "SERIES_ID", series_id, thumbnail_id).await?;
+        if exists {
+            mark_series_thumbnail_selected(&mut tx, series_id, thumbnail_id).await?;
+        }
+        tx.commit().await?;
+        Ok(exists)
+    }
+
+    /// Deletes a user-uploaded series thumbnail.
+    pub async fn delete_series_thumbnail(&self, series_id: &str, thumbnail_id: &str) -> Result<bool> {
+        Ok(
+            sqlx::query("DELETE FROM THUMBNAIL_SERIES WHERE SERIES_ID = ? AND ID = ? AND TYPE = 'USER_UPLOADED'")
+                .bind(series_id)
+                .bind(thumbnail_id)
+                .execute(&self.pool)
+                .await?
+                .rows_affected()
+                > 0,
+        )
+    }
+
+    /// Removes a missing filesystem-backed thumbnail and restores series selection.
+    pub async fn remove_stale_series_thumbnail(&self, series_id: &str, thumbnail_id: &str) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("DELETE FROM THUMBNAIL_SERIES WHERE SERIES_ID = ? AND ID = ? AND URL IS NOT NULL")
+            .bind(series_id)
+            .bind(thumbnail_id)
+            .execute(&mut *tx)
+            .await?;
+        ensure_series_thumbnail_selected(&mut tx, series_id).await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// Chooses the book supplying a series fallback thumbnail.
+    pub async fn find_series_cover_book_id(
+        &self,
+        series_id: &str,
+        user_id: &str,
+        strategy: SeriesCover,
+    ) -> Result<Option<String>> {
+        let unread = matches!(
+            strategy,
+            SeriesCover::FirstUnreadOrFirst | SeriesCover::FirstUnreadOrLast
+        );
+        let descending = matches!(strategy, SeriesCover::Last);
+        let found = find_cover_book(&self.pool, series_id, user_id, unread, descending).await?;
+        if found.is_some() || !unread {
+            return Ok(found);
+        }
+        find_cover_book(
+            &self.pool,
+            series_id,
+            user_id,
+            false,
+            strategy == SeriesCover::FirstUnreadOrLast,
+        )
+        .await
+    }
+
+    /// Lists books targeted by the global generated-thumbnail refresh.
+    pub async fn list_book_thumbnail_regeneration_targets(&self, smaller_than: Option<i32>) -> Result<Vec<String>> {
+        if let Some(size) = smaller_than {
+            return Ok(sqlx::query_scalar(
+                "SELECT BOOK_ID FROM THUMBNAIL_BOOK WHERE TYPE = 'GENERATED' AND WIDTH < ? AND HEIGHT < ?",
+            )
+            .bind(size)
+            .bind(size)
+            .fetch_all(&self.pool)
+            .await?);
+        }
+        Ok(sqlx::query_scalar("SELECT ID FROM BOOK WHERE DELETED_DATE IS NULL")
+            .fetch_all(&self.pool)
+            .await?)
+    }
+
     /// Replaces the generated thumbnail while preserving a selected custom cover.
     ///
     /// # Errors
@@ -357,6 +604,163 @@ impl ThumbnailRow {
             book_id: self.book_id,
         }
     }
+}
+
+impl SeriesThumbnailRow {
+    fn into_domain(self) -> ThumbnailSeries {
+        ThumbnailSeries {
+            id: self.id,
+            thumbnail: self.thumbnail,
+            url: self.url,
+            selected: self.selected,
+            thumbnail_type: self.thumbnail_type,
+            media_type: self.media_type,
+            file_size: self.file_size,
+            dimension: Dimension {
+                width: self.width,
+                height: self.height,
+            },
+            series_id: self.series_id,
+        }
+    }
+}
+
+fn thumbnail_select(table: &str, parent_column: &str, parent_alias: &str) -> String {
+    format!(
+        "SELECT ID AS id, THUMBNAIL AS thumbnail, URL AS url, SELECTED AS selected, \
+         TYPE AS thumbnail_type, MEDIA_TYPE AS media_type, FILE_SIZE AS file_size, \
+         WIDTH AS width, HEIGHT AS height, {parent_column} AS {parent_alias} FROM {table}"
+    )
+}
+
+async fn insert_thumbnail(tx: &mut Transaction<'_, Sqlite>, thumbnail: &ThumbnailBook) -> Result<()> {
+    sqlx::query(
+        r#"INSERT INTO THUMBNAIL_BOOK
+             (ID, THUMBNAIL, URL, SELECTED, TYPE, BOOK_ID, WIDTH, HEIGHT, MEDIA_TYPE, FILE_SIZE)
+           VALUES (?, ?, ?, 0, ?, ?, ?, ?, ?, ?)"#,
+    )
+    .bind(&thumbnail.id)
+    .bind(&thumbnail.thumbnail)
+    .bind(&thumbnail.url)
+    .bind(&thumbnail.thumbnail_type)
+    .bind(&thumbnail.book_id)
+    .bind(thumbnail.dimension.width)
+    .bind(thumbnail.dimension.height)
+    .bind(&thumbnail.media_type)
+    .bind(thumbnail.file_size)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+async fn thumbnail_exists(
+    tx: &mut Transaction<'_, Sqlite>,
+    table: &str,
+    parent_column: &str,
+    parent_id: &str,
+    thumbnail_id: &str,
+) -> Result<bool> {
+    Ok(sqlx::query_scalar::<_, bool>(&format!(
+        "SELECT EXISTS(SELECT 1 FROM {table} WHERE {parent_column} = ? AND ID = ?)"
+    ))
+    .bind(parent_id)
+    .bind(thumbnail_id)
+    .fetch_one(&mut **tx)
+    .await?)
+}
+
+async fn mark_book_thumbnail_selected(
+    tx: &mut Transaction<'_, Sqlite>,
+    book_id: &str,
+    thumbnail_id: &str,
+) -> Result<()> {
+    sqlx::query(
+        "UPDATE THUMBNAIL_BOOK SET SELECTED = (ID = ?), LAST_MODIFIED_DATE = CURRENT_TIMESTAMP WHERE BOOK_ID = ?",
+    )
+    .bind(thumbnail_id)
+    .bind(book_id)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+async fn ensure_book_thumbnail_selected(tx: &mut Transaction<'_, Sqlite>, book_id: &str) -> Result<()> {
+    let selected =
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM THUMBNAIL_BOOK WHERE BOOK_ID = ? AND SELECTED = 1")
+            .bind(book_id)
+            .fetch_one(&mut **tx)
+            .await?;
+    if selected == 0
+        && let Some(id) = sqlx::query_scalar::<_, String>(
+            "SELECT ID FROM THUMBNAIL_BOOK WHERE BOOK_ID = ? ORDER BY CREATED_DATE, ID LIMIT 1",
+        )
+        .bind(book_id)
+        .fetch_optional(&mut **tx)
+        .await?
+    {
+        mark_book_thumbnail_selected(tx, book_id, &id).await?;
+    }
+    Ok(())
+}
+
+async fn mark_series_thumbnail_selected(
+    tx: &mut Transaction<'_, Sqlite>,
+    series_id: &str,
+    thumbnail_id: &str,
+) -> Result<()> {
+    sqlx::query(
+        "UPDATE THUMBNAIL_SERIES SET SELECTED = (ID = ?), LAST_MODIFIED_DATE = CURRENT_TIMESTAMP WHERE SERIES_ID = ?",
+    )
+    .bind(thumbnail_id)
+    .bind(series_id)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+async fn ensure_series_thumbnail_selected(tx: &mut Transaction<'_, Sqlite>, series_id: &str) -> Result<()> {
+    let selected =
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM THUMBNAIL_SERIES WHERE SERIES_ID = ? AND SELECTED = 1")
+            .bind(series_id)
+            .fetch_one(&mut **tx)
+            .await?;
+    if selected == 0
+        && let Some(id) = sqlx::query_scalar::<_, String>(
+            "SELECT ID FROM THUMBNAIL_SERIES WHERE SERIES_ID = ? ORDER BY CREATED_DATE, ID LIMIT 1",
+        )
+        .bind(series_id)
+        .fetch_optional(&mut **tx)
+        .await?
+    {
+        mark_series_thumbnail_selected(tx, series_id, &id).await?;
+    }
+    Ok(())
+}
+
+async fn find_cover_book(
+    pool: &sqlx::SqlitePool,
+    series_id: &str,
+    user_id: &str,
+    unread: bool,
+    descending: bool,
+) -> Result<Option<String>> {
+    let direction = if descending { "DESC" } else { "ASC" };
+    let unread_clause = if unread {
+        "AND (rp.COMPLETED IS NULL OR rp.COMPLETED = 0)"
+    } else {
+        ""
+    };
+    Ok(sqlx::query_scalar::<_, String>(&format!(
+        r#"SELECT b.ID FROM BOOK b
+             JOIN BOOK_METADATA bm ON bm.BOOK_ID = b.ID
+             LEFT JOIN READ_PROGRESS rp ON rp.BOOK_ID = b.ID AND rp.USER_ID = ?
+            WHERE b.SERIES_ID = ? {unread_clause}
+            ORDER BY bm.NUMBER_SORT {direction}, b.ID {direction} LIMIT 1"#
+    ))
+    .bind(user_id)
+    .bind(series_id)
+    .fetch_optional(pool)
+    .await?)
 }
 
 #[cfg(test)]
@@ -673,5 +1077,85 @@ mod tests {
                 .unwrap();
             assert_eq!(actual, status, "{media_type}");
         }
+    }
+
+    #[tokio::test]
+    async fn uploaded_book_and_series_thumbnails_enforce_selection_and_ownership() {
+        let storage = Storage::connect_memory().await.unwrap();
+        let temporary = tempfile::tempdir().unwrap();
+        let book = scanned_book(&storage, temporary.path()).await;
+        let generated = ThumbnailBook {
+            id: "generated".into(),
+            thumbnail: Some(vec![1]),
+            url: None,
+            selected: false,
+            thumbnail_type: "GENERATED".into(),
+            media_type: "image/jpeg".into(),
+            file_size: 1,
+            dimension: Dimension { width: 10, height: 20 },
+            book_id: book.id.clone(),
+        };
+        storage.replace_generated_thumbnail(&generated).await.unwrap();
+        let uploaded = ThumbnailBook {
+            id: "uploaded".into(),
+            thumbnail: Some(vec![2]),
+            thumbnail_type: "USER_UPLOADED".into(),
+            ..generated.clone()
+        };
+        storage.insert_book_thumbnail(&uploaded, true).await.unwrap();
+        assert_eq!(
+            storage
+                .find_selected_book_thumbnail(&book.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .id,
+            "uploaded"
+        );
+        assert!(
+            storage
+                .find_book_thumbnail("other", "uploaded")
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(!storage.delete_book_thumbnail(&book.id, "generated").await.unwrap());
+        assert!(storage.delete_book_thumbnail(&book.id, "uploaded").await.unwrap());
+        assert_eq!(
+            storage
+                .find_selected_book_thumbnail(&book.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .id,
+            "generated"
+        );
+
+        let series = ThumbnailSeries {
+            id: "series-upload".into(),
+            thumbnail: Some(vec![3]),
+            url: None,
+            selected: false,
+            thumbnail_type: "USER_UPLOADED".into(),
+            media_type: "image/png".into(),
+            file_size: 1,
+            dimension: Dimension { width: 2, height: 3 },
+            series_id: book.series_id.clone(),
+        };
+        storage.insert_series_thumbnail(&series, true).await.unwrap();
+        assert_eq!(storage.list_series_thumbnails(&book.series_id).await.unwrap().len(), 1);
+        assert!(
+            storage
+                .find_series_thumbnail("other", "series-upload")
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            storage
+                .delete_series_thumbnail(&book.series_id, "series-upload")
+                .await
+                .unwrap()
+        );
     }
 }

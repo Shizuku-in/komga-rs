@@ -17,7 +17,7 @@ rust-version = "1.96.1"
 anyhow = "1.0"
 async-stream = "0.3"
 async-trait = "0.1"
-axum = "0.8"
+axum = { version = "0.8", features = ["multipart"] }
 base64 = "0.22"
 bcrypt = "0.17"
 chrono = { version = "0.4", features = ["serde"] }

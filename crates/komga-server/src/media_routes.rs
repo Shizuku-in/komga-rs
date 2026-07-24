@@ -21,7 +21,6 @@ use mediatype::{
     names::{APPLICATION, IMAGE, JPEG, PDF},
 };
 use serde::Deserialize;
-use url::Url;
 
 use crate::{
     AppState,
@@ -214,45 +213,6 @@ pub(crate) async fn get_raw_page(
     Ok(content_response(
         content,
         &format!("{}-{page_number}", book.name),
-        &media,
-    ))
-}
-
-pub(crate) async fn get_book_thumbnail(
-    State(state): State<AppState>,
-    Extension(auth): Extension<AuthContext>,
-    Path(book_id): Path<String>,
-    headers: HeaderMap,
-) -> Result<Response, ApiError> {
-    let book = load_visible_book(&state, &auth.user, &book_id).await?;
-    let media = load_media(&state, &book_id).await?;
-    if is_not_modified(&headers, &media) {
-        return Ok(not_modified_response(&media));
-    }
-    let thumbnail = state
-        .storage
-        .find_selected_book_thumbnail(&book_id)
-        .await?
-        .ok_or_else(|| ApiError::not_found("Book thumbnail not found"))?;
-    let bytes = if let Some(bytes) = thumbnail.thumbnail {
-        bytes
-    } else if let Some(url) = thumbnail.url {
-        let path = Url::parse(&url)
-            .ok()
-            .and_then(|url| url.to_file_path().ok())
-            .ok_or_else(|| ApiError::not_found("Book thumbnail not found"))?;
-        tokio::fs::read(path)
-            .await
-            .map_err(|_| ApiError::not_found("Book thumbnail not found"))?
-    } else {
-        return Err(ApiError::not_found("Book thumbnail not found"));
-    };
-    Ok(content_response(
-        TypedBytes {
-            bytes,
-            media_type: "image/jpeg".to_owned(),
-        },
-        &format!("{}-thumbnail", book.name),
         &media,
     ))
 }

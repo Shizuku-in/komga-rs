@@ -22,6 +22,7 @@ mod routes;
 mod runtime;
 mod settings_routes;
 mod sse_routes;
+mod thumbnail_routes;
 mod webpub_routes;
 
 pub use auth::{REMEMBER_ME_COOKIE, SESSION_COOKIE, SESSION_HEADER};
@@ -117,10 +118,42 @@ pub fn build_app(state: AppState) -> Router {
         .route("/api/v1/series/list", post(content_routes::list_series))
         .route("/api/v1/series/{series_id}", get(content_routes::get_series))
         .route(
+            "/api/v1/series/{series_id}/thumbnail",
+            get(thumbnail_routes::get_series_thumbnail),
+        )
+        .route(
+            "/api/v1/series/{series_id}/thumbnails",
+            get(thumbnail_routes::list_series_thumbnails)
+                .post(thumbnail_routes::upload_series_thumbnail)
+                .layer(DefaultBodyLimit::max(10 * 1024 * 1024)),
+        )
+        .route(
+            "/api/v1/series/{series_id}/thumbnails/{thumbnail_id}",
+            get(thumbnail_routes::get_series_thumbnail_by_id).delete(thumbnail_routes::delete_series_thumbnail),
+        )
+        .route(
+            "/api/v1/series/{series_id}/thumbnails/{thumbnail_id}/selected",
+            axum::routing::put(thumbnail_routes::select_series_thumbnail),
+        )
+        .route(
+            "/api/v1/series/{series_id}/read-progress",
+            post(read_progress_routes::mark_series_read_completed)
+                .delete(read_progress_routes::delete_series_read_progress),
+        )
+        .route(
+            "/api/v2/series/{series_id}/read-progress/tachiyomi",
+            get(read_progress_routes::get_tachiyomi_series_read_progress)
+                .put(read_progress_routes::update_tachiyomi_series_read_progress),
+        )
+        .route(
             "/api/v1/series/{series_id}/metadata",
             patch(metadata_routes::update_series_metadata),
         )
         .route("/api/v1/books/list", post(content_routes::list_books))
+        .route(
+            "/api/v1/books/thumbnails",
+            axum::routing::put(thumbnail_routes::regenerate_book_thumbnails),
+        )
         .route(
             "/api/v1/books/metadata",
             patch(metadata_routes::update_book_metadata_batch),
@@ -176,7 +209,21 @@ pub fn build_app(state: AppState) -> Router {
         )
         .route(
             "/api/v1/books/{book_id}/thumbnail",
-            get(media_routes::get_book_thumbnail),
+            get(thumbnail_routes::get_book_thumbnail),
+        )
+        .route(
+            "/api/v1/books/{book_id}/thumbnails",
+            get(thumbnail_routes::list_book_thumbnails)
+                .post(thumbnail_routes::upload_book_thumbnail)
+                .layer(DefaultBodyLimit::max(10 * 1024 * 1024)),
+        )
+        .route(
+            "/api/v1/books/{book_id}/thumbnails/{thumbnail_id}",
+            get(thumbnail_routes::get_book_thumbnail_by_id).delete(thumbnail_routes::delete_book_thumbnail),
+        )
+        .route(
+            "/api/v1/books/{book_id}/thumbnails/{thumbnail_id}/selected",
+            axum::routing::put(thumbnail_routes::select_book_thumbnail),
         )
         .route(
             "/api/v1/books/{book_id}/previous",

@@ -103,6 +103,12 @@ struct SeriesTaskPayload {
     series_id: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FindThumbnailsPayload {
+    for_bigger_result_only: bool,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TaskOutcome {
     Completed,
@@ -110,11 +116,12 @@ enum TaskOutcome {
     Retry,
 }
 
-const SUPPORTED_TASK_TYPES: [&str; 4] = [
+const SUPPORTED_TASK_TYPES: [&str; 5] = [
     "ScanLibrary",
     "AnalyzeBook",
     "GenerateBookThumbnail",
     "AggregateSeriesMetadata",
+    "FindBookThumbnailsToRegenerate",
 ];
 
 async fn worker_loop(state: AppState, index: usize) {
@@ -165,8 +172,51 @@ async fn process_task(state: &AppState, task: &TaskRecord) -> TaskOutcome {
         "AnalyzeBook" => process_analyze_book_task(state, task).await,
         "GenerateBookThumbnail" => process_generate_thumbnail_task(state, task).await,
         "AggregateSeriesMetadata" => process_aggregate_series_metadata_task(state, task).await,
+        "FindBookThumbnailsToRegenerate" => process_find_thumbnails_task(state, task).await,
         _ => TaskOutcome::Completed,
     }
+}
+
+async fn process_find_thumbnails_task(state: &AppState, task: &TaskRecord) -> TaskOutcome {
+    let payload = match serde_json::from_str::<FindThumbnailsPayload>(&task.payload) {
+        Ok(payload) => payload,
+        Err(error) => {
+            tracing::error!(%error, task_id = %task.id, "invalid FindBookThumbnailsToRegenerate payload");
+            return TaskOutcome::Completed;
+        }
+    };
+    let smaller_than = if payload.for_bigger_result_only {
+        match state.storage.thumbnail_max_edge().await {
+            Ok(size) => Some(i32::try_from(size).unwrap_or(i32::MAX)),
+            Err(error) => {
+                tracing::error!(%error, "could not read thumbnail size");
+                return TaskOutcome::Retry;
+            }
+        }
+    } else {
+        None
+    };
+    let targets = match state
+        .storage
+        .list_book_thumbnail_regeneration_targets(smaller_than)
+        .await
+    {
+        Ok(targets) => targets,
+        Err(error) => {
+            tracing::error!(%error, "could not find thumbnail regeneration targets");
+            return TaskOutcome::Retry;
+        }
+    };
+    for book_id in targets {
+        if let Err(error) = state
+            .enqueue_task(&TaskRecord::generate_book_thumbnail(&book_id, task.priority))
+            .await
+        {
+            tracing::error!(%error, %book_id, "could not enqueue generated thumbnail");
+            return TaskOutcome::Retry;
+        }
+    }
+    TaskOutcome::Completed
 }
 
 async fn process_scan_task(state: &AppState, task: &TaskRecord) -> TaskOutcome {
