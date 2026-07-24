@@ -20,7 +20,10 @@ use url::Url;
 use uuid::Uuid;
 
 pub use containers::{
-    CollectionCreation, CollectionDto, ReadListCreation, ReadListDto, ReadListProgressUpdate, ReadListReadProgressDto,
+    CollectionCreation, CollectionDto, ReadListCreation, ReadListDto, ReadListMatchDto, ReadListProgressUpdate,
+    ReadListReadProgressDto, ReadListRequest, ReadListRequestBook, ReadListRequestBookMatchBookDto,
+    ReadListRequestBookMatchDto, ReadListRequestBookMatchSeriesDto, ReadListRequestBookMatchesDto,
+    ReadListRequestMatchDto,
 };
 pub use content::{
     AlternateTitleDto, AuthorDto, BookCondition, BookDto, BookMetadataAggregationDto, BookMetadataDto, BookSearch,

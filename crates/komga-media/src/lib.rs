@@ -11,9 +11,12 @@ use komga_core::{
 };
 
 mod archive;
+mod comicrack;
 mod epub;
 mod image_ops;
 mod pdf;
+
+pub use comicrack::{ComicRackListError, parse_read_list};
 
 /// Binary content paired with the media type used by HTTP responses.
 #[derive(Debug, Clone, PartialEq, Eq)]

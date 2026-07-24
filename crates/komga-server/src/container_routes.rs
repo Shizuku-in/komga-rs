@@ -1,5 +1,11 @@
 //! Collection and read-list HTTP contracts.
 
+use std::{
+    fs::File,
+    io::{Read, Write},
+    path::PathBuf,
+};
+
 use crate::{
     AppState,
     auth::AuthContext,
@@ -10,15 +16,22 @@ use crate::{
 };
 use axum::{
     Json,
+    body::Body,
     extract::{Extension, Multipart, Path, Query, RawQuery, State},
-    http::{HeaderMap, StatusCode},
-    response::Response,
+    http::{HeaderMap, HeaderValue, StatusCode, header},
+    response::{IntoResponse, Response},
 };
 use komga_core::{
     CollectionCreation, CollectionDto, ReadListCreation, ReadListDto, ReadListProgressUpdate, ReadListReadProgressDto,
-    new_id,
+    UserRole, new_id,
 };
 use komga_storage::ContainerThumbnail;
+use tokio_util::io::{ReaderStream, SyncIoBridge};
+use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
+
+use crate::book_file_routes::content_disposition;
+
+const ZIP_BUFFER_CAPACITY: usize = 8 * 1024;
 
 fn query_value(raw: Option<&str>, key: &str) -> Option<String> {
     url::form_urlencoded::parse(raw.unwrap_or_default().as_bytes())
@@ -148,6 +161,131 @@ pub(crate) async fn create_read_list(
         || ApiError::internal("Created read list could not be loaded"),
     )?))
 }
+
+pub(crate) async fn match_comicrack_read_list(
+    State(state): State<AppState>,
+    Extension(auth): Extension<AuthContext>,
+    mut multipart: Multipart,
+) -> Result<Json<komga_core::ReadListRequestMatchDto>, ApiError> {
+    require_admin(&auth)?;
+    let mut bytes = None;
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|error| ApiError::bad_request(error.to_string()))?
+    {
+        if field.name() == Some("file") && bytes.is_none() {
+            bytes = Some(
+                field
+                    .bytes()
+                    .await
+                    .map_err(|error| ApiError::bad_request(error.to_string()))?
+                    .to_vec(),
+            );
+        }
+    }
+    let bytes = bytes.ok_or_else(|| ApiError::bad_request("file is required"))?;
+    let request = komga_media::parse_read_list(&bytes).map_err(|error| ApiError::bad_request(error.to_string()))?;
+    Ok(Json(state.storage.match_read_list_request(request).await?))
+}
+
+pub(crate) async fn download_read_list(
+    State(state): State<AppState>,
+    Extension(auth): Extension<AuthContext>,
+    Path(id): Path<String>,
+) -> Result<Response, ApiError> {
+    if !auth.user.roles.contains(&UserRole::FileDownload) {
+        return Err(ApiError::forbidden());
+    }
+    let read_list = state
+        .storage
+        .find_read_list(&id, &auth.user)
+        .await?
+        .ok_or_else(|| ApiError::not_found("Read list not found"))?;
+    let books = state
+        .storage
+        .read_list_books(
+            &id,
+            &auth.user,
+            komga_core::PageRequest {
+                unpaged: true,
+                sort: vec![komga_core::SortOrder {
+                    property: "readList.number".into(),
+                    direction: komga_core::SortDirection::Ascending,
+                }],
+                ..Default::default()
+            },
+        )
+        .await?
+        .content;
+    if books.is_empty() {
+        return Err(ApiError::not_found("Read list not found"));
+    }
+    let mut entries = Vec::with_capacity(books.len());
+    for (index, visible) in books.into_iter().enumerate() {
+        let Some(book) = state.storage.find_book_by_id(&visible.id).await? else {
+            tracing::warn!(book_id = %visible.id, "visible read-list relation no longer resolves; skipping ZIP entry");
+            continue;
+        };
+        match book.url.to_file_path() {
+            Ok(path) => entries.push((index + 1, book.id, path)),
+            Err(()) => {
+                tracing::warn!(book_id = %book.id, url = %book.url, "book URL is not a local file; skipping ZIP entry");
+            }
+        }
+    }
+    let (writer, reader) = tokio::io::duplex(64 * 1024);
+    tokio::task::spawn_blocking(move || write_read_list_zip(writer, entries));
+    let mut response = Body::from_stream(ReaderStream::with_capacity(reader, ZIP_BUFFER_CAPACITY)).into_response();
+    response
+        .headers_mut()
+        .insert(header::CONTENT_TYPE, HeaderValue::from_static("application/zip"));
+    response.headers_mut().insert(
+        header::CONTENT_DISPOSITION,
+        content_disposition(&format!("{}.zip", read_list.name))
+            .map_err(|_| ApiError::internal("Could not encode read-list attachment filename"))?,
+    );
+    Ok(response)
+}
+
+fn write_read_list_zip(writer: tokio::io::DuplexStream, entries: Vec<(usize, String, PathBuf)>) {
+    let bridge = SyncIoBridge::new(writer);
+    let mut archive = ZipWriter::new_stream(bridge);
+    let options = SimpleFileOptions::default()
+        .compression_method(CompressionMethod::Stored)
+        .large_file(true);
+    let mut buffer = [0_u8; ZIP_BUFFER_CAPACITY];
+    for (number, book_id, path) in entries {
+        let Ok(metadata) = path.metadata() else {
+            tracing::warn!(%book_id, path = %path.display(), "book file is missing; skipping ZIP entry");
+            continue;
+        };
+        if !metadata.is_file() {
+            tracing::warn!(%book_id, path = %path.display(), "book path is not a regular file; skipping ZIP entry");
+            continue;
+        }
+        let Some(file_name) = path.file_name().map(|name| name.to_string_lossy().into_owned()) else {
+            tracing::warn!(%book_id, path = %path.display(), "book path has no filename; skipping ZIP entry");
+            continue;
+        };
+        let Ok(mut file) = File::open(&path) else {
+            tracing::warn!(%book_id, path = %path.display(), "book file could not be opened; skipping ZIP entry");
+            continue;
+        };
+        if archive.start_file(format!("{number} - {file_name}"), options).is_err() {
+            return;
+        }
+        loop {
+            match file.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(count) if archive.write_all(&buffer[..count]).is_ok() => {}
+                Ok(_) | Err(_) => return,
+            }
+        }
+    }
+    let _ = archive.finish();
+}
+
 pub(crate) async fn get_read_list(
     State(state): State<AppState>,
     Extension(auth): Extension<AuthContext>,

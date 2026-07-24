@@ -67,6 +67,8 @@ Do not run the Kotlin and Rust servers against the same SQLite file at the same 
 - `GET /api/v1/books/{id}/resource/{resource}`
 - `GET /api/v1/books/{id}/manifest`
 - `GET /api/v1/books/{id}/manifest/{divina|pdf|epub}`
+- `POST /api/v1/readlists/match/comicrack`
+- `GET /api/v1/readlists/{id}/file`
 - `POST /api/v1/filesystem`
 - `GET /api/v1/client-settings/global/list`
 - `PATCH|DELETE /api/v1/client-settings/global`
@@ -78,9 +80,9 @@ Do not run the Kotlin and Rust servers against the same SQLite file at the same 
 
 Authentication is compatible with the current Komga contract: HTTP Basic, `KOMGA-SESSION`, `X-Auth-Token`, and SHA-512-backed `X-API-Key`. Existing Spring BCrypt `$2a$` password hashes are accepted.
 
-`ScanLibrary` tasks are executed in the background. They discover configured CBX/PDF/EPUB files and persist Kotlin-compatible Series, Book, Media, and initial metadata rows. CBZ, CBR, PDF, and EPUB contents are analyzed and receive generated book thumbnails; fixed-layout EPUB pages, publication resources, navigation, reading positions, and Divina/PDF/EPUB WebPub manifests are available through the REST API. EPUB metadata providers and book-file downloads are still pending. `EmptyTrash` and other unported task types remain queued and unmodified. Library deletion is currently limited to empty libraries; deleting a library that still contains series, books, or sidecars returns `409 Conflict`.
+`ScanLibrary` tasks are executed in the background. They discover configured CBX/PDF/EPUB files and persist Kotlin-compatible Series, Book, Media, and initial metadata rows. CBZ, CBR, PDF, and EPUB contents are analyzed and receive generated book thumbnails; fixed-layout EPUB pages, publication resources, navigation, reading positions, and Divina/PDF/EPUB WebPub manifests are available through the REST API. EPUB metadata providers are still pending. `EmptyTrash` and other unported task types remain queued and unmodified. Library deletion is currently limited to empty libraries; deleting a library that still contains series, books, or sidecars returns `409 Conflict`.
 
-The modern Series and Book list endpoints support Spring-style pagination and conditions for library, series, collection/read-list membership, deleted, one-shot, title, status, and per-user read state. Library sharing, age, and sharing-label restrictions are applied before pagination. Collection and read-list APIs include transactional CRUD, visible member projections, reverse lookup, navigation, Mihon progress synchronization, uploaded posters, and dynamic collage posters. Lucene `fullTextSearch` and poster/media-profile conditions return `400 Bad Request` until those slices are implemented.
+The modern Series and Book list endpoints support Spring-style pagination and conditions for library, series, collection/read-list membership, deleted, one-shot, title, status, and per-user read state. Library sharing, age, and sharing-label restrictions are applied before pagination. Collection and read-list APIs include transactional CRUD, visible member projections, reverse lookup, navigation, Mihon progress synchronization, ComicRack matching, streamed ZIP downloads, uploaded posters, and dynamic collage posters. Lucene `fullTextSearch` and poster/media-profile conditions return `400 Bad Request` until those slices are implemented.
 
 ## Develop
 

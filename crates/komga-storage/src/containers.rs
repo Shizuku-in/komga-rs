@@ -5,7 +5,9 @@ use std::collections::{BTreeSet, HashSet};
 use chrono::Utc;
 use komga_core::{
     BookCondition, BookDto, BookSearch, CollectionCreation, CollectionDto, ContentPage, EqualityOperator, PageRequest,
-    ReadListCreation, ReadListDto, ReadListReadProgressDto, SeriesCondition, SeriesDto, SeriesSearch, SortDirection,
+    ReadListCreation, ReadListDto, ReadListMatchDto, ReadListReadProgressDto, ReadListRequest,
+    ReadListRequestBookMatchBookDto, ReadListRequestBookMatchDto, ReadListRequestBookMatchSeriesDto,
+    ReadListRequestBookMatchesDto, ReadListRequestMatchDto, SeriesCondition, SeriesDto, SeriesSearch, SortDirection,
     SortOrder, User,
 };
 use sqlx::{FromRow, Row, Sqlite, Transaction};
@@ -32,6 +34,16 @@ struct ReadListRow {
     book_count: i32,
     created_date: String,
     last_modified_date: String,
+}
+
+#[derive(Debug, FromRow)]
+struct ReadListMatchRow {
+    series_id: String,
+    series_title: String,
+    release_date: Option<String>,
+    book_id: String,
+    book_number: String,
+    book_title: String,
 }
 
 /// Persisted container thumbnail used by the HTTP adapter.
@@ -77,6 +89,77 @@ fn validate_members(name: &str, members: &[String]) -> Result<()> {
 }
 
 impl Storage {
+    /// Matches a parsed ComicRack request against all persisted series and books.
+    pub async fn match_read_list_request(&self, request: ReadListRequest) -> Result<ReadListRequestMatchDto> {
+        let names = sqlx::query_scalar::<_, String>("SELECT NAME FROM READLIST")
+            .fetch_all(&self.pool)
+            .await?;
+        let duplicate = names
+            .iter()
+            .any(|name| normalized_name(name) == normalized_name(&request.name));
+        let mut requests = Vec::with_capacity(request.books.len());
+        for book_request in request.books {
+            let mut rows = Vec::new();
+            for series in &book_request.series {
+                rows.extend(
+                    sqlx::query_as::<_, ReadListMatchRow>(
+                        r#"SELECT sm.SERIES_ID series_id, sm.TITLE series_title,
+                                  CAST(bma.RELEASE_DATE AS TEXT) release_date,
+                                  bm.BOOK_ID book_id, bm.NUMBER book_number, bm.TITLE book_title
+                             FROM SERIES_METADATA sm
+                             LEFT JOIN BOOK_METADATA_AGGREGATION bma ON bma.SERIES_ID=sm.SERIES_ID
+                             JOIN BOOK b ON b.SERIES_ID=sm.SERIES_ID
+                             JOIN BOOK_METADATA bm ON bm.BOOK_ID=b.ID
+                            WHERE sm.TITLE=? COLLATE NOCASE
+                              AND ltrim(bm.NUMBER,'0')=ltrim(?,'0') COLLATE NOCASE
+                            ORDER BY sm.SERIES_ID,bm.BOOK_ID"#,
+                    )
+                    .bind(series)
+                    .bind(&book_request.number)
+                    .fetch_all(&self.pool)
+                    .await?,
+                );
+            }
+            let mut matches: Vec<ReadListRequestBookMatchDto> = Vec::new();
+            for row in rows {
+                if let Some(group) = matches.iter_mut().find(|group| group.series.series_id == row.series_id) {
+                    if !group.books.iter().any(|book| book.book_id == row.book_id) {
+                        group.books.push(ReadListRequestBookMatchBookDto {
+                            book_id: row.book_id,
+                            number: row.book_number,
+                            title: row.book_title,
+                        });
+                    }
+                } else {
+                    matches.push(ReadListRequestBookMatchDto {
+                        series: ReadListRequestBookMatchSeriesDto {
+                            series_id: row.series_id,
+                            title: row.series_title,
+                            release_date: row.release_date,
+                        },
+                        books: vec![ReadListRequestBookMatchBookDto {
+                            book_id: row.book_id,
+                            number: row.book_number,
+                            title: row.book_title,
+                        }],
+                    });
+                }
+            }
+            requests.push(ReadListRequestBookMatchesDto {
+                request: book_request,
+                matches,
+            });
+        }
+        Ok(ReadListRequestMatchDto {
+            read_list_match: ReadListMatchDto {
+                name: request.name,
+                error_code: if duplicate { "ERR_1009".into() } else { String::new() },
+            },
+            requests,
+            error_code: String::new(),
+        })
+    }
+
     /// Lists uploaded thumbnails for a collection or read list.
     pub async fn list_container_thumbnails(&self, read_list: bool, parent_id: &str) -> Result<Vec<ContainerThumbnail>> {
         let (table, column) = container_thumbnail_table(read_list);

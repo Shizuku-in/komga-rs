@@ -2,6 +2,91 @@
 
 use serde::{Deserialize, Serialize};
 
+/// A parsed ComicRack reading-list request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReadListRequest {
+    /// Requested reading-list name.
+    pub name: String,
+    /// Books in source order.
+    pub books: Vec<ReadListRequestBook>,
+}
+
+/// A ComicRack book reference to match against persisted metadata.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadListRequestBook {
+    /// Candidate series titles, in preference order.
+    pub series: Vec<String>,
+    /// ComicRack issue number.
+    pub number: String,
+}
+
+/// Complete preview of a ComicRack reading-list match.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadListRequestMatchDto {
+    /// Match result for the requested reading-list name.
+    pub read_list_match: ReadListMatchDto,
+    /// Per-book candidates in source order.
+    pub requests: Vec<ReadListRequestBookMatchesDto>,
+    /// Request-level error code; empty for a successful preview.
+    pub error_code: String,
+}
+
+/// Match result for the requested reading-list name.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadListMatchDto {
+    /// Requested name.
+    pub name: String,
+    /// `ERR_1009` when a normalized duplicate exists, otherwise empty.
+    pub error_code: String,
+}
+
+/// Candidate matches for one source book.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadListRequestBookMatchesDto {
+    /// Original source request.
+    pub request: ReadListRequestBook,
+    /// Candidate books grouped by matching series.
+    pub matches: Vec<ReadListRequestBookMatchDto>,
+}
+
+/// Candidate books within one matching series.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadListRequestBookMatchDto {
+    /// Candidate series.
+    pub series: ReadListRequestBookMatchSeriesDto,
+    /// All books in the series with the requested number.
+    pub books: Vec<ReadListRequestBookMatchBookDto>,
+}
+
+/// A series matching a ComicRack series title.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadListRequestBookMatchSeriesDto {
+    /// Stable series identifier.
+    pub series_id: String,
+    /// Persisted series title.
+    pub title: String,
+    /// Aggregated publication date in `yyyy-MM-dd` form.
+    pub release_date: Option<String>,
+}
+
+/// A book matching a ComicRack issue number.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadListRequestBookMatchBookDto {
+    /// Stable book identifier.
+    pub book_id: String,
+    /// Persisted issue number.
+    pub number: String,
+    /// Persisted book title.
+    pub title: String,
+}
+
 /// A collection projected for the requesting user.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]

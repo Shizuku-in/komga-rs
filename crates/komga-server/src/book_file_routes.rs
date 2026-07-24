@@ -109,7 +109,7 @@ fn moved_file_error(book_id: &str, path: &FilePath, error: io::Error) -> ApiErro
     ApiError::not_found(MOVED_FILE_MESSAGE)
 }
 
-fn content_disposition(file_name: &str) -> Result<HeaderValue, http::header::InvalidHeaderValue> {
+pub(crate) fn content_disposition(file_name: &str) -> Result<HeaderValue, http::header::InvalidHeaderValue> {
     HeaderValue::from_str(&format!(
         "attachment; filename=\"{}\"; filename*=UTF-8''{}",
         quoted_printable_filename(file_name),

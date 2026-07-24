@@ -13,10 +13,16 @@ use komga_media::{analyze_book, generate_thumbnail, image_dimension};
 use komga_server::{AppState, REMEMBER_ME_COOKIE, SESSION_COOKIE, SESSION_HEADER, build_app};
 use komga_storage::{Storage, TaskStorage};
 use serde_json::Value;
-use std::{fs, fs::File, io::Write, path::PathBuf, time::Duration};
+use std::{
+    fs,
+    fs::File,
+    io::{Cursor, Read, Write},
+    path::PathBuf,
+    time::Duration,
+};
 use tower::ServiceExt;
 use url::Url;
-use zip::{ZipWriter, write::SimpleFileOptions};
+use zip::{ZipArchive, ZipWriter, write::SimpleFileOptions};
 
 async fn test_app() -> Router {
     app_with_storage(Storage::connect_memory().await.unwrap()).await
@@ -51,6 +57,125 @@ async fn body_frames(response: Response<Body>) -> (usize, Vec<u8>) {
         }
     }
     (frame_count, bytes)
+}
+
+#[tokio::test]
+async fn comicrack_match_requires_admin_and_returns_complete_preview() {
+    let app = test_app().await;
+    let xml =
+        br#"<ReadingList><Name>Unicode list</Name><Books><Book Series="Missing" Number="01"/></Books></ReadingList>"#;
+    let (content_type, body) = multipart_file(xml);
+    let unauthorized = app
+        .clone()
+        .oneshot(
+            Request::post("/api/v1/readlists/match/comicrack")
+                .header(header::CONTENT_TYPE, &content_type)
+                .body(Body::from(body.clone()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+
+    assert_eq!(claim(&app).await.status(), StatusCode::OK);
+    let response = app
+        .clone()
+        .oneshot(
+            Request::post("/api/v1/readlists/match/comicrack")
+                .header(header::AUTHORIZATION, basic("admin@example.org", "password"))
+                .header(header::CONTENT_TYPE, content_type)
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        body_json(response).await,
+        serde_json::json!({
+            "readListMatch": {"name": "Unicode list", "errorCode": ""},
+            "requests": [{
+                "request": {"series": ["Missing"], "number": "01"},
+                "matches": []
+            }],
+            "errorCode": ""
+        })
+    );
+}
+
+#[tokio::test]
+async fn read_list_file_is_a_streamed_stored_zip64_archive() {
+    let (_temporary, storage, tasks, book, _media) = analyzed_media_fixture("archives/zip.zip", "source.cbz").await;
+    storage
+        .create_read_list(
+            "list",
+            &komga_core::ReadListCreation {
+                name: "Reading list".into(),
+                summary: String::new(),
+                ordered: true,
+                book_ids: vec![book.id.clone()],
+            },
+        )
+        .await
+        .unwrap();
+    storage
+        .create_read_list(
+            "duplicate",
+            &komga_core::ReadListCreation {
+                name: "Cafe\u{301}".into(),
+                summary: String::new(),
+                ordered: true,
+                book_ids: vec![book.id.clone()],
+            },
+        )
+        .await
+        .unwrap();
+    let series = storage.find_series_metadata(&book.series_id).await.unwrap().unwrap();
+    let metadata = storage.find_book_metadata(&book.id).await.unwrap().unwrap();
+    let matched = storage
+        .match_read_list_request(komga_core::ReadListRequest {
+            name: "Café".into(),
+            books: vec![komga_core::ReadListRequestBook {
+                series: vec![series.title.to_ascii_uppercase()],
+                number: format!("00{}", metadata.number),
+            }],
+        })
+        .await
+        .unwrap();
+    assert_eq!(matched.read_list_match.error_code, "ERR_1009");
+    assert_eq!(matched.requests[0].matches.len(), 1);
+    assert_eq!(matched.requests[0].matches[0].series.series_id, book.series_id);
+    assert_eq!(matched.requests[0].matches[0].books[0].book_id, book.id);
+    let source = fs::read(book.url.to_file_path().unwrap()).unwrap();
+    let app = build_app(AppState::new(storage, tasks).await.unwrap());
+    assert_eq!(claim(&app).await.status(), StatusCode::OK);
+    let response = app
+        .oneshot(
+            Request::get("/api/v1/readlists/list/file")
+                .header(header::AUTHORIZATION, basic("admin@example.org", "password"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()[header::CONTENT_TYPE], "application/zip");
+    assert!(
+        response.headers()[header::CONTENT_DISPOSITION]
+            .to_str()
+            .unwrap()
+            .contains("Reading_list.zip")
+    );
+    let (frames, bytes) = body_frames(response).await;
+    assert!(frames > 1);
+    let mut archive = ZipArchive::new(Cursor::new(bytes)).unwrap();
+    assert_eq!(archive.len(), 1);
+    let mut entry = archive.by_index(0).unwrap();
+    assert_eq!(entry.name(), "1 - source.cbz");
+    assert_eq!(entry.compression(), zip::CompressionMethod::Stored);
+    let mut actual = Vec::new();
+    entry.read_to_end(&mut actual).unwrap();
+    assert_eq!(actual, source);
 }
 
 fn multipart_file(bytes: &[u8]) -> (String, Vec<u8>) {

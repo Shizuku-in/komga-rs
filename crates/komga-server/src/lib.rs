@@ -205,12 +205,17 @@ pub fn build_app(state: AppState) -> Router {
             get(container_routes::list_read_lists).post(container_routes::create_read_list),
         )
         .route(
+            "/api/v1/readlists/match/comicrack",
+            axum::routing::post(container_routes::match_comicrack_read_list),
+        )
+        .route(
             "/api/v1/readlists/{id}",
             get(container_routes::get_read_list)
                 .patch(container_routes::patch_read_list)
                 .delete(container_routes::delete_read_list),
         )
         .route("/api/v1/readlists/{id}/books", get(container_routes::read_list_books))
+        .route("/api/v1/readlists/{id}/file", get(container_routes::download_read_list))
         .route(
             "/api/v1/readlists/{id}/thumbnail",
             get(container_routes::get_read_list_thumbnail),
