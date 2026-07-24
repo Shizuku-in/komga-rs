@@ -6,12 +6,17 @@ use axum::{
 use base64::{Engine, engine::general_purpose::STANDARD};
 use http_body_util::BodyExt;
 use komga_server::{AppState, REMEMBER_ME_COOKIE, SESSION_COOKIE, SESSION_HEADER, build_app};
-use komga_storage::Storage;
+use komga_storage::{Storage, TaskStorage};
 use serde_json::Value;
 use tower::ServiceExt;
 
 async fn test_app() -> Router {
-    build_app(AppState::new(Storage::connect_memory().await.unwrap()))
+    app_with_storage(Storage::connect_memory().await.unwrap()).await
+}
+
+async fn app_with_storage(storage: Storage) -> Router {
+    let tasks = TaskStorage::connect_memory().await.unwrap();
+    build_app(AppState::new(storage, tasks).await.unwrap())
 }
 
 fn basic(email: &str, password: &str) -> String {
@@ -291,7 +296,7 @@ async fn basic_auth_accepts_spring_bcrypt_2a_hashes() {
     let hash = bcrypt::hash("password", 10).unwrap().replacen("$2b$", "$2a$", 1);
     let user = komga_core::User::new("kotlin@example.org".into(), hash);
     storage.create_user(&user).await.unwrap();
-    let app = build_app(AppState::new(storage));
+    let app = app_with_storage(storage).await;
 
     let response = app
         .oneshot(
@@ -303,4 +308,169 @@ async fn basic_auth_accepts_spring_bcrypt_2a_hashes() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn library_management_bootstrap_settings_and_tasks_are_compatible() {
+    let storage = Storage::connect_memory().await.unwrap();
+    let tasks = TaskStorage::connect_memory().await.unwrap();
+    let app = build_app(AppState::new(storage.clone(), tasks.clone()).await.unwrap());
+    claim(&app).await;
+    let admin = basic("admin@example.org", "password");
+    let root = tempfile::tempdir().unwrap();
+    let create_body = serde_json::json!({
+        "name": "Comics",
+        "root": root.path().to_string_lossy(),
+        "scanDirectoryExclusions": ["tmp"]
+    });
+    let created = app
+        .clone()
+        .oneshot(
+            Request::post("/api/v1/libraries")
+                .header(header::AUTHORIZATION, &admin)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(create_body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(created.status(), StatusCode::OK);
+    let library = body_json(created).await;
+    let library_id = library["id"].as_str().unwrap();
+    assert_eq!(library["scanInterval"], "EVERY_6H");
+    assert_eq!(library["root"], root.path().to_string_lossy().as_ref());
+    assert_eq!(tasks.list().await.unwrap().len(), 1);
+
+    let patched = app
+        .clone()
+        .oneshot(
+            Request::patch(format!("/api/v1/libraries/{library_id}"))
+                .header(header::AUTHORIZATION, &admin)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(r#"{"scanDirectoryExclusions":null,"oneshotsDirectory":""}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(patched.status(), StatusCode::NO_CONTENT);
+    let loaded = storage.find_library_by_id(library_id).await.unwrap().unwrap();
+    assert!(loaded.scan_directory_exclusions.is_empty());
+    assert_eq!(loaded.oneshots_directory, None);
+
+    let deep_scan = app
+        .clone()
+        .oneshot(
+            Request::post(format!("/api/v1/libraries/{library_id}/scan?deep=true"))
+                .header(header::AUTHORIZATION, &admin)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(deep_scan.status(), StatusCode::ACCEPTED);
+    assert!(
+        tasks
+            .list()
+            .await
+            .unwrap()
+            .iter()
+            .any(|task| { task.id == format!("SCAN_LIBRARY_{library_id}_DEEP_true") && task.priority == 8 })
+    );
+
+    let global_patch = app
+        .clone()
+        .oneshot(
+            Request::patch("/api/v1/client-settings/global")
+                .header(header::AUTHORIZATION, &admin)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    r#"{"login.banner":{"value":"hello","allowUnauthorized":true},"private":{"value":"secret","allowUnauthorized":false}}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(global_patch.status(), StatusCode::NO_CONTENT);
+    let anonymous_settings = app
+        .clone()
+        .oneshot(
+            Request::get("/api/v1/client-settings/global/list")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let anonymous_settings = body_json(anonymous_settings).await;
+    assert!(anonymous_settings.get("login.banner").is_some());
+    assert!(anonymous_settings.get("private").is_none());
+
+    let oauth = app
+        .clone()
+        .oneshot(Request::get("/api/v1/oauth2/providers").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(body_json(oauth).await, serde_json::json!([]));
+
+    let listing = app
+        .clone()
+        .oneshot(
+            Request::post("/api/v1/filesystem")
+                .header(header::AUTHORIZATION, &admin)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(serde_json::json!({"path": root.path()}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(listing.status(), StatusCode::OK);
+
+    let reader_created = app
+        .clone()
+        .oneshot(
+            Request::post("/api/v2/users")
+                .header(header::AUTHORIZATION, &admin)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    r#"{"email":"reader@example.org","password":"reader-password"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(reader_created.status(), StatusCode::CREATED);
+    let reader_libraries = app
+        .clone()
+        .oneshot(
+            Request::get("/api/v1/libraries")
+                .header(header::AUTHORIZATION, basic("reader@example.org", "reader-password"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(body_json(reader_libraries).await[0]["root"], "");
+
+    let cleared = app
+        .clone()
+        .oneshot(
+            Request::delete("/api/v1/tasks")
+                .header(header::AUTHORIZATION, &admin)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert!(body_json(cleared).await.as_u64().unwrap() >= 2);
+    assert!(tasks.list().await.unwrap().is_empty());
+
+    let deleted = app
+        .oneshot(
+            Request::delete(format!("/api/v1/libraries/{library_id}"))
+                .header(header::AUTHORIZATION, admin)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(deleted.status(), StatusCode::NO_CONTENT);
 }

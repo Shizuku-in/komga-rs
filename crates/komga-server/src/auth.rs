@@ -47,19 +47,27 @@ struct Session {
     expires_at: Instant,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub(crate) struct SessionStore {
     sessions: Arc<DashMap<String, Session>>,
+    remember_me_duration: Duration,
 }
 
 impl SessionStore {
+    pub(crate) fn new(remember_me_duration_days: u64) -> Self {
+        Self {
+            sessions: Arc::new(DashMap::new()),
+            remember_me_duration: Duration::from_secs(remember_me_duration_days.saturating_mul(24 * 60 * 60)),
+        }
+    }
+
     /// Issues a cryptographically random session with the selected lifetime.
     pub(crate) fn create(&self, user_id: &str, remember_me: bool) -> String {
         let mut bytes = [0_u8; 32];
         rand::rng().fill_bytes(&mut bytes);
         let id = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes);
         let duration = if remember_me {
-            Duration::from_secs(30 * 24 * 60 * 60)
+            self.remember_me_duration
         } else {
             Duration::from_secs(7 * 24 * 60 * 60)
         };
@@ -92,6 +100,10 @@ impl SessionStore {
     /// Invalidates every session owned by a user after security policy changes.
     pub(crate) fn remove_user(&self, user_id: &str) {
         self.sessions.retain(|_, session| session.user_id != user_id);
+    }
+
+    pub(crate) fn remember_me_max_age(&self) -> u64 {
+        self.remember_me_duration.as_secs()
     }
 }
 
@@ -127,7 +139,10 @@ pub(crate) async fn require_auth(State(state): State<AppState>, mut request: Req
                     append_cookie(response.headers_mut(), &session_cookie(&session_id));
                 }
                 if remember_me {
-                    append_cookie(response.headers_mut(), &remember_me_cookie(&session_id));
+                    append_cookie(
+                        response.headers_mut(),
+                        &remember_me_cookie(&session_id, state.sessions.remember_me_max_age()),
+                    );
                 }
             }
             response
@@ -189,6 +204,18 @@ async fn authenticate(
     ))
 }
 
+pub(crate) async fn optional_user(state: &AppState, headers: &HeaderMap) -> Result<Option<User>, ApiError> {
+    let has_credentials = headers.contains_key("X-API-Key")
+        || headers.contains_key(SESSION_HEADER)
+        || headers.contains_key(header::AUTHORIZATION)
+        || cookie_value(headers, SESSION_COOKIE).is_some()
+        || cookie_value(headers, REMEMBER_ME_COOKIE).is_some();
+    if !has_credentials {
+        return Ok(None);
+    }
+    authenticate(state, headers, None).await.map(|(user, _)| Some(user))
+}
+
 fn basic_credentials(headers: &HeaderMap) -> Option<(String, String)> {
     let value = headers.get(header::AUTHORIZATION)?.to_str().ok()?;
     let encoded = value.strip_prefix("Basic ").or_else(|| value.strip_prefix("basic "))?;
@@ -229,10 +256,10 @@ pub(crate) fn session_cookie(session_id: &str) -> String {
     format!("{SESSION_COOKIE}={session_id}; Path=/; HttpOnly; SameSite=Lax")
 }
 
-fn remember_me_cookie(session_id: &str) -> String {
+fn remember_me_cookie(session_id: &str, max_age: u64) -> String {
     format!(
         "{REMEMBER_ME_COOKIE}={session_id}; Path=/; Max-Age={}; HttpOnly; SameSite=Lax",
-        30 * 24 * 60 * 60
+        max_age
     )
 }
 

@@ -294,7 +294,7 @@ pub(crate) async fn logout(State(state): State<AppState>, Extension(auth): Exten
     response
 }
 
-fn require_admin(auth: &AuthContext) -> Result<(), ApiError> {
+pub(crate) fn require_admin(auth: &AuthContext) -> Result<(), ApiError> {
     auth.user.is_admin().then_some(()).ok_or_else(ApiError::forbidden)
 }
 
@@ -372,7 +372,7 @@ async fn hash_password(password: String) -> Result<String, ApiError> {
         })
 }
 
-pub(crate) struct ApiJson<T>(T);
+pub(crate) struct ApiJson<T>(pub(crate) T);
 
 impl<S, T> FromRequest<S> for ApiJson<T>
 where

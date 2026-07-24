@@ -6,6 +6,7 @@
 
 use std::collections::BTreeSet;
 
+use komga_core::{ScanInterval, SeriesCover};
 use serde::{Deserialize, Deserializer};
 
 #[derive(Debug, Deserialize)]
@@ -89,6 +90,126 @@ pub(crate) struct UserUpdateDto {
     pub(crate) roles: Patch<BTreeSet<String>>,
     #[serde(default)]
     pub(crate) shared_libraries: Patch<SharedLibrariesUpdateDto>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub(crate) struct LibraryCreationDto {
+    pub(crate) name: String,
+    pub(crate) root: String,
+    pub(crate) import_comic_info_book: bool,
+    pub(crate) import_comic_info_series: bool,
+    pub(crate) import_comic_info_collection: bool,
+    pub(crate) import_comic_info_read_list: bool,
+    pub(crate) import_comic_info_series_append_volume: bool,
+    pub(crate) import_epub_book: bool,
+    pub(crate) import_epub_series: bool,
+    pub(crate) import_mylar_series: bool,
+    pub(crate) import_local_artwork: bool,
+    pub(crate) import_barcode_isbn: bool,
+    pub(crate) scan_force_modified_time: bool,
+    pub(crate) scan_interval: ScanInterval,
+    pub(crate) scan_on_startup: bool,
+    pub(crate) scan_cbx: bool,
+    pub(crate) scan_pdf: bool,
+    pub(crate) scan_epub: bool,
+    pub(crate) scan_directory_exclusions: BTreeSet<String>,
+    pub(crate) repair_extensions: bool,
+    pub(crate) convert_to_cbz: bool,
+    pub(crate) empty_trash_after_scan: bool,
+    pub(crate) series_cover: SeriesCover,
+    pub(crate) hash_files: bool,
+    pub(crate) hash_pages: bool,
+    pub(crate) hash_koreader: bool,
+    pub(crate) analyze_dimensions: bool,
+    pub(crate) oneshots_directory: Option<String>,
+}
+
+impl Default for LibraryCreationDto {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            root: String::new(),
+            import_comic_info_book: true,
+            import_comic_info_series: true,
+            import_comic_info_collection: true,
+            import_comic_info_read_list: true,
+            import_comic_info_series_append_volume: true,
+            import_epub_book: true,
+            import_epub_series: true,
+            import_mylar_series: true,
+            import_local_artwork: true,
+            import_barcode_isbn: true,
+            scan_force_modified_time: false,
+            scan_interval: ScanInterval::Every6h,
+            scan_on_startup: false,
+            scan_cbx: true,
+            scan_pdf: true,
+            scan_epub: true,
+            scan_directory_exclusions: BTreeSet::new(),
+            repair_extensions: false,
+            convert_to_cbz: false,
+            empty_trash_after_scan: false,
+            series_cover: SeriesCover::First,
+            hash_files: true,
+            hash_pages: false,
+            hash_koreader: false,
+            analyze_dimensions: true,
+            oneshots_directory: None,
+        }
+    }
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub(crate) struct LibraryUpdateDto {
+    pub(crate) name: Patch<String>,
+    pub(crate) root: Patch<String>,
+    pub(crate) import_comic_info_book: Patch<bool>,
+    pub(crate) import_comic_info_series: Patch<bool>,
+    pub(crate) import_comic_info_collection: Patch<bool>,
+    pub(crate) import_comic_info_read_list: Patch<bool>,
+    pub(crate) import_comic_info_series_append_volume: Patch<bool>,
+    pub(crate) import_epub_book: Patch<bool>,
+    pub(crate) import_epub_series: Patch<bool>,
+    pub(crate) import_mylar_series: Patch<bool>,
+    pub(crate) import_local_artwork: Patch<bool>,
+    pub(crate) import_barcode_isbn: Patch<bool>,
+    pub(crate) scan_force_modified_time: Patch<bool>,
+    pub(crate) scan_interval: Patch<ScanInterval>,
+    pub(crate) scan_on_startup: Patch<bool>,
+    pub(crate) scan_cbx: Patch<bool>,
+    pub(crate) scan_pdf: Patch<bool>,
+    pub(crate) scan_epub: Patch<bool>,
+    pub(crate) scan_directory_exclusions: Patch<BTreeSet<String>>,
+    pub(crate) repair_extensions: Patch<bool>,
+    pub(crate) convert_to_cbz: Patch<bool>,
+    pub(crate) empty_trash_after_scan: Patch<bool>,
+    pub(crate) series_cover: Patch<SeriesCover>,
+    pub(crate) hash_files: Patch<bool>,
+    pub(crate) hash_pages: Patch<bool>,
+    pub(crate) hash_koreader: Patch<bool>,
+    pub(crate) analyze_dimensions: Patch<bool>,
+    pub(crate) oneshots_directory: Patch<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ClientSettingGlobalUpdateDto {
+    pub(crate) value: String,
+    pub(crate) allow_unauthorized: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct ClientSettingUserUpdateDto {
+    pub(crate) value: String,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub(crate) struct DirectoryRequestDto {
+    pub(crate) path: String,
+    pub(crate) show_files: bool,
 }
 
 #[derive(Debug, Default)]

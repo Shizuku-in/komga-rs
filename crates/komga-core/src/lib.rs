@@ -9,6 +9,7 @@
 use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
+use url::Url;
 use uuid::Uuid;
 
 /// Every application role recognized by the current Komga compatibility layer.
@@ -301,6 +302,223 @@ pub struct ApiKey {
     pub last_modified_date: String,
 }
 
+/// How often a library is scheduled for a periodic scan.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum ScanInterval {
+    /// Do not schedule periodic scans.
+    Disabled,
+    /// Scan once per hour.
+    Hourly,
+    /// Scan every six hours.
+    #[default]
+    #[serde(rename = "EVERY_6H")]
+    Every6h,
+    /// Scan every twelve hours.
+    #[serde(rename = "EVERY_12H")]
+    Every12h,
+    /// Scan once per day.
+    Daily,
+    /// Scan once per week.
+    Weekly,
+}
+
+impl ScanInterval {
+    /// Returns the identifier stored by Komga's SQLite schema.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Disabled => "DISABLED",
+            Self::Hourly => "HOURLY",
+            Self::Every6h => "EVERY_6H",
+            Self::Every12h => "EVERY_12H",
+            Self::Daily => "DAILY",
+            Self::Weekly => "WEEKLY",
+        }
+    }
+}
+
+impl TryFrom<&str> for ScanInterval {
+    type Error = ();
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        match value.to_ascii_uppercase().as_str() {
+            "DISABLED" => Ok(Self::Disabled),
+            "HOURLY" => Ok(Self::Hourly),
+            "EVERY_6H" => Ok(Self::Every6h),
+            "EVERY_12H" => Ok(Self::Every12h),
+            "DAILY" => Ok(Self::Daily),
+            "WEEKLY" => Ok(Self::Weekly),
+            _ => Err(()),
+        }
+    }
+}
+
+/// Strategy used to choose a series cover from its books.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum SeriesCover {
+    /// Always use the first book.
+    #[default]
+    First,
+    /// Prefer the first unread book, falling back to the first book.
+    FirstUnreadOrFirst,
+    /// Prefer the first unread book, falling back to the last book.
+    FirstUnreadOrLast,
+    /// Always use the last book.
+    Last,
+}
+
+impl SeriesCover {
+    /// Returns the identifier stored by Komga's SQLite schema.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::First => "FIRST",
+            Self::FirstUnreadOrFirst => "FIRST_UNREAD_OR_FIRST",
+            Self::FirstUnreadOrLast => "FIRST_UNREAD_OR_LAST",
+            Self::Last => "LAST",
+        }
+    }
+}
+
+impl TryFrom<&str> for SeriesCover {
+    type Error = ();
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        match value.to_ascii_uppercase().as_str() {
+            "FIRST" => Ok(Self::First),
+            "FIRST_UNREAD_OR_FIRST" => Ok(Self::FirstUnreadOrFirst),
+            "FIRST_UNREAD_OR_LAST" => Ok(Self::FirstUnreadOrLast),
+            "LAST" => Ok(Self::Last),
+            _ => Err(()),
+        }
+    }
+}
+
+/// A configured media library and all scan/import options persisted by Komga.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Library {
+    /// Stable library identifier.
+    pub id: String,
+    /// User-visible library name.
+    pub name: String,
+    /// Root directory represented as a file URL in SQLite.
+    pub root: Url,
+    /// Import book metadata from ComicInfo.xml.
+    pub import_comic_info_book: bool,
+    /// Import series metadata from ComicInfo.xml.
+    pub import_comic_info_series: bool,
+    /// Import collections from ComicInfo.xml.
+    pub import_comic_info_collection: bool,
+    /// Import read lists from ComicInfo.xml.
+    pub import_comic_info_read_list: bool,
+    /// Append volume data while importing ComicInfo series metadata.
+    pub import_comic_info_series_append_volume: bool,
+    /// Import book metadata from EPUB files.
+    pub import_epub_book: bool,
+    /// Import series metadata from EPUB files.
+    pub import_epub_series: bool,
+    /// Import Mylar series metadata.
+    pub import_mylar_series: bool,
+    /// Import local artwork files.
+    pub import_local_artwork: bool,
+    /// Import ISBN values from barcodes.
+    pub import_barcode_isbn: bool,
+    /// Use file modification times to force rescans.
+    pub scan_force_modified_time: bool,
+    /// Periodic scan interval.
+    pub scan_interval: ScanInterval,
+    /// Whether a scan should be scheduled at process startup.
+    pub scan_on_startup: bool,
+    /// Include CBX archives while scanning.
+    pub scan_cbx: bool,
+    /// Include PDF files while scanning.
+    pub scan_pdf: bool,
+    /// Include EPUB files while scanning.
+    pub scan_epub: bool,
+    /// Directory names excluded from scans.
+    pub scan_directory_exclusions: BTreeSet<String>,
+    /// Repair extensions that do not match detected media types.
+    pub repair_extensions: bool,
+    /// Convert supported books to CBZ.
+    pub convert_to_cbz: bool,
+    /// Purge unavailable entries after scans.
+    pub empty_trash_after_scan: bool,
+    /// Series cover selection strategy.
+    pub series_cover: SeriesCover,
+    /// Hash source book files.
+    pub hash_files: bool,
+    /// Hash individual pages.
+    pub hash_pages: bool,
+    /// Generate KOReader-compatible hashes.
+    pub hash_koreader: bool,
+    /// Analyze image dimensions.
+    pub analyze_dimensions: bool,
+    /// Optional directory name used for one-shot books.
+    pub oneshots_directory: Option<String>,
+    /// UTC timestamp set when the root becomes unavailable.
+    pub unavailable_date: Option<String>,
+    /// UTC creation timestamp supplied by persistence.
+    pub created_date: Option<String>,
+    /// UTC modification timestamp supplied by persistence.
+    pub last_modified_date: Option<String>,
+}
+
+impl Library {
+    /// Creates a library with the defaults used by Kotlin's creation DTO.
+    pub fn new(name: String, root: Url) -> Self {
+        Self {
+            id: new_id(),
+            name,
+            root,
+            import_comic_info_book: true,
+            import_comic_info_series: true,
+            import_comic_info_collection: true,
+            import_comic_info_read_list: true,
+            import_comic_info_series_append_volume: true,
+            import_epub_book: true,
+            import_epub_series: true,
+            import_mylar_series: true,
+            import_local_artwork: true,
+            import_barcode_isbn: true,
+            scan_force_modified_time: false,
+            scan_interval: ScanInterval::Every6h,
+            scan_on_startup: false,
+            scan_cbx: true,
+            scan_pdf: true,
+            scan_epub: true,
+            scan_directory_exclusions: BTreeSet::new(),
+            repair_extensions: false,
+            convert_to_cbz: false,
+            empty_trash_after_scan: false,
+            series_cover: SeriesCover::First,
+            hash_files: true,
+            hash_pages: false,
+            hash_koreader: false,
+            analyze_dimensions: true,
+            oneshots_directory: None,
+            unavailable_date: None,
+            created_date: None,
+            last_modified_date: None,
+        }
+    }
+
+    /// Returns the root as a local filesystem path when it is a file URL.
+    pub fn root_path(&self) -> Option<std::path::PathBuf> {
+        self.root.to_file_path().ok()
+    }
+
+    /// Returns whether changes between two versions require a root rescan.
+    pub fn should_rescan(&self, updated: &Self) -> bool {
+        self.root != updated.root
+            || self.oneshots_directory != updated.oneshots_directory
+            || self.scan_cbx != updated.scan_cbx
+            || self.scan_pdf != updated.scan_pdf
+            || self.scan_epub != updated.scan_epub
+            || self.scan_force_modified_time != updated.scan_force_modified_time
+            || self.scan_directory_exclusions != updated.scan_directory_exclusions
+    }
+}
+
 /// Generates a lowercase, hyphen-free UUID identifier.
 ///
 /// The value is opaque to clients and fits Komga's string ID columns.
@@ -348,5 +566,20 @@ mod tests {
         assert!(user.is_content_allowed(Some(16), &BTreeSet::from(["family".into()])));
         assert!(!user.is_content_allowed(Some(16), &BTreeSet::new()));
         assert!(!user.is_content_allowed(Some(10), &BTreeSet::from(["blocked".into()])));
+    }
+
+    #[test]
+    fn library_defaults_and_rescan_rules_match_kotlin() {
+        let root = Url::from_file_path(std::env::temp_dir()).unwrap();
+        let library = Library::new("Library".into(), root);
+
+        assert_eq!(library.scan_interval, ScanInterval::Every6h);
+        assert!(library.scan_cbx && library.scan_pdf && library.scan_epub);
+        assert!(library.hash_files && library.analyze_dimensions);
+        assert!(!library.should_rescan(&library));
+
+        let mut updated = library.clone();
+        updated.scan_directory_exclusions.insert("ignored".into());
+        assert!(library.should_rescan(&updated));
     }
 }

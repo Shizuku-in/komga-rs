@@ -11,7 +11,10 @@ mod auth;
 pub mod config;
 mod dto;
 mod error;
+mod filesystem_routes;
+mod library_routes;
 mod routes;
+mod settings_routes;
 
 pub use auth::{REMEMBER_ME_COOKIE, SESSION_COOKIE, SESSION_HEADER};
 
@@ -22,9 +25,9 @@ use axum::{
     Router,
     extract::DefaultBodyLimit,
     middleware,
-    routing::{delete, get, patch},
+    routing::{delete, get, patch, post},
 };
-use komga_storage::Storage;
+use komga_storage::{Storage, StorageError, TaskStorage};
 use tokio::sync::Mutex;
 use tower_http::{
     cors::CorsLayer,
@@ -40,18 +43,25 @@ use tower_http::{
 #[derive(Clone)]
 pub struct AppState {
     storage: Storage,
+    tasks: TaskStorage,
     sessions: SessionStore,
     claim_lock: Arc<Mutex<()>>,
 }
 
 impl AppState {
-    /// Creates application state around an initialized storage handle.
-    pub fn new(storage: Storage) -> Self {
-        Self {
+    /// Creates application state around initialized main and task databases.
+    ///
+    /// # Errors
+    ///
+    /// Returns a storage error when server settings cannot be loaded.
+    pub async fn new(storage: Storage, tasks: TaskStorage) -> Result<Self, StorageError> {
+        let remember_me_duration_days = storage.remember_me_duration_days().await?;
+        Ok(Self {
             storage,
-            sessions: SessionStore::default(),
+            tasks,
+            sessions: SessionStore::new(remember_me_duration_days),
             claim_lock: Arc::new(Mutex::new(())),
-        }
+        })
     }
 }
 
@@ -78,11 +88,49 @@ pub fn build_app(state: AppState) -> Router {
         .route("/api/v2/users/{user_id}/password", patch(routes::update_user_password))
         .route("/api/v1/login/set-cookie", get(routes::set_cookie))
         .route("/api/logout", get(routes::logout).post(routes::logout))
+        .route(
+            "/api/v1/libraries",
+            get(library_routes::list_libraries).post(library_routes::create_library),
+        )
+        .route(
+            "/api/v1/libraries/{library_id}",
+            get(library_routes::get_library)
+                .put(library_routes::update_library)
+                .patch(library_routes::update_library)
+                .delete(library_routes::delete_library),
+        )
+        .route(
+            "/api/v1/libraries/{library_id}/scan",
+            post(library_routes::scan_library),
+        )
+        .route(
+            "/api/v1/libraries/{library_id}/empty-trash",
+            post(library_routes::empty_trash),
+        )
+        .route("/api/v1/filesystem", post(filesystem_routes::directory_listing))
+        .route(
+            "/api/v1/client-settings/user/list",
+            get(settings_routes::list_user_settings),
+        )
+        .route(
+            "/api/v1/client-settings/global",
+            patch(settings_routes::save_global_settings).delete(settings_routes::delete_global_settings),
+        )
+        .route(
+            "/api/v1/client-settings/user",
+            patch(settings_routes::save_user_settings).delete(settings_routes::delete_user_settings),
+        )
+        .route("/api/v1/tasks", delete(settings_routes::clear_tasks))
         .route_layer(middleware::from_fn_with_state(state.clone(), auth::require_auth));
 
     Router::new()
         .route("/actuator/health", get(routes::health))
         .route("/api/v1/claim", get(routes::claim_status).post(routes::claim_server))
+        .route(
+            "/api/v1/client-settings/global/list",
+            get(settings_routes::list_global_settings),
+        )
+        .route("/api/v1/oauth2/providers", get(settings_routes::oauth_providers))
         .merge(protected)
         .layer(DefaultBodyLimit::max(2 * 1024 * 1024))
         .layer(CorsLayer::permissive())

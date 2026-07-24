@@ -46,6 +46,11 @@ impl ApiError {
         Self::new(StatusCode::NOT_FOUND, message)
     }
 
+    /// Creates a state-conflict response.
+    pub(crate) fn conflict(message: impl Into<String>) -> Self {
+        Self::new(StatusCode::CONFLICT, message)
+    }
+
     /// Creates an internal failure response without leaking its cause.
     pub(crate) fn internal(message: impl Into<String>) -> Self {
         Self::new(StatusCode::INTERNAL_SERVER_ERROR, message)
@@ -87,6 +92,10 @@ impl From<StorageError> for ApiError {
         match error {
             StorageError::DuplicateEmail => Self::bad_request("A user with this email already exists"),
             StorageError::DuplicateApiKeyComment => Self::bad_request("ERR_1034"),
+            StorageError::InvalidData(error) => {
+                tracing::error!(%error, "invalid persisted data");
+                Self::internal("Invalid persisted data")
+            }
             StorageError::Database(error) => {
                 tracing::error!(%error, "database request failed");
                 Self::internal("Database request failed")

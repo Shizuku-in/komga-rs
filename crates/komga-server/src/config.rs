@@ -20,6 +20,10 @@ pub struct Config {
     #[arg(long, env = "KOMGA_DATABASE_FILE")]
     pub database_file: Option<PathBuf>,
 
+    /// Override the separate persistent task queue file.
+    #[arg(long, env = "KOMGA_TASKS_DATABASE_FILE")]
+    pub tasks_database_file: Option<PathBuf>,
+
     /// Address on which the HTTP server listens.
     #[arg(long, env = "KOMGA_HOST", default_value = "0.0.0.0")]
     pub host: IpAddr,
@@ -48,5 +52,12 @@ impl Config {
         self.database_file
             .clone()
             .unwrap_or_else(|| self.config_dir().join("database.sqlite"))
+    }
+
+    /// Returns the explicit task database file or `tasks.sqlite` in the config directory.
+    pub fn tasks_database_file(&self) -> PathBuf {
+        self.tasks_database_file
+            .clone()
+            .unwrap_or_else(|| self.config_dir().join("tasks.sqlite"))
     }
 }

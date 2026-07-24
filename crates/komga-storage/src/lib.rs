@@ -7,6 +7,15 @@
 
 #![warn(missing_docs)]
 
+mod library;
+mod schema;
+mod settings;
+mod tasks;
+
+pub use library::DeleteLibraryResult;
+pub use settings::ClientSetting;
+pub use tasks::{TaskRecord, TaskStorage};
+
 use std::{collections::BTreeSet, path::Path, str::FromStr, time::Duration};
 
 use komga_core::{AgeRestriction, AllowExclude, ApiKey, ContentRestrictions, User, UserRole};
@@ -25,6 +34,9 @@ pub enum StorageError {
     /// A user already owns an API key with the requested comment.
     #[error("an API key with this comment already exists for the user")]
     DuplicateApiKeyComment,
+    /// Persisted data could not be converted to the current domain model.
+    #[error("invalid persisted data: {0}")]
+    InvalidData(String),
     /// A query, transaction, connection, or SQLite constraint failed.
     #[error("database error: {0}")]
     Database(#[from] sqlx::Error),
@@ -87,6 +99,7 @@ impl Storage {
             .connect_with(options)
             .await?;
         sqlx::migrate!("./migrations").run(&pool).await?;
+        schema::reconcile_library_schema(&pool).await?;
         Ok(Self { pool })
     }
 
@@ -111,6 +124,7 @@ impl Storage {
             .connect_with(options)
             .await?;
         sqlx::migrate!("./migrations").run(&pool).await?;
+        schema::reconcile_library_schema(&pool).await?;
         Ok(Self { pool })
     }
 
@@ -132,6 +146,7 @@ impl Storage {
             .connect_with(options)
             .await?;
         sqlx::migrate!("./migrations").run(&pool).await?;
+        schema::reconcile_library_schema(&pool).await?;
         Ok(Self { pool })
     }
 
@@ -643,7 +658,8 @@ fn is_unique_violation(error: &sqlx::Error) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use komga_core::{ALL_ROLES, new_id};
+    use komga_core::{ALL_ROLES, Library, ScanInterval, new_id};
+    use url::Url;
 
     #[tokio::test]
     async fn users_round_trip_with_komga_relations() {
@@ -794,5 +810,98 @@ mod tests {
         assert_eq!(user.roles, BTreeSet::from([UserRole::PageStreaming]));
         assert!(storage.delete_user("kotlin-user").await.unwrap());
         assert_eq!(storage.count_users().await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn libraries_settings_and_exclusions_round_trip() {
+        let storage = Storage::connect_memory().await.unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let mut library = Library::new("Library".into(), Url::from_file_path(root.path()).unwrap());
+        library.scan_interval = ScanInterval::Daily;
+        library.scan_directory_exclusions = BTreeSet::from(["@eaDir".into(), "tmp".into()]);
+        library.oneshots_directory = Some("One Shots".into());
+        storage.create_library(&library).await.unwrap();
+
+        let loaded = storage.find_library_by_id(&library.id).await.unwrap().unwrap();
+        assert_eq!(loaded.name, "Library");
+        assert_eq!(loaded.scan_interval, ScanInterval::Daily);
+        assert_eq!(loaded.scan_directory_exclusions, library.scan_directory_exclusions);
+
+        storage
+            .save_global_client_settings(&[("ui.theme".into(), "dark".into(), true)])
+            .await
+            .unwrap();
+        storage
+            .save_global_client_settings(&[("ui.theme".into(), "light".into(), false)])
+            .await
+            .unwrap();
+        let settings = storage.list_global_client_settings(false).await.unwrap();
+        assert_eq!(settings["ui.theme"].value, "light");
+        assert_eq!(settings["ui.theme"].allow_unauthorized, Some(true));
+
+        assert_eq!(
+            storage.delete_library_if_empty(&library.id).await.unwrap(),
+            DeleteLibraryResult::Deleted
+        );
+    }
+
+    #[tokio::test]
+    async fn task_queue_upserts_and_respects_group_ownership() {
+        let tasks = TaskStorage::connect_memory().await.unwrap();
+        let mut first = TaskRecord::scan_library("library", false, 4);
+        tasks.save(&first).await.unwrap();
+        first.priority = 8;
+        tasks.save(&first).await.unwrap();
+        let saved = tasks.list().await.unwrap();
+        assert_eq!(saved.len(), 1);
+        assert_eq!(saved[0].priority, 8);
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&saved[0].payload).unwrap()["libraryId"],
+            "library"
+        );
+
+        let mut grouped_one = TaskRecord::empty_trash("one", 6);
+        grouped_one.group_id = Some("group".into());
+        let mut grouped_two = TaskRecord::empty_trash("two", 6);
+        grouped_two.group_id = Some("group".into());
+        tasks.save(&grouped_one).await.unwrap();
+        tasks.save(&grouped_two).await.unwrap();
+        let claimed = tasks.take_first("worker-1").await.unwrap().unwrap();
+        assert_eq!(claimed.priority, 8);
+        let grouped = tasks.take_first("worker-2").await.unwrap().unwrap();
+        assert_eq!(grouped.group_id.as_deref(), Some("group"));
+        assert_eq!(tasks.take_first("worker-3").await.unwrap(), None);
+        assert_eq!(tasks.delete_all_unowned().await.unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn non_empty_library_deletion_is_guarded() {
+        let storage = Storage::connect_memory().await.unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let library = Library::new("Library".into(), Url::from_file_path(root.path()).unwrap());
+        storage.create_library(&library).await.unwrap();
+        sqlx::raw_sql(
+            r#"
+            CREATE TABLE SERIES (
+                ID varchar NOT NULL PRIMARY KEY,
+                LIBRARY_ID varchar NOT NULL,
+                FOREIGN KEY (LIBRARY_ID) REFERENCES LIBRARY (ID)
+            );
+            "#,
+        )
+        .execute(storage.pool())
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO SERIES (ID, LIBRARY_ID) VALUES ('series', ?)")
+            .bind(&library.id)
+            .execute(storage.pool())
+            .await
+            .unwrap();
+
+        assert_eq!(
+            storage.delete_library_if_empty(&library.id).await.unwrap(),
+            DeleteLibraryResult::NotEmpty
+        );
+        assert!(storage.find_library_by_id(&library.id).await.unwrap().is_some());
     }
 }

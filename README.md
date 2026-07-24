@@ -2,7 +2,7 @@
 
 An incremental Rust port of the [Komga](https://github.com/gotson/komga) backend. The Kotlin source checked out in `komga/` is the behavioral reference; the Rust implementation is a separate workspace at the repository root.
 
-> This is not yet a drop-in replacement for a complete Komga server. The first vertical slice covers startup, SQLite, server claiming, sessions, API keys, and user management. See [the migration matrix](docs/MIGRATION.md) for exact coverage.
+> This is not yet a drop-in replacement for a complete Komga server. The implemented slices cover startup, SQLite, server claiming, sessions, API keys, users, library configuration, client settings, and persistent task enqueueing. See [the migration matrix](docs/MIGRATION.md) for exact coverage.
 
 ## Run
 
@@ -17,6 +17,7 @@ The defaults match Komga:
 - listen on `0.0.0.0:25600`;
 - keep state in `$HOME/.komga`;
 - use `$HOME/.komga/database.sqlite`.
+- use `$HOME/.komga/tasks.sqlite` for the persistent task queue.
 
 Configuration can be supplied through arguments or environment variables:
 
@@ -26,7 +27,8 @@ cargo run -p komga-server -- \
   --host 127.0.0.1 \
   --port 25600
 
-KOMGA_DATABASE_FILE=/srv/komga/database.sqlite KOMGA_PORT=25601 \
+KOMGA_DATABASE_FILE=/srv/komga/database.sqlite \
+KOMGA_TASKS_DATABASE_FILE=/srv/komga/tasks.sqlite KOMGA_PORT=25601 \
   cargo run -p komga-server
 ```
 
@@ -45,8 +47,21 @@ Do not run the Kotlin and Rust servers against the same SQLite file at the same 
 - `DELETE /api/v2/users/me/api-keys/{id}`
 - `GET /api/v1/login/set-cookie`
 - `GET|POST /api/logout`
+- `GET|POST /api/v1/libraries`
+- `GET|PUT|PATCH|DELETE /api/v1/libraries/{id}`
+- `POST /api/v1/libraries/{id}/scan`
+- `POST /api/v1/libraries/{id}/empty-trash`
+- `POST /api/v1/filesystem`
+- `GET /api/v1/client-settings/global/list`
+- `PATCH|DELETE /api/v1/client-settings/global`
+- `GET /api/v1/client-settings/user/list`
+- `PATCH|DELETE /api/v1/client-settings/user`
+- `GET /api/v1/oauth2/providers`
+- `DELETE /api/v1/tasks`
 
 Authentication is compatible with the current Komga contract: HTTP Basic, `KOMGA-SESSION`, `X-Auth-Token`, and SHA-512-backed `X-API-Key`. Existing Spring BCrypt `$2a$` password hashes are accepted.
+
+Scan and empty-trash actions are persisted to `tasks.sqlite`, but this stage does not execute them yet. Library deletion is currently limited to empty libraries; deleting a library that still contains series, books, or sidecars returns `409 Conflict`.
 
 ## Develop
 
