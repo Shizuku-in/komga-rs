@@ -475,4 +475,53 @@ mod tests {
             replacement.id
         );
     }
+
+    #[tokio::test]
+    async fn rar_support_migration_only_marks_unsupported_rar_outdated() {
+        let storage = Storage::connect_memory().await.unwrap();
+        let temporary = tempfile::tempdir().unwrap();
+        let book = scanned_book(&storage, temporary.path()).await;
+        let migration = include_str!("../migrations/0006_rar_support.sql");
+
+        for media_type in [
+            "application/vnd.rar",
+            "application/x-rar-compressed",
+            "application/x-rar-compressed; version=4",
+            "application/x-rar-compressed; version=5",
+        ] {
+            sqlx::query("UPDATE MEDIA SET STATUS = 'UNSUPPORTED', MEDIA_TYPE = ? WHERE BOOK_ID = ?")
+                .bind(media_type)
+                .bind(&book.id)
+                .execute(&storage.pool)
+                .await
+                .unwrap();
+            sqlx::query(migration).execute(&storage.pool).await.unwrap();
+            let status = sqlx::query_scalar::<_, String>("SELECT STATUS FROM MEDIA WHERE BOOK_ID = ?")
+                .bind(&book.id)
+                .fetch_one(&storage.pool)
+                .await
+                .unwrap();
+            assert_eq!(status, "OUTDATED", "{media_type}");
+        }
+
+        for (status, media_type) in [
+            ("UNSUPPORTED", "application/pdf"),
+            ("READY", "application/x-rar-compressed"),
+        ] {
+            sqlx::query("UPDATE MEDIA SET STATUS = ?, MEDIA_TYPE = ? WHERE BOOK_ID = ?")
+                .bind(status)
+                .bind(media_type)
+                .bind(&book.id)
+                .execute(&storage.pool)
+                .await
+                .unwrap();
+            sqlx::query(migration).execute(&storage.pool).await.unwrap();
+            let actual = sqlx::query_scalar::<_, String>("SELECT STATUS FROM MEDIA WHERE BOOK_ID = ?")
+                .bind(&book.id)
+                .fetch_one(&storage.pool)
+                .await
+                .unwrap();
+            assert_eq!(actual, status, "{media_type}");
+        }
+    }
 }

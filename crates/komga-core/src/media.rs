@@ -1,13 +1,17 @@
 //! Media analysis and image operations independent from HTTP and persistence.
 
 use std::{
+    cell::RefCell,
+    collections::{HashMap, VecDeque},
     fs::File,
-    io::{Cursor, Read},
+    io::{self, Cursor, Read, Write},
     path::Path,
+    rc::Rc,
 };
 
 use chrono::NaiveDateTime;
 use image::{DynamicImage, GenericImageView, ImageFormat, ImageReader, Rgb, RgbImage, imageops::FilterType};
+use rars::{Archive, ArchiveFamily, ArchiveReader};
 use serde::Serialize;
 use thiserror::Error;
 use zip::ZipArchive;
@@ -262,17 +266,23 @@ struct AnalyzedEntry {
 }
 
 #[derive(Debug)]
-struct ZipAnalysis {
+struct ContainerAnalysis {
     pages: Vec<BookPage>,
     files: Vec<MediaFile>,
     comment: Option<String>,
 }
 
+#[derive(Debug)]
+struct RarAnalysis {
+    media_type: &'static str,
+    contents: ContainerAnalysis,
+}
+
 /// Detects and analyzes a book using Kotlin-compatible media state transitions.
 ///
-/// Only ZIP/CBZ containers are ready in this slice. Recognized RAR, PDF, EPUB,
-/// and other formats are persisted as unsupported so later migrations can mark
-/// them outdated when their extractors are introduced.
+/// ZIP/CBZ and RAR/CBR containers are analyzed without external commands.
+/// Recognized PDF, EPUB, and other formats remain unsupported until their
+/// extractors are introduced.
 ///
 /// # Errors
 ///
@@ -316,43 +326,50 @@ pub fn analyze_book(
         });
     }
 
-    if detected != "application/zip" {
-        return Ok(Media::result(
-            &book.id,
-            MediaStatus::Unsupported,
-            Some(detected),
-            Some("ERR_1001"),
-        ));
+    if detected == "application/zip" {
+        return match analyze_zip(&path, analyze_dimensions, cancelled) {
+            Ok(analysis) => Ok(media_from_analysis(&book.id, "application/zip", analysis)),
+            Err(ZipAnalysisError::Cancelled) => Err(MediaAnalysisError::Cancelled),
+            Err(ZipAnalysisError::Archive) => Ok(Media::result(
+                &book.id,
+                MediaStatus::Error,
+                Some("application/zip".to_owned()),
+                Some("ERR_1008"),
+            )),
+        };
     }
 
-    match analyze_zip(&path, analyze_dimensions, cancelled) {
-        Ok(analysis) if analysis.pages.is_empty() => Ok(Media::result(
-            &book.id,
-            MediaStatus::Error,
-            Some("application/zip".to_owned()),
-            Some("ERR_1006"),
-        )),
-        Ok(analysis) => Ok(Media {
-            status: MediaStatus::Ready,
-            media_type: Some("application/zip".to_owned()),
-            page_count: i32::try_from(analysis.pages.len()).unwrap_or(i32::MAX),
-            pages: analysis.pages,
-            files: analysis.files,
-            comment: analysis.comment,
-            book_id: book.id.clone(),
-            epub_divina_compatible: false,
-            epub_is_kepub: false,
-            created_date: None,
-            last_modified_date: None,
-        }),
-        Err(ZipAnalysisError::Cancelled) => Err(MediaAnalysisError::Cancelled),
-        Err(ZipAnalysisError::Archive) => Ok(Media::result(
-            &book.id,
-            MediaStatus::Error,
-            Some("application/zip".to_owned()),
-            Some("ERR_1008"),
-        )),
+    if is_rar_media_type(&detected) {
+        return match analyze_rar(&path, analyze_dimensions, cancelled) {
+            Ok(analysis) => Ok(media_from_analysis(&book.id, analysis.media_type, analysis.contents)),
+            Err(RarAnalysisError::Cancelled) => Err(MediaAnalysisError::Cancelled),
+            Err(RarAnalysisError::Encrypted) => Ok(Media::result(
+                &book.id,
+                MediaStatus::Unsupported,
+                Some(detected),
+                Some("ERR_1002"),
+            )),
+            Err(RarAnalysisError::MultiVolume) => Ok(Media::result(
+                &book.id,
+                MediaStatus::Unsupported,
+                Some(detected),
+                Some("ERR_1004"),
+            )),
+            Err(RarAnalysisError::Archive) => Ok(Media::result(
+                &book.id,
+                MediaStatus::Error,
+                Some(detected),
+                Some("ERR_1008"),
+            )),
+        };
     }
+
+    Ok(Media::result(
+        &book.id,
+        MediaStatus::Unsupported,
+        Some(detected),
+        Some("ERR_1001"),
+    ))
 }
 
 #[derive(Debug)]
@@ -365,7 +382,7 @@ fn analyze_zip(
     path: &Path,
     analyze_dimensions: bool,
     cancelled: impl Fn() -> bool,
-) -> Result<ZipAnalysis, ZipAnalysisError> {
+) -> Result<ContainerAnalysis, ZipAnalysisError> {
     let file = File::open(path).map_err(|_| ZipAnalysisError::Archive)?;
     let mut archive = ZipArchive::new(file).map_err(|_| ZipAnalysisError::Archive)?;
     let mut entries = Vec::new();
@@ -399,8 +416,11 @@ fn analyze_zip(
             file_size,
         });
     }
-    entries.sort_by(|left, right| natord::compare_ignore_case(&left.name, &right.name));
+    Ok(finalize_entries(entries))
+}
 
+fn finalize_entries(mut entries: Vec<AnalyzedEntry>) -> ContainerAnalysis {
+    entries.sort_by(|left, right| natord::compare_ignore_case(&left.name, &right.name));
     let failed_names = entries
         .iter()
         .filter(|entry| entry.media_type.is_none())
@@ -427,17 +447,194 @@ fn analyze_zip(
             });
         }
     }
-    Ok(ZipAnalysis { pages, files, comment })
+    ContainerAnalysis { pages, files, comment }
 }
 
-/// Extracts one page from a ready ZIP-backed media record.
+fn media_from_analysis(book_id: &str, media_type: &str, analysis: ContainerAnalysis) -> Media {
+    if analysis.pages.is_empty() {
+        return Media::result(
+            book_id,
+            MediaStatus::Error,
+            Some(media_type.to_owned()),
+            Some("ERR_1006"),
+        );
+    }
+    Media {
+        status: MediaStatus::Ready,
+        media_type: Some(media_type.to_owned()),
+        page_count: i32::try_from(analysis.pages.len()).unwrap_or(i32::MAX),
+        pages: analysis.pages,
+        files: analysis.files,
+        comment: analysis.comment,
+        book_id: book_id.to_owned(),
+        epub_divina_compatible: false,
+        epub_is_kepub: false,
+        created_date: None,
+        last_modified_date: None,
+    }
+}
+
+#[derive(Debug)]
+enum RarAnalysisError {
+    Cancelled,
+    Encrypted,
+    MultiVolume,
+    Archive,
+}
+
+struct RarEntryWriter {
+    name: String,
+    file_size: Option<i64>,
+    analyze_dimensions: bool,
+    prefix: Vec<u8>,
+    entries: Rc<RefCell<Vec<AnalyzedEntry>>>,
+}
+
+impl Write for RarEntryWriter {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        let limit = usize::try_from(ANALYSIS_PREFIX_LIMIT).unwrap_or(usize::MAX);
+        let remaining = limit.saturating_sub(self.prefix.len());
+        self.prefix.extend_from_slice(&bytes[..bytes.len().min(remaining)]);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+impl Drop for RarEntryWriter {
+    fn drop(&mut self) {
+        let media_type = detect_entry_media_type(&self.prefix);
+        let dimension = if self.analyze_dimensions && media_type.as_deref().is_some_and(is_image_media_type) {
+            image_dimension(&self.prefix)
+        } else {
+            None
+        };
+        self.entries.borrow_mut().push(AnalyzedEntry {
+            name: std::mem::take(&mut self.name),
+            media_type,
+            dimension,
+            file_size: self.file_size,
+        });
+    }
+}
+
+fn analyze_rar(
+    path: &Path,
+    analyze_dimensions: bool,
+    cancelled: impl Fn() -> bool,
+) -> Result<RarAnalysis, RarAnalysisError> {
+    let archive = ArchiveReader::read_path(path).map_err(classify_rar_error)?;
+    let media_type = rar_media_type(&archive).ok_or(RarAnalysisError::Archive)?;
+    let members = archive.members().collect::<Vec<_>>();
+    if members.iter().any(|member| member.meta.is_encrypted) {
+        return Err(RarAnalysisError::Encrypted);
+    }
+    if rar_is_volume(&archive)
+        || members
+            .iter()
+            .any(|member| member.meta.is_split_before || member.meta.is_split_after)
+    {
+        return Err(RarAnalysisError::MultiVolume);
+    }
+
+    let mut sizes = HashMap::<Vec<u8>, VecDeque<Option<i64>>>::new();
+    for member in members.iter().filter(|member| !member.meta.is_directory) {
+        sizes
+            .entry(member.meta.name.clone())
+            .or_default()
+            .push_back(i64::try_from(member.meta.unpacked_size).ok());
+    }
+    let entries = Rc::new(RefCell::new(Vec::new()));
+    archive
+        .extract_to(None, |meta| {
+            if cancelled() {
+                return Err(rars::Error::Cancelled);
+            }
+            if meta.is_directory {
+                return Ok(Box::new(io::sink()));
+            }
+            let file_size = sizes.get_mut(meta.name_bytes()).and_then(VecDeque::pop_front).flatten();
+            Ok(Box::new(RarEntryWriter {
+                name: meta.name_lossy(),
+                file_size,
+                analyze_dimensions,
+                prefix: Vec::new(),
+                entries: Rc::clone(&entries),
+            }))
+        })
+        .map_err(classify_rar_error)?;
+    if cancelled() {
+        return Err(RarAnalysisError::Cancelled);
+    }
+    let entries = Rc::try_unwrap(entries)
+        .map_err(|_| RarAnalysisError::Archive)?
+        .into_inner();
+    Ok(RarAnalysis {
+        media_type,
+        contents: finalize_entries(entries),
+    })
+}
+
+fn classify_rar_error(error: rars::Error) -> RarAnalysisError {
+    if rar_error_is_cancelled(&error) {
+        RarAnalysisError::Cancelled
+    } else if rar_error_is_encrypted(&error) {
+        RarAnalysisError::Encrypted
+    } else {
+        RarAnalysisError::Archive
+    }
+}
+
+fn rar_error_is_cancelled(error: &rars::Error) -> bool {
+    match error {
+        rars::Error::Cancelled => true,
+        rars::Error::AtArchiveOffset { source, .. } | rars::Error::AtEntry { source, .. } => {
+            rar_error_is_cancelled(source)
+        }
+        _ => false,
+    }
+}
+
+fn rar_error_is_encrypted(error: &rars::Error) -> bool {
+    match error {
+        rars::Error::NeedPassword
+        | rars::Error::WrongPasswordOrCorruptData
+        | rars::Error::UnsupportedEncryption { .. } => true,
+        rars::Error::AtArchiveOffset { source, .. } | rars::Error::AtEntry { source, .. } => {
+            rar_error_is_encrypted(source)
+        }
+        _ => false,
+    }
+}
+
+fn rar_media_type(archive: &Archive) -> Option<&'static str> {
+    match archive.family() {
+        ArchiveFamily::Rar15To40 => Some("application/x-rar-compressed; version=4"),
+        ArchiveFamily::Rar50Plus => Some("application/x-rar-compressed; version=5"),
+        ArchiveFamily::Rar13 => None,
+        _ => None,
+    }
+}
+
+fn rar_is_volume(archive: &Archive) -> bool {
+    match archive {
+        Archive::Rar15To40(archive) => archive.main.is_volume(),
+        Archive::Rar50Plus(archive) => archive.main.is_volume(),
+        Archive::Rar13(_) => false,
+        _ => false,
+    }
+}
+
+/// Extracts one page from a ready ZIP- or RAR-backed media record.
 ///
 /// # Errors
 ///
 /// Returns an error for non-ready media, invalid page numbers, missing files,
-/// encrypted entries, or unsupported compression methods.
+/// encrypted entries, unsupported compression methods, or corrupt archives.
 pub fn extract_page(book: &Book, media: &Media, page_number: i32) -> Result<TypedBytes, MediaOperationError> {
-    if media.status != MediaStatus::Ready || media.media_type.as_deref() != Some("application/zip") {
+    if media.status != MediaStatus::Ready {
         return Err(MediaOperationError::NotReady);
     }
     if page_number <= 0 {
@@ -451,19 +648,65 @@ pub fn extract_page(book: &Book, media: &Media, page_number: i32) -> Result<Type
         .url
         .to_file_path()
         .map_err(|()| MediaOperationError::Read("book URL is not a file URL".to_owned()))?;
+    let bytes = match media.media_type.as_deref() {
+        Some("application/zip") => extract_zip_entry(&path, &page.file_name)?,
+        Some(media_type) if is_rar_media_type(media_type) => extract_rar_entry(&path, &page.file_name)?,
+        _ => return Err(MediaOperationError::NotReady),
+    };
+    Ok(TypedBytes {
+        bytes,
+        media_type: page.media_type.clone(),
+    })
+}
+
+fn extract_zip_entry(path: &Path, entry_name: &str) -> Result<Vec<u8>, MediaOperationError> {
     let file = File::open(path).map_err(|error| MediaOperationError::Read(error.to_string()))?;
     let mut archive = ZipArchive::new(file).map_err(|error| MediaOperationError::Read(error.to_string()))?;
     let mut entry = archive
-        .by_name(&page.file_name)
+        .by_name(entry_name)
         .map_err(|error| MediaOperationError::Read(error.to_string()))?;
     let mut bytes = Vec::with_capacity(usize::try_from(entry.size().min(16 * 1024 * 1024)).unwrap_or(0));
     entry
         .read_to_end(&mut bytes)
         .map_err(|error| MediaOperationError::Read(error.to_string()))?;
-    Ok(TypedBytes {
-        bytes,
-        media_type: page.media_type.clone(),
-    })
+    Ok(bytes)
+}
+
+struct SharedBytesWriter(Rc<RefCell<Vec<u8>>>);
+
+impl Write for SharedBytesWriter {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.0.borrow_mut().extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+fn extract_rar_entry(path: &Path, entry_name: &str) -> Result<Vec<u8>, MediaOperationError> {
+    let archive = ArchiveReader::read_path(path).map_err(|error| MediaOperationError::Read(error.to_string()))?;
+    let bytes = Rc::new(RefCell::new(Vec::new()));
+    let mut found = false;
+    archive
+        .extract_to(None, |meta| {
+            if !found && !meta.is_directory && meta.name_lossy() == entry_name {
+                found = true;
+                Ok(Box::new(SharedBytesWriter(Rc::clone(&bytes))))
+            } else {
+                Ok(Box::new(io::sink()))
+            }
+        })
+        .map_err(|error| MediaOperationError::Read(error.to_string()))?;
+    if !found {
+        return Err(MediaOperationError::Read(format!(
+            "archive entry {entry_name:?} does not exist"
+        )));
+    }
+    Rc::try_unwrap(bytes)
+        .map_err(|_| MediaOperationError::Read("archive entry remained borrowed".to_owned()))
+        .map(RefCell::into_inner)
 }
 
 /// Converts and optionally downsizes encoded image bytes.
@@ -570,6 +813,16 @@ fn normalize_media_type(value: &str) -> &str {
     }
 }
 
+fn is_rar_media_type(value: &str) -> bool {
+    matches!(
+        value,
+        "application/x-rar-compressed"
+            | "application/x-rar-compressed; version=4"
+            | "application/x-rar-compressed; version=5"
+            | "application/vnd.rar"
+    )
+}
+
 fn is_image_media_type(value: &str) -> bool {
     value.starts_with("image/")
 }
@@ -601,6 +854,10 @@ fn binary_size(bytes: i64) -> String {
 mod tests {
     use std::{fs, io::Write, path::PathBuf};
 
+    use rars::{
+        ArchiveVersion, FeatureSet,
+        rar15_40::{StoredEntry, WriterOptions, write_stored_volumes},
+    };
     use url::Url;
     use zip::{ZipWriter, write::SimpleFileOptions};
 
@@ -718,5 +975,77 @@ mod tests {
 
         let encrypted = analyze_book(&book(&kotlin_archive("zip-encrypted.zip")), false, || false).unwrap();
         assert_eq!(encrypted.status, MediaStatus::Error);
+    }
+
+    #[test]
+    fn reads_kotlin_rar_and_solid_fixtures() {
+        for (name, media_type, page_count) in [
+            ("rar4.rar", "application/x-rar-compressed; version=4", 3),
+            ("rar5.rar", "application/x-rar-compressed; version=5", 1),
+            ("rar4-solid.rar", "application/x-rar-compressed; version=4", 3),
+            ("rar5-solid.rar", "application/x-rar-compressed; version=5", 3),
+        ] {
+            let source = book(&kotlin_archive(name));
+            let media = analyze_book(&source, true, || false).unwrap();
+            assert_eq!(media.status, MediaStatus::Ready, "{name}");
+            assert_eq!(media.media_type.as_deref(), Some(media_type), "{name}");
+            assert_eq!(media.page_count, page_count, "{name}");
+            assert!(
+                media
+                    .pages
+                    .iter()
+                    .all(|page| page.dimension == Some(Dimension { width: 48, height: 48 })),
+                "{name}"
+            );
+            let extracted = extract_page(&source, &media, page_count).unwrap();
+            assert_eq!(extracted.media_type, "image/png", "{name}");
+            assert!(extracted.bytes.starts_with(b"\x89PNG"), "{name}");
+        }
+
+        let source = book(&kotlin_archive("rar4.rar"));
+        let media = analyze_book(&source, false, || false).unwrap();
+        assert!(media.pages.iter().all(|page| page.dimension.is_none()));
+        assert_eq!(media.pages[0].file_name, "komga-1.png");
+        assert_eq!(media.pages[0].file_size, Some(3108));
+    }
+
+    #[test]
+    fn rejects_encrypted_and_multivolume_rar_with_kotlin_codes() {
+        for name in ["rar4-encrypted.rar", "rar5-encrypted.rar"] {
+            let media = analyze_book(&book(&kotlin_archive(name)), false, || false).unwrap();
+            assert_eq!(media.status, MediaStatus::Unsupported, "{name}");
+            assert_eq!(media.comment.as_deref(), Some("ERR_1002"), "{name}");
+            assert!(
+                media
+                    .media_type
+                    .as_deref()
+                    .is_some_and(|value| value.starts_with("application/x-rar-compressed")),
+                "{name}"
+            );
+        }
+
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("multi-volume.cbr");
+        let image = png();
+        let volumes = write_stored_volumes(
+            StoredEntry {
+                name: b"page.png",
+                data: &image,
+                file_time: 0,
+                file_attr: 0x20,
+                host_os: 3,
+                password: None,
+                file_comment: None,
+            },
+            WriterOptions::new(ArchiveVersion::Rar40, FeatureSet::store_only()),
+            64,
+        )
+        .unwrap();
+        assert!(volumes.len() > 1);
+        fs::write(&path, &volumes[0]).unwrap();
+
+        let media = analyze_book(&book(&path), false, || false).unwrap();
+        assert_eq!(media.status, MediaStatus::Unsupported);
+        assert_eq!(media.comment.as_deref(), Some("ERR_1004"));
     }
 }
