@@ -7,6 +7,7 @@
 #![warn(missing_docs)]
 
 mod auth;
+mod book_file_routes;
 /// Command-line and environment configuration.
 pub mod config;
 mod content_routes;
@@ -115,6 +116,14 @@ pub fn build_app(state: AppState) -> Router {
         .route("/api/v1/series/{series_id}", get(content_routes::get_series))
         .route("/api/v1/books/list", post(content_routes::list_books))
         .route("/api/v1/books/{book_id}", get(content_routes::get_book))
+        .route(
+            "/api/v1/books/{book_id}/file",
+            get(book_file_routes::download_book_file),
+        )
+        .route(
+            "/api/v1/books/{book_id}/file/{*file_name}",
+            get(book_file_routes::download_book_file_with_name),
+        )
         .route("/api/v1/books/{book_id}/analyze", post(media_routes::analyze_book))
         .route("/api/v1/books/{book_id}/pages", get(media_routes::list_pages))
         .route("/api/v1/books/{book_id}/positions", get(media_routes::get_positions))
