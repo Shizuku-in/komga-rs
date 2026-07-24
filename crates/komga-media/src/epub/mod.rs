@@ -45,7 +45,17 @@ pub(crate) fn analyze(
     cancelled: impl Fn() -> bool,
 ) -> Result<Media, AnalysisError> {
     let (mut archive, package) = package::open(path).map_err(|_| AnalysisError::Invalid)?;
-    let resources = resources(&mut archive, &package, &cancelled)?;
+    let mut resources = resources(&mut archive, &package, &cancelled)?;
+    if !resources.iter().any(|file| file.file_name == "ComicInfo.xml")
+        && let Ok(entry) = archive.by_name("ComicInfo.xml")
+    {
+        resources.push(MediaFile {
+            file_name: "ComicInfo.xml".to_owned(),
+            media_type: Some("application/xml".to_owned()),
+            sub_type: Some(EPUB_ASSET_SUBTYPE.to_owned()),
+            file_size: i64::try_from(entry.size()).ok(),
+        });
+    }
     let is_kepub = match positions::is_kepub(&mut archive, &resources, &cancelled) {
         Ok(value) => value,
         Err(positions::PositionError::Cancelled) => return Err(AnalysisError::Cancelled),

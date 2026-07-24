@@ -3,7 +3,10 @@
 use std::{collections::HashMap, time::Duration};
 
 use komga_core::{MediaStatus, ScanError, ScanInterval, ThumbnailBook, new_id, scan_library_files};
-use komga_media::{MediaAnalysisError, MediaOperationError, analyze_book, generate_thumbnail, image_dimension};
+use komga_media::{
+    MediaAnalysisError, MediaOperationError, analyze_book, extract_comic_info_containers, generate_thumbnail,
+    image_dimension,
+};
 use komga_storage::{StorageError, TaskRecord};
 use serde::Deserialize;
 use tokio::{task::JoinHandle, time::Instant};
@@ -116,9 +119,10 @@ enum TaskOutcome {
     Retry,
 }
 
-const SUPPORTED_TASK_TYPES: [&str; 5] = [
+const SUPPORTED_TASK_TYPES: [&str; 6] = [
     "ScanLibrary",
     "AnalyzeBook",
+    "RefreshBookMetadata",
     "GenerateBookThumbnail",
     "AggregateSeriesMetadata",
     "FindBookThumbnailsToRegenerate",
@@ -170,6 +174,7 @@ async fn process_task(state: &AppState, task: &TaskRecord) -> TaskOutcome {
     match task.simple_type.as_str() {
         "ScanLibrary" => process_scan_task(state, task).await,
         "AnalyzeBook" => process_analyze_book_task(state, task).await,
+        "RefreshBookMetadata" => process_refresh_book_metadata_task(state, task).await,
         "GenerateBookThumbnail" => process_generate_thumbnail_task(state, task).await,
         "AggregateSeriesMetadata" => process_aggregate_series_metadata_task(state, task).await,
         "FindBookThumbnailsToRegenerate" => process_find_thumbnails_task(state, task).await,
@@ -287,6 +292,24 @@ async fn process_scan_task(state: &AppState, task: &TaskRecord) -> TaskOutcome {
             return TaskOutcome::Retry;
         }
     }
+    if payload.scan_deep {
+        let targets = match state.storage.list_ready_books_by_library_id(&payload.library_id).await {
+            Ok(targets) => targets,
+            Err(error) => {
+                tracing::error!(%error, library_id = %payload.library_id, "could not list ready books for metadata refresh");
+                return TaskOutcome::Retry;
+            }
+        };
+        for (book_id, series_id) in targets {
+            if let Err(error) = state
+                .enqueue_task(&TaskRecord::refresh_book_metadata(&book_id, &series_id, task.priority))
+                .await
+            {
+                tracing::error!(%error, %book_id, "could not enqueue book metadata refresh");
+                return TaskOutcome::Retry;
+            }
+        }
+    }
     TaskOutcome::Completed
 }
 
@@ -317,6 +340,7 @@ async fn process_analyze_book_task(state: &AppState, task: &TaskRecord) -> TaskO
             return TaskOutcome::Retry;
         }
     };
+    let import_containers = library.import_comic_info_collection || library.import_comic_info_read_list;
     let cancellation = state.shutdown.clone();
     let analyzed_book = book.clone();
     let result = tokio::task::spawn_blocking(move || {
@@ -351,8 +375,97 @@ async fn process_analyze_book_task(state: &AppState, task: &TaskRecord) -> TaskO
         tracing::error!(%error, book_id = %book.id, "could not enqueue generated thumbnail");
         return TaskOutcome::Retry;
     }
+    if media.status == MediaStatus::Ready
+        && import_containers
+        && let Err(error) = state
+            .enqueue_task(&TaskRecord::refresh_book_metadata(
+                &book.id,
+                &book.series_id,
+                task.priority,
+            ))
+            .await
+    {
+        tracing::error!(%error, book_id = %book.id, "could not enqueue book metadata refresh");
+        return TaskOutcome::Retry;
+    }
     tracing::info!(book_id = %book.id, status = media.status.as_str(), pages = media.page_count, "book analysis completed");
     TaskOutcome::Completed
+}
+
+async fn process_refresh_book_metadata_task(state: &AppState, task: &TaskRecord) -> TaskOutcome {
+    let payload = match serde_json::from_str::<BookTaskPayload>(&task.payload) {
+        Ok(payload) => payload,
+        Err(error) => {
+            tracing::error!(%error, task_id = %task.id, "invalid RefreshBookMetadata payload");
+            return TaskOutcome::Completed;
+        }
+    };
+    let book = match state.storage.find_book_by_id(&payload.book_id).await {
+        Ok(Some(book)) if book.deleted_date.is_none() => book,
+        Ok(_) => return TaskOutcome::Completed,
+        Err(error) => {
+            tracing::error!(%error, book_id = %payload.book_id, "could not load book for metadata refresh");
+            return TaskOutcome::Retry;
+        }
+    };
+    let library = match state.storage.find_library_by_id(&book.library_id).await {
+        Ok(Some(library)) => library,
+        Ok(None) => return TaskOutcome::Completed,
+        Err(error) => {
+            tracing::error!(%error, library_id = %book.library_id, "could not load metadata settings");
+            return TaskOutcome::Retry;
+        }
+    };
+    if !library.import_comic_info_collection && !library.import_comic_info_read_list {
+        return TaskOutcome::Completed;
+    }
+    let media = match state.storage.find_media_by_book_id(&book.id).await {
+        Ok(Some(media)) if media.status == MediaStatus::Ready => media,
+        Ok(_) => return TaskOutcome::Completed,
+        Err(error) => {
+            tracing::error!(%error, book_id = %book.id, "could not load media for metadata refresh");
+            return TaskOutcome::Retry;
+        }
+    };
+    let extraction_book = book.clone();
+    let result = tokio::task::spawn_blocking(move || extract_comic_info_containers(&extraction_book, &media)).await;
+    let containers = match result {
+        Ok(Ok(Some(containers))) => containers,
+        Ok(Ok(None)) => return TaskOutcome::Completed,
+        Ok(Err(error)) => {
+            tracing::warn!(%error, book_id = %book.id, "could not import ComicInfo containers");
+            return TaskOutcome::Completed;
+        }
+        Err(error) => {
+            tracing::warn!(%error, book_id = %book.id, "ComicInfo extractor panicked");
+            return TaskOutcome::Completed;
+        }
+    };
+    let collections = if library.import_comic_info_collection {
+        containers.collections
+    } else {
+        Vec::new()
+    };
+    let read_lists = if library.import_comic_info_read_list {
+        containers
+            .read_lists
+            .into_iter()
+            .map(|value| (value.name, value.number))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    match state
+        .storage
+        .append_comic_info_containers(&book.series_id, &book.id, &collections, &read_lists)
+        .await
+    {
+        Ok(()) => TaskOutcome::Completed,
+        Err(error) => {
+            tracing::error!(%error, book_id = %book.id, "could not persist ComicInfo containers");
+            TaskOutcome::Retry
+        }
+    }
 }
 
 async fn process_generate_thumbnail_task(state: &AppState, task: &TaskRecord) -> TaskOutcome {

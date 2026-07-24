@@ -18,6 +18,144 @@ mod pdf;
 
 pub use comicrack::{ComicRackListError, parse_read_list};
 
+/// Container relationships declared by a root-level `ComicInfo.xml` file.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ComicInfoContainers {
+    /// Collection names from `SeriesGroup`, in declaration order.
+    pub collections: Vec<String>,
+    /// Read-list names and optional requested positions.
+    pub read_lists: Vec<ComicInfoReadList>,
+}
+
+/// One read-list relationship declared by ComicInfo.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ComicInfoReadList {
+    /// Read-list name.
+    pub name: String,
+    /// Requested integer position, or `None` when ComicInfo did not provide one.
+    pub number: Option<i32>,
+}
+
+const COMIC_INFO_MAX_SIZE: i64 = 1024 * 1024;
+
+/// Extracts and parses the analyzed root-level `ComicInfo.xml` resource.
+///
+/// The entry must have been declared by media analysis. DTD and entity
+/// declarations are rejected before structured XML parsing.
+///
+/// # Errors
+///
+/// Returns an operation error when the declared entry cannot be extracted or
+/// its XML is malformed or unsafe.
+pub fn extract_comic_info_containers(
+    book: &Book,
+    media: &Media,
+) -> Result<Option<ComicInfoContainers>, MediaOperationError> {
+    if media.status != MediaStatus::Ready {
+        return Ok(None);
+    }
+    let Some(file) = media.files.iter().find(|file| file.file_name == "ComicInfo.xml") else {
+        return Ok(None);
+    };
+    if file
+        .file_size
+        .is_some_and(|size| !(0..=COMIC_INFO_MAX_SIZE).contains(&size))
+    {
+        return Err(MediaOperationError::Read(
+            "ComicInfo.xml exceeds the 1 MiB limit".into(),
+        ));
+    }
+    let path = book
+        .url
+        .to_file_path()
+        .map_err(|()| MediaOperationError::Read("book URL is not a file URL".to_owned()))?;
+    let bytes = match media.profile() {
+        Some(MediaProfile::Divina) if media.media_type.as_deref() == Some(ZIP_MEDIA_TYPE) => {
+            archive::extract_zip_entry(&path, "ComicInfo.xml")?
+        }
+        Some(MediaProfile::Divina) => archive::extract_rar_entry(&path, "ComicInfo.xml")?,
+        Some(MediaProfile::Epub) => epub::extract(&path, "ComicInfo.xml").map_err(MediaOperationError::Read)?,
+        _ => return Ok(None),
+    };
+    if bytes.len() > usize::try_from(COMIC_INFO_MAX_SIZE).unwrap_or(usize::MAX) {
+        return Err(MediaOperationError::Read(
+            "ComicInfo.xml exceeds the 1 MiB limit".into(),
+        ));
+    }
+    parse_comic_info_containers(&bytes).map(Some)
+}
+
+fn parse_comic_info_containers(bytes: &[u8]) -> Result<ComicInfoContainers, MediaOperationError> {
+    let xml = std::str::from_utf8(bytes).map_err(|error| MediaOperationError::Read(error.to_string()))?;
+    let upper = xml.to_ascii_uppercase();
+    if upper.contains("<!DOCTYPE") || upper.contains("<!ENTITY") {
+        return Err(MediaOperationError::Read(
+            "ComicInfo.xml contains a DTD or entity declaration".into(),
+        ));
+    }
+    let document = roxmltree::Document::parse(xml).map_err(|error| MediaOperationError::Read(error.to_string()))?;
+    let values = |name: &str| {
+        document
+            .root_element()
+            .children()
+            .filter(|node| node.is_element() && node.tag_name().name() == name)
+            .filter_map(|node| node.text())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .collect::<Vec<_>>()
+    };
+    let mut collections = Vec::new();
+    for value in values("SeriesGroup") {
+        for name in value.split(',').map(str::trim).filter(|name| !name.is_empty()) {
+            if !collections.iter().any(|existing| existing == name) {
+                collections.push(name.to_owned());
+            }
+        }
+    }
+    let mut read_lists = Vec::new();
+    if let Some(name) = values("AlternateSeries").first() {
+        let number = values("AlternateNumber").first().and_then(|value| value.parse().ok());
+        push_read_list(&mut read_lists, name, number);
+    }
+    let arcs = values("StoryArc")
+        .into_iter()
+        .flat_map(|value| value.split(','))
+        .map(str::trim)
+        .map(|value| (!value.is_empty()).then_some(value))
+        .collect::<Vec<_>>();
+    let numbers = values("StoryArcNumber")
+        .into_iter()
+        .flat_map(|value| value.split(','))
+        .map(str::trim)
+        .collect::<Vec<_>>();
+    if numbers.is_empty() {
+        for name in arcs.into_iter().flatten() {
+            push_read_list(&mut read_lists, name, None);
+        }
+    } else {
+        for (name, number) in arcs
+            .into_iter()
+            .zip(numbers)
+            .filter_map(|(name, number)| name.zip(number.parse::<i32>().ok()))
+        {
+            push_read_list(&mut read_lists, name, Some(number));
+        }
+    }
+    Ok(ComicInfoContainers {
+        collections,
+        read_lists,
+    })
+}
+
+fn push_read_list(read_lists: &mut Vec<ComicInfoReadList>, name: &str, number: Option<i32>) {
+    if !read_lists.iter().any(|existing| existing.name == name) {
+        read_lists.push(ComicInfoReadList {
+            name: name.to_owned(),
+            number,
+        });
+    }
+}
+
 /// Binary content paired with the media type used by HTTP responses.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypedBytes {
@@ -877,5 +1015,71 @@ mod tests {
         for media_type in ["image/svg+xml", "application/pdf", "application/octet-stream"] {
             assert!(!can_convert_image_media_type(media_type), "{media_type}");
         }
+    }
+
+    #[test]
+    fn parses_only_comic_info_container_fields_with_kotlin_pairing() {
+        let parsed = parse_comic_info_containers(
+            br#"<ComicInfo><SeriesGroup> Alpha, ,Beta,Alpha </SeriesGroup><AlternateSeries>Event</AlternateSeries><AlternateNumber>7</AlternateNumber><StoryArc>Arc A, Arc B, Arc C</StoryArc><StoryArcNumber>1,nope,3</StoryArcNumber><Unknown>ignored</Unknown></ComicInfo>"#,
+        )
+        .unwrap();
+        assert_eq!(parsed.collections, ["Alpha", "Beta"]);
+        assert_eq!(
+            parsed.read_lists,
+            [
+                ComicInfoReadList {
+                    name: "Event".into(),
+                    number: Some(7),
+                },
+                ComicInfoReadList {
+                    name: "Arc A".into(),
+                    number: Some(1),
+                },
+                ComicInfoReadList {
+                    name: "Arc C".into(),
+                    number: Some(3),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn comic_info_without_arc_numbers_keeps_names_and_rejects_dtd() {
+        let parsed = parse_comic_info_containers(
+            b"<ComicInfo><StoryArc> First, Second </StoryArc><AlternateNumber>invalid</AlternateNumber></ComicInfo>",
+        )
+        .unwrap();
+        assert_eq!(
+            parsed.read_lists,
+            [
+                ComicInfoReadList {
+                    name: "First".into(),
+                    number: None,
+                },
+                ComicInfoReadList {
+                    name: "Second".into(),
+                    number: None,
+                },
+            ]
+        );
+        assert!(parse_comic_info_containers(b"<!DOCTYPE x><ComicInfo />").is_err());
+
+        let paired = parse_comic_info_containers(
+            b"<ComicInfo><StoryArc>one, , three</StoryArc><StoryArcNumber>6,7,8</StoryArcNumber></ComicInfo>",
+        )
+        .unwrap();
+        assert_eq!(
+            paired.read_lists,
+            [
+                ComicInfoReadList {
+                    name: "one".into(),
+                    number: Some(6),
+                },
+                ComicInfoReadList {
+                    name: "three".into(),
+                    number: Some(8),
+                },
+            ]
+        );
     }
 }

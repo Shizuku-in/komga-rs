@@ -90,6 +90,125 @@ fn validate_members(name: &str, members: &[String]) -> Result<()> {
 }
 
 impl Storage {
+    /// Incrementally appends ComicInfo collection and read-list relationships.
+    ///
+    /// Existing members retain their positions. Names use the same NFKC and
+    /// lowercase comparison as the public container APIs.
+    pub async fn append_comic_info_containers(
+        &self,
+        series_id: &str,
+        book_id: &str,
+        collections: &[String],
+        read_lists: &[(String, Option<i32>)],
+    ) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+        for name in collections {
+            let name = name.trim();
+            if name.is_empty() {
+                continue;
+            }
+            let rows = sqlx::query("SELECT ID,NAME FROM COLLECTION")
+                .fetch_all(&mut *tx)
+                .await?;
+            let id = rows
+                .iter()
+                .find(|row| normalized_name(row.get::<String, _>("NAME").as_str()) == normalized_name(name))
+                .map(|row| row.get::<String, _>("ID"));
+            let id = match id {
+                Some(id) => id,
+                None => {
+                    let id = komga_core::new_id();
+                    sqlx::query("INSERT INTO COLLECTION (ID,NAME,ORDERED,SERIES_COUNT) VALUES (?,?,0,0)")
+                        .bind(&id)
+                        .bind(name)
+                        .execute(&mut *tx)
+                        .await?;
+                    id
+                }
+            };
+            let next: i32 =
+                sqlx::query_scalar("SELECT COALESCE(MAX(NUMBER)+1,0) FROM COLLECTION_SERIES WHERE COLLECTION_ID=?")
+                    .bind(&id)
+                    .fetch_one(&mut *tx)
+                    .await?;
+            let inserted =
+                sqlx::query("INSERT OR IGNORE INTO COLLECTION_SERIES (COLLECTION_ID,SERIES_ID,NUMBER) VALUES (?,?,?)")
+                    .bind(&id)
+                    .bind(series_id)
+                    .bind(next)
+                    .execute(&mut *tx)
+                    .await?
+                    .rows_affected();
+            if inserted != 0 {
+                sqlx::query(
+                    "UPDATE COLLECTION SET SERIES_COUNT=SERIES_COUNT+1,LAST_MODIFIED_DATE=CURRENT_TIMESTAMP WHERE ID=?",
+                )
+                .bind(&id)
+                .execute(&mut *tx)
+                .await?;
+            }
+        }
+        for (name, requested) in read_lists {
+            let name = name.trim();
+            if name.is_empty() {
+                continue;
+            }
+            let rows = sqlx::query("SELECT ID,NAME FROM READLIST").fetch_all(&mut *tx).await?;
+            let id = rows
+                .iter()
+                .find(|row| normalized_name(row.get::<String, _>("NAME").as_str()) == normalized_name(name))
+                .map(|row| row.get::<String, _>("ID"));
+            let id = match id {
+                Some(id) => id,
+                None => {
+                    let id = komga_core::new_id();
+                    sqlx::query("INSERT INTO READLIST (ID,NAME,SUMMARY,ORDERED,BOOK_COUNT) VALUES (?,?,'',1,0)")
+                        .bind(&id)
+                        .bind(name)
+                        .execute(&mut *tx)
+                        .await?;
+                    id
+                }
+            };
+            let exists: bool =
+                sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM READLIST_BOOK WHERE READLIST_ID=? AND BOOK_ID=?)")
+                    .bind(&id)
+                    .bind(book_id)
+                    .fetch_one(&mut *tx)
+                    .await?;
+            if exists {
+                continue;
+            }
+            let next: i32 =
+                sqlx::query_scalar("SELECT COALESCE(MAX(NUMBER)+1,0) FROM READLIST_BOOK WHERE READLIST_ID=?")
+                    .bind(&id)
+                    .fetch_one(&mut *tx)
+                    .await?;
+            let number = if let Some(number) = requested {
+                let occupied: bool =
+                    sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM READLIST_BOOK WHERE READLIST_ID=? AND NUMBER=?)")
+                        .bind(&id)
+                        .bind(number)
+                        .fetch_one(&mut *tx)
+                        .await?;
+                if occupied { next } else { *number }
+            } else {
+                next
+            };
+            sqlx::query("INSERT INTO READLIST_BOOK (READLIST_ID,BOOK_ID,NUMBER) VALUES (?,?,?)")
+                .bind(&id)
+                .bind(book_id)
+                .bind(number)
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query("UPDATE READLIST SET BOOK_COUNT=BOOK_COUNT+1,LAST_MODIFIED_DATE=CURRENT_TIMESTAMP WHERE ID=?")
+                .bind(&id)
+                .execute(&mut *tx)
+                .await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
     /// Matches a parsed ComicRack request against all persisted series and books.
     pub async fn match_read_list_request(&self, request: ReadListRequest) -> Result<ReadListRequestMatchDto> {
         let names = sqlx::query_scalar::<_, String>("SELECT NAME FROM READLIST")

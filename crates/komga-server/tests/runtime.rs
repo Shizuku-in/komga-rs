@@ -1,9 +1,122 @@
-use std::{fs, path::PathBuf, time::Duration};
+use std::{fs, fs::File, io::Write, path::PathBuf, time::Duration};
 
-use komga_core::{BookMetadataPatch, Library, MetadataUpdate, ScanInterval, scan_library_files};
+use komga_core::{BookMetadataPatch, Library, MetadataUpdate, PageRequest, ScanInterval, User, scan_library_files};
 use komga_server::AppState;
 use komga_storage::{Storage, TaskRecord, TaskStorage};
 use url::Url;
+use zip::{ZipArchive, ZipWriter, write::SimpleFileOptions};
+
+#[tokio::test]
+async fn scan_imports_comic_info_collections_and_read_lists_idempotently() {
+    let storage = Storage::connect_memory().await.unwrap();
+    let tasks = TaskStorage::connect_memory().await.unwrap();
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path().join("library");
+    fs::create_dir_all(root.join("Series")).unwrap();
+    let fixture =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../komga/komga/src/test/resources/archives/zip.zip");
+    let mut source = ZipArchive::new(File::open(fixture).unwrap()).unwrap();
+    let mut image = Vec::new();
+    std::io::Read::read_to_end(&mut source.by_name("komga.png").unwrap(), &mut image).unwrap();
+    let file = File::create(root.join("Series/Volume.cbz")).unwrap();
+    let mut archive = ZipWriter::new(file);
+    archive.start_file("page.png", SimpleFileOptions::default()).unwrap();
+    archive.write_all(&image).unwrap();
+    archive
+        .start_file("ComicInfo.xml", SimpleFileOptions::default())
+        .unwrap();
+    archive
+        .write_all(b"<ComicInfo><SeriesGroup>Universe, Event</SeriesGroup><AlternateSeries>Run</AlternateSeries><AlternateNumber>4</AlternateNumber><StoryArc>Arc One, Arc Two</StoryArc><StoryArcNumber>1,2</StoryArcNumber></ComicInfo>")
+        .unwrap();
+    archive.finish().unwrap();
+
+    let mut library = Library::new("ComicInfo".into(), Url::from_directory_path(&root).unwrap());
+    library.scan_interval = ScanInterval::Disabled;
+    storage.create_library(&library).await.unwrap();
+    tasks
+        .save(&TaskRecord::scan_library(&library.id, false, 8))
+        .await
+        .unwrap();
+    let state = AppState::new(storage.clone(), tasks.clone()).await.unwrap();
+    let runtime = state.start_runtime().await.unwrap();
+    tokio::time::timeout(Duration::from_secs(15), async {
+        while !tasks.list().await.unwrap().is_empty() {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("ComicInfo import did not complete");
+
+    let user = User::new("reader@example.org".into(), "hash".into());
+    let collections = storage
+        .list_collections(None, None, &PageRequest::default(), &user)
+        .await
+        .unwrap();
+    assert_eq!(
+        collections
+            .content
+            .iter()
+            .map(|value| value.name.as_str())
+            .collect::<Vec<_>>(),
+        ["Event", "Universe"]
+    );
+    assert!(
+        collections
+            .content
+            .iter()
+            .all(|value| !value.ordered && value.series_ids.len() == 1)
+    );
+    let read_lists = storage
+        .list_read_lists(None, &PageRequest::default(), &user)
+        .await
+        .unwrap();
+    assert_eq!(
+        read_lists
+            .content
+            .iter()
+            .map(|value| value.name.as_str())
+            .collect::<Vec<_>>(),
+        ["Arc One", "Arc Two", "Run"]
+    );
+    assert!(
+        read_lists
+            .content
+            .iter()
+            .all(|value| value.ordered && value.book_ids.len() == 1)
+    );
+
+    runtime.shutdown().await;
+    tasks
+        .save(&TaskRecord::scan_library(&library.id, true, 8))
+        .await
+        .unwrap();
+    let state = AppState::new(storage.clone(), tasks.clone()).await.unwrap();
+    let runtime = state.start_runtime().await.unwrap();
+    tokio::time::timeout(Duration::from_secs(15), async {
+        while !tasks.list().await.unwrap().is_empty() {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("deep ComicInfo backfill did not complete");
+    assert_eq!(
+        storage
+            .list_collections(None, None, &PageRequest::default(), &user)
+            .await
+            .unwrap()
+            .total_elements,
+        2
+    );
+    assert_eq!(
+        storage
+            .list_read_lists(None, &PageRequest::default(), &user)
+            .await
+            .unwrap()
+            .total_elements,
+        3
+    );
+    runtime.shutdown().await;
+}
 
 #[tokio::test]
 async fn startup_scheduler_analyzes_supported_media_generates_thumbnails_and_preserves_unported_tasks() {

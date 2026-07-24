@@ -90,6 +90,30 @@ impl TaskRecord {
         }
     }
 
+    /// Builds a Kotlin-compatible book metadata refresh task.
+    pub fn refresh_book_metadata(book_id: &str, series_id: &str, priority: i32) -> Self {
+        let id = format!("REFRESH_BOOK_METADATA_{book_id}");
+        Self {
+            id: id.clone(),
+            priority,
+            group_id: Some(series_id.to_owned()),
+            class: "org.gotson.komga.application.tasks.Task$RefreshBookMetadata".into(),
+            simple_type: "RefreshBookMetadata".into(),
+            payload: serde_json::json!({
+                "bookId": book_id,
+                "capabilities": [
+                    "TITLE", "SUMMARY", "NUMBER", "NUMBER_SORT", "RELEASE_DATE",
+                    "AUTHORS", "TAGS", "ISBN", "READ_LISTS", "THUMBNAILS", "LINKS"
+                ],
+                "priority": priority,
+                "groupId": series_id,
+                "uniqueId": id,
+            })
+            .to_string(),
+            owner: None,
+        }
+    }
+
     /// Builds a Kotlin-compatible generated book-thumbnail task.
     pub fn generate_book_thumbnail(book_id: &str, priority: i32) -> Self {
         let id = format!("GENERATE_BOOK_THUMBNAIL_{book_id}");

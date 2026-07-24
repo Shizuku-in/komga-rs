@@ -115,6 +115,16 @@ impl Storage {
         rows.into_iter().map(BookRow::into_domain).collect()
     }
 
+    /// Lists active books with ready media in a library.
+    pub async fn list_ready_books_by_library_id(&self, library_id: &str) -> Result<Vec<(String, String)>> {
+        Ok(sqlx::query_as(
+            "SELECT B.ID, B.SERIES_ID FROM BOOK B JOIN MEDIA M ON M.BOOK_ID=B.ID WHERE B.LIBRARY_ID=? AND B.DELETED_DATE IS NULL AND M.STATUS='READY' ORDER BY B.SERIES_ID,B.NUMBER",
+        )
+        .bind(library_id)
+        .fetch_all(&self.pool)
+        .await?)
+    }
+
     /// Applies one filesystem snapshot atomically to Kotlin-compatible content tables.
     ///
     /// `deep` forces book reconciliation even when a series directory timestamp
