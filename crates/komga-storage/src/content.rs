@@ -73,6 +73,20 @@ const SELECT_BOOK: &str = r#"
       FROM BOOK"#;
 
 impl Storage {
+    /// Finds one persisted book by identifier, including soft-deleted rows.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the row contains an invalid URL or cannot be queried.
+    pub async fn find_book_by_id(&self, book_id: &str) -> Result<Option<Book>> {
+        sqlx::query_as::<_, BookRow>(&format!("{SELECT_BOOK} WHERE ID = ?"))
+            .bind(book_id)
+            .fetch_optional(&self.pool)
+            .await?
+            .map(BookRow::into_domain)
+            .transpose()
+    }
+
     /// Lists every series in a library, including soft-deleted rows.
     ///
     /// # Errors

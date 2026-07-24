@@ -5,11 +5,13 @@ use axum::{
 };
 use base64::{Engine, engine::general_purpose::STANDARD};
 use http_body_util::BodyExt;
-use komga_core::{Library, scan_library_files};
+use komga_core::{
+    Library, ThumbnailBook, analyze_book, generate_thumbnail, image_dimension, new_id, scan_library_files,
+};
 use komga_server::{AppState, REMEMBER_ME_COOKIE, SESSION_COOKIE, SESSION_HEADER, build_app};
 use komga_storage::{Storage, TaskStorage};
 use serde_json::Value;
-use std::{fs, time::Duration};
+use std::{fs, path::PathBuf, time::Duration};
 use tower::ServiceExt;
 use url::Url;
 
@@ -29,6 +31,10 @@ fn basic(email: &str, password: &str) -> String {
 async fn body_json(response: Response<Body>) -> Value {
     let bytes = response.into_body().collect().await.unwrap().to_bytes();
     serde_json::from_slice(&bytes).unwrap()
+}
+
+async fn body_bytes(response: Response<Body>) -> Vec<u8> {
+    response.into_body().collect().await.unwrap().to_bytes().to_vec()
 }
 
 async fn claim(app: &Router) -> Response<Body> {
@@ -673,6 +679,185 @@ async fn content_queries_page_filter_restrict_and_navigate_books() {
         .await
         .unwrap();
     assert_eq!(unsupported.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn cbz_pages_conversion_thumbnail_cache_and_manual_analysis_match_contract() {
+    let storage = Storage::connect_memory().await.unwrap();
+    let tasks = TaskStorage::connect_memory().await.unwrap();
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path().join("library");
+    fs::create_dir_all(root.join("Series")).unwrap();
+    let fixture =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../komga/komga/src/test/resources/archives/zip.zip");
+    fs::copy(fixture, root.join("Series/Volume 1.cbz")).unwrap();
+    let library = Library::new("Library".into(), Url::from_directory_path(&root).unwrap());
+    storage.create_library(&library).await.unwrap();
+    let scan = scan_library_files(&library, || false).unwrap();
+    storage.apply_library_scan(&library.id, &scan, false).await.unwrap();
+    let series = storage.list_series_by_library_id(&library.id).await.unwrap();
+    let book = storage.list_books_by_series_id(&series[0].id).await.unwrap().remove(0);
+    let media = analyze_book(&book, true, || false).unwrap();
+    storage.replace_media_analysis(&media).await.unwrap();
+    let generated = generate_thumbnail(&book, &media, 300).unwrap();
+    let thumbnail = ThumbnailBook {
+        id: new_id(),
+        dimension: image_dimension(&generated.bytes).unwrap(),
+        file_size: i64::try_from(generated.bytes.len()).unwrap(),
+        thumbnail: Some(generated.bytes),
+        url: None,
+        selected: false,
+        thumbnail_type: "GENERATED".into(),
+        media_type: generated.media_type,
+        book_id: book.id.clone(),
+    };
+    storage.replace_generated_thumbnail(&thumbnail).await.unwrap();
+
+    let app = build_app(AppState::new(storage, tasks.clone()).await.unwrap());
+    let unauthorized = app
+        .clone()
+        .oneshot(
+            Request::get(format!("/api/v1/books/{}/pages", book.id))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(claim(&app).await.status(), StatusCode::OK);
+    let admin = basic("admin@example.org", "password");
+
+    let pages = app
+        .clone()
+        .oneshot(
+            Request::get(format!("/api/v1/books/{}/pages", book.id))
+                .header(header::AUTHORIZATION, &admin)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(pages.status(), StatusCode::OK);
+    let pages = body_json(pages).await;
+    assert_eq!(pages[0]["number"], 1);
+    assert_eq!(pages[0]["fileName"], "komga.png");
+    assert_eq!(pages[0]["mediaType"], "image/png");
+    assert_eq!(pages[0]["width"], 48);
+    assert_eq!(pages[0]["height"], 48);
+    assert_eq!(pages[0]["sizeBytes"], 3108);
+
+    let page = app
+        .clone()
+        .oneshot(
+            Request::get(format!("/api/v1/books/{}/pages/1", book.id))
+                .header(header::AUTHORIZATION, &admin)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(page.status(), StatusCode::OK);
+    assert_eq!(page.headers()[header::CONTENT_TYPE], "image/png");
+    assert!(page.headers().contains_key(header::CONTENT_DISPOSITION));
+    let last_modified = page.headers()[header::LAST_MODIFIED].to_str().unwrap().to_owned();
+    assert!(body_bytes(page).await.starts_with(b"\x89PNG"));
+
+    let cached = app
+        .clone()
+        .oneshot(
+            Request::get(format!("/api/v1/books/{}/pages/1", book.id))
+                .header(header::AUTHORIZATION, &admin)
+                .header(header::IF_MODIFIED_SINCE, &last_modified)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(cached.status(), StatusCode::NOT_MODIFIED);
+
+    let converted = app
+        .clone()
+        .oneshot(
+            Request::get(format!(
+                "/api/v1/books/{}/pages/0?zero_based=true&convert=jpeg",
+                book.id
+            ))
+            .header(header::AUTHORIZATION, &admin)
+            .body(Body::empty())
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(converted.status(), StatusCode::OK);
+    assert_eq!(converted.headers()[header::CONTENT_TYPE], "image/jpeg");
+    assert!(body_bytes(converted).await.starts_with(&[0xff, 0xd8]));
+
+    let page_thumbnail = app
+        .clone()
+        .oneshot(
+            Request::get(format!("/api/v1/books/{}/pages/1/thumbnail", book.id))
+                .header(header::AUTHORIZATION, &admin)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(page_thumbnail.status(), StatusCode::OK);
+    assert_eq!(page_thumbnail.headers()[header::CONTENT_TYPE], "image/jpeg");
+    assert!(body_bytes(page_thumbnail).await.starts_with(&[0xff, 0xd8]));
+
+    let book_thumbnail = app
+        .clone()
+        .oneshot(
+            Request::get(format!("/api/v1/books/{}/thumbnail", book.id))
+                .header(header::AUTHORIZATION, &admin)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(book_thumbnail.status(), StatusCode::OK);
+    assert_eq!(book_thumbnail.headers()[header::CONTENT_TYPE], "image/jpeg");
+
+    let invalid_page = app
+        .clone()
+        .oneshot(
+            Request::get(format!("/api/v1/books/{}/pages/0", book.id))
+                .header(header::AUTHORIZATION, &admin)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(invalid_page.status(), StatusCode::BAD_REQUEST);
+
+    let raw = app
+        .clone()
+        .oneshot(
+            Request::get(format!("/api/v1/books/{}/pages/1/raw", book.id))
+                .header(header::AUTHORIZATION, &admin)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(raw.status(), StatusCode::BAD_REQUEST);
+
+    let analyze = app
+        .oneshot(
+            Request::post(format!("/api/v1/books/{}/analyze", book.id))
+                .header(header::AUTHORIZATION, admin)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(analyze.status(), StatusCode::ACCEPTED);
+    let queued = tasks.list().await.unwrap();
+    assert_eq!(queued.len(), 1);
+    assert_eq!(queued[0].simple_type, "AnalyzeBook");
+    assert_eq!(queued[0].group_id.as_deref(), Some(book.series_id.as_str()));
+    assert_eq!(queued[0].priority, 6);
 }
 
 #[tokio::test]

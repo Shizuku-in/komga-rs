@@ -69,6 +69,46 @@ impl TaskRecord {
             owner: None,
         }
     }
+
+    /// Builds a Kotlin-compatible book analysis task.
+    pub fn analyze_book(book_id: &str, series_id: &str, priority: i32) -> Self {
+        let id = format!("ANALYZE_BOOK_{book_id}");
+        Self {
+            id: id.clone(),
+            priority,
+            group_id: Some(series_id.to_owned()),
+            class: "org.gotson.komga.application.tasks.Task$AnalyzeBook".into(),
+            simple_type: "AnalyzeBook".into(),
+            payload: serde_json::json!({
+                "bookId": book_id,
+                "priority": priority,
+                "groupId": series_id,
+                "uniqueId": id,
+            })
+            .to_string(),
+            owner: None,
+        }
+    }
+
+    /// Builds a Kotlin-compatible generated book-thumbnail task.
+    pub fn generate_book_thumbnail(book_id: &str, priority: i32) -> Self {
+        let id = format!("GENERATE_BOOK_THUMBNAIL_{book_id}");
+        Self {
+            id: id.clone(),
+            priority,
+            group_id: None,
+            class: "org.gotson.komga.application.tasks.Task$GenerateBookThumbnail".into(),
+            simple_type: "GenerateBookThumbnail".into(),
+            payload: serde_json::json!({
+                "bookId": book_id,
+                "priority": priority,
+                "groupId": null,
+                "uniqueId": id,
+            })
+            .to_string(),
+            owner: None,
+        }
+    }
 }
 
 /// Cloneable handle to Komga's separate persistent task queue.
@@ -183,6 +223,41 @@ impl TaskStorage {
     /// Returns a database error when claiming fails.
     pub async fn take_first_of_type(&self, owner: &str, simple_type: &str) -> Result<Option<TaskRecord>> {
         self.take_first_matching(owner, Some(simple_type)).await
+    }
+
+    /// Atomically claims the highest-priority task among supported simple types.
+    ///
+    /// # Errors
+    ///
+    /// Returns a database error when claiming fails.
+    pub async fn take_first_of_types(&self, owner: &str, simple_types: &[&str]) -> Result<Option<TaskRecord>> {
+        if simple_types.is_empty() {
+            return Ok(None);
+        }
+        let placeholders = std::iter::repeat_n("?", simple_types.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            r#"UPDATE TASK SET OWNER = ?
+                 WHERE ID = (
+                    SELECT ID FROM TASK
+                     WHERE OWNER IS NULL
+                       AND SIMPLE_TYPE IN ({placeholders})
+                       AND (GROUP_ID IS NULL OR GROUP_ID NOT IN
+                           (SELECT GROUP_ID FROM TASK WHERE OWNER IS NOT NULL AND GROUP_ID IS NOT NULL))
+                     ORDER BY PRIORITY DESC, LAST_MODIFIED_DATE
+                     LIMIT 1
+                 )
+                   AND OWNER IS NULL
+             RETURNING ID AS id, PRIORITY AS priority, GROUP_ID AS group_id,
+                       CLASS AS class, SIMPLE_TYPE AS simple_type, PAYLOAD AS payload,
+                       OWNER AS owner"#,
+        );
+        let mut query = sqlx::query_as::<_, TaskRecord>(&sql).bind(owner);
+        for simple_type in simple_types {
+            query = query.bind(simple_type);
+        }
+        Ok(query.fetch_optional(&self.pool).await?)
     }
 
     async fn take_first_matching(&self, owner: &str, simple_type: Option<&str>) -> Result<Option<TaskRecord>> {

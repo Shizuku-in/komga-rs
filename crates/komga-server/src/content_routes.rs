@@ -97,7 +97,7 @@ async fn get_sibling(state: &AppState, user: &User, book_id: &str, next: bool) -
     Ok(sibling)
 }
 
-async fn load_visible_book(state: &AppState, user: &User, book_id: &str) -> Result<BookDto, ApiError> {
+pub(crate) async fn load_visible_book(state: &AppState, user: &User, book_id: &str) -> Result<BookDto, ApiError> {
     let book = state
         .storage
         .find_book_dto_by_id(book_id, &user.id)

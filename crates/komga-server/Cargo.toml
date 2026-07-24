@@ -17,6 +17,7 @@ dashmap.workspace = true
 futures-core.workspace = true
 hex.workspace = true
 http.workspace = true
+httpdate.workspace = true
 komga-core = { path = "../komga-core" }
 komga-storage = { path = "../komga-storage" }
 rand.workspace = true

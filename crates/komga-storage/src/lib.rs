@@ -10,6 +10,7 @@
 mod content;
 mod content_queries;
 mod library;
+mod media;
 mod schema;
 mod settings;
 mod tasks;
@@ -914,6 +915,35 @@ mod tests {
         assert!(tasks.release(&scan.id, "worker").await.unwrap());
         assert!(tasks.delete(&scan.id).await.unwrap());
         assert_eq!(tasks.list().await.unwrap()[0].simple_type, "EmptyTrash");
+    }
+
+    #[tokio::test]
+    async fn supported_task_claims_choose_global_priority_and_keep_kotlin_payloads() {
+        let tasks = TaskStorage::connect_memory().await.unwrap();
+        tasks.save(&TaskRecord::empty_trash("library", 8)).await.unwrap();
+        tasks
+            .save(&TaskRecord::scan_library("library", false, 4))
+            .await
+            .unwrap();
+        tasks
+            .save(&TaskRecord::analyze_book("book", "series", 6))
+            .await
+            .unwrap();
+        tasks
+            .save(&TaskRecord::generate_book_thumbnail("book", 7))
+            .await
+            .unwrap();
+
+        let claimed = tasks
+            .take_first_of_types("worker", &["ScanLibrary", "AnalyzeBook", "GenerateBookThumbnail"])
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(claimed.simple_type, "GenerateBookThumbnail");
+        assert_eq!(claimed.priority, 7);
+        let payload: serde_json::Value = serde_json::from_str(&claimed.payload).unwrap();
+        assert_eq!(payload["bookId"], "book");
+        assert_eq!(tasks.count_by_simple_type().await.unwrap()["EmptyTrash"], 1);
     }
 
     #[tokio::test]

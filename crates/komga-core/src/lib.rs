@@ -7,6 +7,7 @@
 #![warn(missing_docs)]
 
 mod content;
+mod media;
 mod scanner;
 
 use std::collections::BTreeSet;
@@ -20,6 +21,10 @@ pub use content::{
     BooleanOperator, ContentPage, EqualityOperator, MediaDto, PageRequest, ReadProgressDto, ReadStatus,
     ReadStatusOperator, SeriesCondition, SeriesDto, SeriesMetadataDto, SeriesSearch, SortDirection, SortOrder,
     StringOperator, WebLinkDto,
+};
+pub use media::{
+    BookPage, Dimension, ImageOutput, Media, MediaAnalysisError, MediaFile, MediaOperationError, MediaStatus, PageDto,
+    ThumbnailBook, TypedBytes, analyze_book, convert_image, extract_page, generate_thumbnail, image_dimension,
 };
 pub use scanner::{Book, ScanError, ScanResult, ScannedSeries, Series, scan_library_files};
 

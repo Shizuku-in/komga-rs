@@ -198,4 +198,25 @@ impl Storage {
             .filter(|value| *value > 0)
             .unwrap_or(1))
     }
+
+    /// Reads the longest edge used for generated book thumbnails.
+    ///
+    /// Missing or invalid values use Kotlin's `DEFAULT` size of 300 pixels.
+    ///
+    /// # Errors
+    ///
+    /// Returns a database error when the setting cannot be queried.
+    pub async fn thumbnail_max_edge(&self) -> Result<u32> {
+        let value =
+            sqlx::query_scalar::<_, Option<String>>("SELECT VALUE FROM SERVER_SETTINGS WHERE KEY = 'THUMBNAIL_SIZE'")
+                .fetch_optional(&self.pool)
+                .await?
+                .flatten();
+        Ok(match value.as_deref() {
+            Some("MEDIUM") => 600,
+            Some("LARGE") => 900,
+            Some("XLARGE") => 1200,
+            _ => 300,
+        })
+    }
 }

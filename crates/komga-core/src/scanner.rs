@@ -54,7 +54,7 @@ pub struct Book {
     pub file_last_modified: NaiveDateTime,
     /// File length in bytes.
     pub file_size: i64,
-    /// Source-file hash, empty until media analysis is implemented.
+    /// Source-file hash, empty until file hashing is implemented.
     pub file_hash: String,
     /// KOReader-compatible hash, empty until hashing is implemented.
     pub file_hash_koreader: String,

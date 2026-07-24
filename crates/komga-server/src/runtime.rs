@@ -2,7 +2,10 @@
 
 use std::{collections::HashMap, time::Duration};
 
-use komga_core::{ScanError, ScanInterval, scan_library_files};
+use komga_core::{
+    MediaAnalysisError, MediaOperationError, MediaStatus, ScanError, ScanInterval, ThumbnailBook, analyze_book,
+    generate_thumbnail, image_dimension, new_id, scan_library_files,
+};
 use komga_storage::{StorageError, TaskRecord};
 use serde::Deserialize;
 use tokio::{task::JoinHandle, time::Instant};
@@ -90,11 +93,20 @@ struct ScanLibraryPayload {
     scan_deep: bool,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BookTaskPayload {
+    book_id: String,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TaskOutcome {
     Completed,
     Cancelled,
+    Retry,
 }
+
+const SUPPORTED_TASK_TYPES: [&str; 3] = ["ScanLibrary", "AnalyzeBook", "GenerateBookThumbnail"];
 
 async fn worker_loop(state: AppState, index: usize) {
     let owner = format!("komga-rs-{}-{index}", std::process::id());
@@ -104,15 +116,21 @@ async fn worker_loop(state: AppState, index: usize) {
         if state.shutdown.is_cancelled() {
             break;
         }
-        match state.tasks.take_first_of_type(&owner, "ScanLibrary").await {
+        match state.tasks.take_first_of_types(&owner, &SUPPORTED_TASK_TYPES).await {
             Ok(Some(task)) => {
-                let outcome = process_scan_task(&state, &task).await;
+                let outcome = process_task(&state, &task).await;
                 let result = match outcome {
                     TaskOutcome::Completed => state.tasks.delete(&task.id).await,
-                    TaskOutcome::Cancelled => state.tasks.release(&task.id, &owner).await,
+                    TaskOutcome::Cancelled | TaskOutcome::Retry => state.tasks.release(&task.id, &owner).await,
                 };
                 if let Err(error) = result {
                     tracing::error!(%error, task_id = %task.id, "could not finalize task ownership");
+                }
+                if outcome == TaskOutcome::Retry {
+                    tokio::select! {
+                        () = state.shutdown.cancelled() => break,
+                        () = tokio::time::sleep(Duration::from_secs(1)) => {}
+                    }
                 }
             }
             Ok(None) => {
@@ -132,6 +150,15 @@ async fn worker_loop(state: AppState, index: usize) {
     }
 }
 
+async fn process_task(state: &AppState, task: &TaskRecord) -> TaskOutcome {
+    match task.simple_type.as_str() {
+        "ScanLibrary" => process_scan_task(state, task).await,
+        "AnalyzeBook" => process_analyze_book_task(state, task).await,
+        "GenerateBookThumbnail" => process_generate_thumbnail_task(state, task).await,
+        _ => TaskOutcome::Completed,
+    }
+}
+
 async fn process_scan_task(state: &AppState, task: &TaskRecord) -> TaskOutcome {
     let payload = match serde_json::from_str::<ScanLibraryPayload>(&task.payload) {
         Ok(payload) => payload,
@@ -148,7 +175,7 @@ async fn process_scan_task(state: &AppState, task: &TaskRecord) -> TaskOutcome {
         }
         Err(error) => {
             tracing::error!(%error, library_id = %payload.library_id, "could not load library for scan");
-            return TaskOutcome::Completed;
+            return TaskOutcome::Retry;
         }
     };
     let cancellation = state.shutdown.clone();
@@ -165,7 +192,7 @@ async fn process_scan_task(state: &AppState, task: &TaskRecord) -> TaskOutcome {
         }
         Err(error) => {
             tracing::error!(%error, library_id = %payload.library_id, "filesystem scanner panicked");
-            return TaskOutcome::Completed;
+            return TaskOutcome::Retry;
         }
     };
     if state.shutdown.is_cancelled() {
@@ -181,7 +208,162 @@ async fn process_scan_task(state: &AppState, task: &TaskRecord) -> TaskOutcome {
         }
         Err(error) => {
             tracing::error!(%error, library_id = %payload.library_id, "could not persist library scan");
+            return TaskOutcome::Retry;
         }
+    }
+    let targets = match state.storage.list_book_analysis_targets(&payload.library_id).await {
+        Ok(targets) => targets,
+        Err(error) => {
+            tracing::error!(%error, library_id = %payload.library_id, "could not list books requiring analysis");
+            return TaskOutcome::Retry;
+        }
+    };
+    for (book_id, series_id) in targets {
+        if let Err(error) = state
+            .enqueue_task(&TaskRecord::analyze_book(&book_id, &series_id, task.priority))
+            .await
+        {
+            tracing::error!(%error, %book_id, "could not enqueue book analysis");
+            return TaskOutcome::Retry;
+        }
+    }
+    TaskOutcome::Completed
+}
+
+async fn process_analyze_book_task(state: &AppState, task: &TaskRecord) -> TaskOutcome {
+    let payload = match serde_json::from_str::<BookTaskPayload>(&task.payload) {
+        Ok(payload) => payload,
+        Err(error) => {
+            tracing::error!(%error, task_id = %task.id, "invalid AnalyzeBook payload");
+            return TaskOutcome::Completed;
+        }
+    };
+    let book = match state.storage.find_book_by_id(&payload.book_id).await {
+        Ok(Some(book)) if book.deleted_date.is_none() => book,
+        Ok(_) => {
+            tracing::warn!(book_id = %payload.book_id, "analysis task references a missing book");
+            return TaskOutcome::Completed;
+        }
+        Err(error) => {
+            tracing::error!(%error, book_id = %payload.book_id, "could not load book for analysis");
+            return TaskOutcome::Retry;
+        }
+    };
+    let library = match state.storage.find_library_by_id(&book.library_id).await {
+        Ok(Some(library)) => library,
+        Ok(None) => return TaskOutcome::Completed,
+        Err(error) => {
+            tracing::error!(%error, library_id = %book.library_id, "could not load analysis settings");
+            return TaskOutcome::Retry;
+        }
+    };
+    let cancellation = state.shutdown.clone();
+    let analyzed_book = book.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        analyze_book(&analyzed_book, library.analyze_dimensions, || {
+            cancellation.is_cancelled()
+        })
+    })
+    .await;
+    let media = match result {
+        Ok(Ok(media)) => media,
+        Ok(Err(MediaAnalysisError::Cancelled)) => return TaskOutcome::Cancelled,
+        Err(error) => {
+            tracing::error!(%error, book_id = %book.id, "media analyzer panicked");
+            return TaskOutcome::Retry;
+        }
+    };
+    if state.shutdown.is_cancelled() {
+        return TaskOutcome::Cancelled;
+    }
+    if let Err(error) = state.storage.replace_media_analysis(&media).await {
+        tracing::error!(%error, book_id = %book.id, "could not persist media analysis");
+        return TaskOutcome::Retry;
+    }
+    if media.status == MediaStatus::Ready
+        && let Err(error) = state
+            .enqueue_task(&TaskRecord::generate_book_thumbnail(
+                &book.id,
+                task.priority.saturating_add(1),
+            ))
+            .await
+    {
+        tracing::error!(%error, book_id = %book.id, "could not enqueue generated thumbnail");
+        return TaskOutcome::Retry;
+    }
+    tracing::info!(book_id = %book.id, status = media.status.as_str(), pages = media.page_count, "book analysis completed");
+    TaskOutcome::Completed
+}
+
+async fn process_generate_thumbnail_task(state: &AppState, task: &TaskRecord) -> TaskOutcome {
+    let payload = match serde_json::from_str::<BookTaskPayload>(&task.payload) {
+        Ok(payload) => payload,
+        Err(error) => {
+            tracing::error!(%error, task_id = %task.id, "invalid GenerateBookThumbnail payload");
+            return TaskOutcome::Completed;
+        }
+    };
+    let book = match state.storage.find_book_by_id(&payload.book_id).await {
+        Ok(Some(book)) if book.deleted_date.is_none() => book,
+        Ok(_) => return TaskOutcome::Completed,
+        Err(error) => {
+            tracing::error!(%error, book_id = %payload.book_id, "could not load book for thumbnail generation");
+            return TaskOutcome::Retry;
+        }
+    };
+    let media = match state.storage.find_media_by_book_id(&book.id).await {
+        Ok(Some(media)) => media,
+        Ok(None) => return TaskOutcome::Completed,
+        Err(error) => {
+            tracing::error!(%error, book_id = %book.id, "could not load media for thumbnail generation");
+            return TaskOutcome::Retry;
+        }
+    };
+    let max_edge = match state.storage.thumbnail_max_edge().await {
+        Ok(max_edge) => max_edge,
+        Err(error) => {
+            tracing::error!(%error, "could not read thumbnail size");
+            return TaskOutcome::Retry;
+        }
+    };
+    if state.shutdown.is_cancelled() {
+        return TaskOutcome::Cancelled;
+    }
+    let thumbnail_book = book.clone();
+    let generated = tokio::task::spawn_blocking(move || generate_thumbnail(&thumbnail_book, &media, max_edge)).await;
+    let generated = match generated {
+        Ok(Ok(generated)) => generated,
+        Ok(Err(MediaOperationError::NotReady | MediaOperationError::PageOutOfBounds)) => return TaskOutcome::Completed,
+        Ok(Err(error)) => {
+            tracing::error!(%error, book_id = %book.id, "could not generate book thumbnail");
+            return TaskOutcome::Completed;
+        }
+        Err(error) => {
+            tracing::error!(%error, book_id = %book.id, "thumbnail generator panicked");
+            return TaskOutcome::Retry;
+        }
+    };
+    if state.shutdown.is_cancelled() {
+        return TaskOutcome::Cancelled;
+    }
+    let Some(dimension) = image_dimension(&generated.bytes) else {
+        tracing::error!(book_id = %book.id, "generated thumbnail has no readable dimensions");
+        return TaskOutcome::Completed;
+    };
+    let thumbnail = ThumbnailBook {
+        id: new_id(),
+        file_size: i64::try_from(generated.bytes.len()).unwrap_or(i64::MAX),
+        thumbnail: Some(generated.bytes),
+        url: None,
+        selected: false,
+        thumbnail_type: "GENERATED".to_owned(),
+        media_type: generated.media_type,
+        dimension,
+        book_id: book.id.clone(),
+    };
+    if let Err(error) = state.storage.replace_generated_thumbnail(&thumbnail).await {
+        tracing::error!(%error, book_id = %book.id, "could not persist generated thumbnail");
+        return TaskOutcome::Retry;
     }
     TaskOutcome::Completed
 }

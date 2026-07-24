@@ -14,6 +14,7 @@ mod dto;
 mod error;
 mod filesystem_routes;
 mod library_routes;
+mod media_routes;
 mod routes;
 mod runtime;
 mod settings_routes;
@@ -113,6 +114,24 @@ pub fn build_app(state: AppState) -> Router {
         .route("/api/v1/series/{series_id}", get(content_routes::get_series))
         .route("/api/v1/books/list", post(content_routes::list_books))
         .route("/api/v1/books/{book_id}", get(content_routes::get_book))
+        .route("/api/v1/books/{book_id}/analyze", post(media_routes::analyze_book))
+        .route("/api/v1/books/{book_id}/pages", get(media_routes::list_pages))
+        .route(
+            "/api/v1/books/{book_id}/pages/{page_number}",
+            get(media_routes::get_page),
+        )
+        .route(
+            "/api/v1/books/{book_id}/pages/{page_number}/thumbnail",
+            get(media_routes::get_page_thumbnail),
+        )
+        .route(
+            "/api/v1/books/{book_id}/pages/{page_number}/raw",
+            get(media_routes::get_raw_page),
+        )
+        .route(
+            "/api/v1/books/{book_id}/thumbnail",
+            get(media_routes::get_book_thumbnail),
+        )
         .route(
             "/api/v1/books/{book_id}/previous",
             get(content_routes::get_previous_book),
