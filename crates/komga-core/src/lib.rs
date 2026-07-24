@@ -24,7 +24,8 @@ pub use content::{
 };
 pub use media::{
     BookPage, Dimension, ImageOutput, Media, MediaAnalysisError, MediaFile, MediaOperationError, MediaStatus, PageDto,
-    ThumbnailBook, TypedBytes, analyze_book, convert_image, extract_page, generate_thumbnail, image_dimension,
+    ThumbnailBook, TypedBytes, analyze_book, convert_image, extract_page, extract_raw_page, generate_thumbnail,
+    image_dimension, media_page_dtos,
 };
 pub use scanner::{Book, ScanError, ScanResult, ScannedSeries, Series, scan_library_files};
 

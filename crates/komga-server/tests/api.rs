@@ -861,6 +861,125 @@ async fn cbz_pages_conversion_thumbnail_cache_and_manual_analysis_match_contract
 }
 
 #[tokio::test]
+async fn pdf_pages_render_raw_and_negotiate_like_kotlin() {
+    let storage = Storage::connect_memory().await.unwrap();
+    let tasks = TaskStorage::connect_memory().await.unwrap();
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path().join("library");
+    fs::create_dir_all(root.join("Series")).unwrap();
+    let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../komga/komga/src/test/resources/pdf/komga.pdf");
+    fs::copy(fixture, root.join("Series/Volume.pdf")).unwrap();
+    let library = Library::new("Library".into(), Url::from_directory_path(&root).unwrap());
+    storage.create_library(&library).await.unwrap();
+    let scan = scan_library_files(&library, || false).unwrap();
+    storage.apply_library_scan(&library.id, &scan, false).await.unwrap();
+    let series = storage.list_series_by_library_id(&library.id).await.unwrap();
+    let book = storage.list_books_by_series_id(&series[0].id).await.unwrap().remove(0);
+    let media = analyze_book(&book, true, || false).unwrap();
+    storage.replace_media_analysis(&media).await.unwrap();
+
+    let app = build_app(AppState::new(storage, tasks).await.unwrap());
+    assert_eq!(claim(&app).await.status(), StatusCode::OK);
+    let admin = basic("admin@example.org", "password");
+
+    let pages = app
+        .clone()
+        .oneshot(
+            Request::get(format!("/api/v1/books/{}/pages", book.id))
+                .header(header::AUTHORIZATION, &admin)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(pages.status(), StatusCode::OK);
+    let pages = body_json(pages).await;
+    assert_eq!(pages[0]["fileName"], "1");
+    assert_eq!(pages[0]["mediaType"], "image/jpeg");
+    assert_eq!(pages[0]["width"], 3200);
+    assert_eq!(pages[0]["height"], 3200);
+    assert!(pages[0]["sizeBytes"].is_null());
+
+    let rendered = app
+        .clone()
+        .oneshot(
+            Request::get(format!("/api/v1/books/{}/pages/1", book.id))
+                .header(header::AUTHORIZATION, &admin)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(rendered.status(), StatusCode::OK);
+    assert_eq!(rendered.headers()[header::CONTENT_TYPE], "image/jpeg");
+    assert!(body_bytes(rendered).await.starts_with(&[0xff, 0xd8]));
+
+    let negotiated = app
+        .clone()
+        .oneshot(
+            Request::get(format!("/api/v1/books/{}/pages/1?convert=png", book.id))
+                .header(header::AUTHORIZATION, &admin)
+                .header(header::ACCEPT, "application/pdf")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(negotiated.status(), StatusCode::OK);
+    assert_eq!(negotiated.headers()[header::CONTENT_TYPE], "application/pdf");
+    assert!(body_bytes(negotiated).await.starts_with(b"%PDF-"));
+
+    let negotiation_disabled = app
+        .clone()
+        .oneshot(
+            Request::get(format!(
+                "/api/v1/books/{}/pages/1?contentNegotiation=false&convert=png",
+                book.id
+            ))
+            .header(header::AUTHORIZATION, &admin)
+            .header(header::ACCEPT, "application/pdf")
+            .body(Body::empty())
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(negotiation_disabled.status(), StatusCode::OK);
+    assert_eq!(negotiation_disabled.headers()[header::CONTENT_TYPE], "image/png");
+    assert!(body_bytes(negotiation_disabled).await.starts_with(b"\x89PNG"));
+
+    let raw = app
+        .clone()
+        .oneshot(
+            Request::get(format!("/api/v1/books/{}/pages/1/raw", book.id))
+                .header(header::AUTHORIZATION, &admin)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(raw.status(), StatusCode::OK);
+    assert_eq!(raw.headers()[header::CONTENT_TYPE], "application/pdf");
+    assert!(
+        raw.headers()[header::CONTENT_DISPOSITION]
+            .to_str()
+            .unwrap()
+            .ends_with(".pdf\"")
+    );
+    assert!(body_bytes(raw).await.starts_with(b"%PDF-"));
+
+    let invalid_raw = app
+        .oneshot(
+            Request::get(format!("/api/v1/books/{}/pages/2/raw", book.id))
+                .header(header::AUTHORIZATION, admin)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(invalid_raw.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
 async fn task_queue_sse_requires_authentication_and_reports_admin_counts() {
     let storage = Storage::connect_memory().await.unwrap();
     let tasks = TaskStorage::connect_memory().await.unwrap();

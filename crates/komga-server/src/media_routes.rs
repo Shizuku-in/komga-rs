@@ -9,21 +9,45 @@ use axum::{
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
 };
+use headers_accept::Accept;
 use komga_core::{
     Book, ImageOutput, Media, MediaOperationError, MediaStatus, PageDto, TypedBytes, UserRole, convert_image,
-    extract_page,
+    extract_page, extract_raw_page, media_page_dtos,
 };
 use komga_storage::TaskRecord;
+use mediatype::{
+    MediaType,
+    names::{APPLICATION, IMAGE, JPEG, PDF},
+};
 use serde::Deserialize;
 use url::Url;
 
 use crate::{AppState, auth::AuthContext, content_routes::load_visible_book, error::ApiError, routes::require_admin};
 
-#[derive(Debug, Default, Deserialize)]
+static APPLICATION_PDF: MediaType<'static> = MediaType::new(APPLICATION, PDF);
+static IMAGE_JPEG: MediaType<'static> = MediaType::new(IMAGE, JPEG);
+
+#[derive(Debug, Deserialize)]
 pub(crate) struct PageQuery {
     convert: Option<String>,
     #[serde(default)]
     zero_based: bool,
+    #[serde(default = "default_true", rename = "contentNegotiation")]
+    content_negotiation: bool,
+}
+
+impl Default for PageQuery {
+    fn default() -> Self {
+        Self {
+            convert: None,
+            zero_based: false,
+            content_negotiation: true,
+        }
+    }
+}
+
+fn default_true() -> bool {
+    true
 }
 
 pub(crate) async fn analyze_book(
@@ -52,14 +76,7 @@ pub(crate) async fn list_pages(
     load_visible_book(&state, &auth.user, &book_id).await?;
     let media = load_media(&state, &book_id).await?;
     ensure_pages_ready(&media)?;
-    Ok(Json(
-        media
-            .pages
-            .iter()
-            .enumerate()
-            .map(|(index, page)| PageDto::from_page(index, page))
-            .collect(),
-    ))
+    Ok(Json(media_page_dtos(&media)))
 }
 
 pub(crate) async fn get_page(
@@ -82,6 +99,22 @@ pub(crate) async fn get_page(
     } else {
         page_number
     };
+    if query.content_negotiation && media.media_type.as_deref() == Some("application/pdf") && accepts_pdf(&headers) {
+        let raw_book = book.clone();
+        let raw_media = media.clone();
+        let content = tokio::task::spawn_blocking(move || extract_raw_page(&raw_book, &raw_media, page_number))
+            .await
+            .map_err(|error| {
+                tracing::error!(%error, %book_id, "raw page extractor panicked");
+                ApiError::internal("Could not read raw book page")
+            })?
+            .map_err(map_media_error)?;
+        return Ok(content_response(
+            content,
+            &format!("{}-{page_number}", book.name),
+            &media,
+        ));
+    }
     let output = query
         .convert
         .as_deref()
@@ -147,12 +180,33 @@ pub(crate) async fn get_page_thumbnail(
 pub(crate) async fn get_raw_page(
     State(state): State<AppState>,
     Extension(auth): Extension<AuthContext>,
-    Path((book_id, _)): Path<(String, i32)>,
+    Path((book_id, page_number)): Path<(String, i32)>,
+    headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     require_page_streaming(&auth)?;
-    load_visible_book(&state, &auth.user, &book_id).await?;
-    Err(ApiError::bad_request(
-        "Extractor does not support raw extraction of pages",
+    let (book, media) = load_visible_book_media(&state, &auth, &book_id).await?;
+    ensure_pages_ready(&media)?;
+    if is_not_modified(&headers, &media) {
+        return Ok(not_modified_response(&media));
+    }
+    if media.media_type.as_deref() != Some("application/pdf") {
+        return Err(ApiError::bad_request(
+            "Extractor does not support raw extraction of pages",
+        ));
+    }
+    let raw_book = book.clone();
+    let raw_media = media.clone();
+    let content = tokio::task::spawn_blocking(move || extract_raw_page(&raw_book, &raw_media, page_number))
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, %book_id, "raw page extractor panicked");
+            ApiError::internal("Could not read raw book page")
+        })?
+        .map_err(map_media_error)?;
+    Ok(content_response(
+        content,
+        &format!("{}-{page_number}", book.name),
+        &media,
     ))
 }
 
@@ -249,6 +303,14 @@ fn map_media_error(error: MediaOperationError) -> ApiError {
     }
 }
 
+fn accepts_pdf(headers: &HeaderMap) -> bool {
+    headers
+        .get(header::ACCEPT)
+        .and_then(|value| Accept::try_from(value).ok())
+        .and_then(|accept| accept.negotiate([&APPLICATION_PDF, &IMAGE_JPEG]))
+        .is_some_and(|media_type| media_type == &APPLICATION_PDF)
+}
+
 fn content_response(content: TypedBytes, file_stem: &str, media: &Media) -> Response {
     let extension = match content.media_type.as_str() {
         "image/jpeg" => "jpg",
@@ -258,6 +320,7 @@ fn content_response(content: TypedBytes, file_stem: &str, media: &Media) -> Resp
         "image/bmp" => "bmp",
         "image/tiff" => "tiff",
         "image/vnd.microsoft.icon" => "ico",
+        "application/pdf" => "pdf",
         _ => "bin",
     };
     let safe_name = file_stem
@@ -318,4 +381,34 @@ fn media_modified_time(media: &Media) -> Option<SystemTime> {
     u64::try_from(timestamp)
         .ok()
         .map(|seconds| UNIX_EPOCH + Duration::from_secs(seconds))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn headers(accept: &str) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::ACCEPT, HeaderValue::from_str(accept).unwrap());
+        headers
+    }
+
+    #[test]
+    fn pdf_content_negotiation_matches_kotlin_precedence() {
+        for (accept, expected) in [
+            ("application/pdf", true),
+            ("application/pdf, image/*", true),
+            ("image/*", false),
+            ("image/avif", false),
+            ("application/atom+xml", false),
+            ("image/jpeg, application/pdf", false),
+            ("application/pdf;q=0.5, image/jpeg", false),
+            ("image/jpeg;q=0.5, application/pdf;q=0.8", true),
+            ("*/*", true),
+        ] {
+            assert_eq!(accepts_pdf(&headers(accept)), expected, "{accept}");
+        }
+        assert!(!accepts_pdf(&HeaderMap::new()));
+        assert!(!accepts_pdf(&headers("not a media type")));
+    }
 }

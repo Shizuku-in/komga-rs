@@ -6,7 +6,7 @@ An incremental Rust port of the [Komga](https://github.com/gotson/komga) backend
 
 ## Run
 
-Rust 1.88 or newer is required.
+Rust 1.96.1 or newer is required.
 
 ```bash
 cargo run --release -p komga-server
@@ -68,7 +68,7 @@ Do not run the Kotlin and Rust servers against the same SQLite file at the same 
 
 Authentication is compatible with the current Komga contract: HTTP Basic, `KOMGA-SESSION`, `X-Auth-Token`, and SHA-512-backed `X-API-Key`. Existing Spring BCrypt `$2a$` password hashes are accepted.
 
-`ScanLibrary` tasks are executed in the background. They discover configured CBX/PDF/EPUB files and persist Kotlin-compatible Series, Book, Media, and initial metadata rows. Archive contents, pages, metadata providers, and thumbnails are not analyzed yet. `EmptyTrash` and other unported task types remain queued and unmodified. Library deletion is currently limited to empty libraries; deleting a library that still contains series, books, or sidecars returns `409 Conflict`.
+`ScanLibrary` tasks are executed in the background. They discover configured CBX/PDF/EPUB files and persist Kotlin-compatible Series, Book, Media, and initial metadata rows. CBZ, CBR, and PDF contents are analyzed into pages and generated book thumbnails; EPUB analysis and metadata providers are still pending. `EmptyTrash` and other unported task types remain queued and unmodified. Library deletion is currently limited to empty libraries; deleting a library that still contains series, books, or sidecars returns `409 Conflict`.
 
 The modern Series and Book list endpoints support Spring-style pagination and the initial condition subset for library, series, deleted, one-shot, title, status, and per-user read state. Library sharing, age, and sharing-label restrictions are applied before pagination. Lucene `fullTextSearch` and conditions owned by collections, read lists, posters, and media profiles return `400 Bad Request` until those slices are implemented.
 

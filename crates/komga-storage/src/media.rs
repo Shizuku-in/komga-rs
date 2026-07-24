@@ -524,4 +524,42 @@ mod tests {
             assert_eq!(actual, status, "{media_type}");
         }
     }
+
+    #[tokio::test]
+    async fn pdf_support_migration_only_marks_unsupported_pdf_outdated() {
+        let storage = Storage::connect_memory().await.unwrap();
+        let temporary = tempfile::tempdir().unwrap();
+        let book = scanned_book(&storage, temporary.path()).await;
+        let migration = include_str!("../migrations/0007_pdf_support.sql");
+
+        sqlx::query("UPDATE MEDIA SET STATUS = 'UNSUPPORTED', MEDIA_TYPE = 'application/pdf' WHERE BOOK_ID = ?")
+            .bind(&book.id)
+            .execute(&storage.pool)
+            .await
+            .unwrap();
+        sqlx::query(migration).execute(&storage.pool).await.unwrap();
+        let status = sqlx::query_scalar::<_, String>("SELECT STATUS FROM MEDIA WHERE BOOK_ID = ?")
+            .bind(&book.id)
+            .fetch_one(&storage.pool)
+            .await
+            .unwrap();
+        assert_eq!(status, "OUTDATED");
+
+        for (status, media_type) in [("READY", "application/pdf"), ("UNSUPPORTED", "application/epub+zip")] {
+            sqlx::query("UPDATE MEDIA SET STATUS = ?, MEDIA_TYPE = ? WHERE BOOK_ID = ?")
+                .bind(status)
+                .bind(media_type)
+                .bind(&book.id)
+                .execute(&storage.pool)
+                .await
+                .unwrap();
+            sqlx::query(migration).execute(&storage.pool).await.unwrap();
+            let actual = sqlx::query_scalar::<_, String>("SELECT STATUS FROM MEDIA WHERE BOOK_ID = ?")
+                .bind(&book.id)
+                .fetch_one(&storage.pool)
+                .await
+                .unwrap();
+            assert_eq!(actual, status, "{media_type}");
+        }
+    }
 }

@@ -10,7 +10,19 @@ use std::{
 };
 
 use chrono::NaiveDateTime;
-use image::{DynamicImage, GenericImageView, ImageFormat, ImageReader, Rgb, RgbImage, imageops::FilterType};
+use hayro::{
+    RenderCache, RenderSettings,
+    hayro_interpret::InterpreterSettings,
+    hayro_syntax::{Pdf, page::Page},
+    render,
+    vello_cpu::color::palette::css::WHITE,
+};
+use hayro_write::{ChunkSettings, ExtractionQuery};
+use image::{
+    DynamicImage, GenericImageView, ImageFormat, ImageReader, Rgb, RgbImage, codecs::jpeg::JpegEncoder,
+    imageops::FilterType,
+};
+use pdf_writer::Ref;
 use rars::{Archive, ArchiveFamily, ArchiveReader};
 use serde::Serialize;
 use thiserror::Error;
@@ -19,6 +31,10 @@ use zip::ZipArchive;
 use crate::Book;
 
 const ANALYSIS_PREFIX_LIMIT: u64 = 1024 * 1024;
+const PDF_MEDIA_TYPE: &str = "application/pdf";
+const PDF_IMAGE_MEDIA_TYPE: &str = "image/jpeg";
+const PDF_RENDER_SHORT_EDGE: f32 = 3200.0;
+const PDF_JPEG_QUALITY: u8 = 75;
 
 /// Width and height in pixels.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -203,6 +219,29 @@ impl PageDto {
     }
 }
 
+/// Converts all persisted pages into the representation exposed by the REST API.
+///
+/// PDF pages store their crop-box dimensions and no image media type. Their API
+/// representation describes the JPEG raster that page delivery produces.
+pub fn media_page_dtos(media: &Media) -> Vec<PageDto> {
+    let pdf = media.media_type.as_deref() == Some(PDF_MEDIA_TYPE);
+    media
+        .pages
+        .iter()
+        .enumerate()
+        .map(|(index, page)| {
+            let mut dto = PageDto::from_page(index, page);
+            if pdf {
+                dto.media_type = PDF_IMAGE_MEDIA_TYPE.to_owned();
+                let dimension = page.dimension.and_then(pdf_output_dimension);
+                dto.width = dimension.map(|value| value.width);
+                dto.height = dimension.map(|value| value.height);
+            }
+            dto
+        })
+        .collect()
+}
+
 /// Binary content paired with the media type used by HTTP responses.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypedBytes {
@@ -280,9 +319,9 @@ struct RarAnalysis {
 
 /// Detects and analyzes a book using Kotlin-compatible media state transitions.
 ///
-/// ZIP/CBZ and RAR/CBR containers are analyzed without external commands.
-/// Recognized PDF, EPUB, and other formats remain unsupported until their
-/// extractors are introduced.
+/// ZIP/CBZ, RAR/CBR, and PDF books are analyzed without external commands.
+/// Recognized EPUB and other formats remain unsupported until their extractors
+/// are introduced.
 ///
 /// # Errors
 ///
@@ -324,6 +363,32 @@ pub fn analyze_book(
         } else {
             Media::result(&book.id, MediaStatus::Error, Some(detected), Some("ERR_1032"))
         });
+    }
+
+    if detected == PDF_MEDIA_TYPE {
+        return match analyze_pdf(&path, &book.id, analyze_dimensions, cancelled) {
+            Ok(media) => Ok(media),
+            Err(PdfAnalysisError::Cancelled) => Err(MediaAnalysisError::Cancelled),
+            Err(PdfAnalysisError::Io(kind)) => {
+                let code = match kind {
+                    io::ErrorKind::NotFound => "ERR_1018",
+                    io::ErrorKind::PermissionDenied => "ERR_1000",
+                    _ => "ERR_1005",
+                };
+                Ok(Media::result(
+                    &book.id,
+                    MediaStatus::Error,
+                    Some(PDF_MEDIA_TYPE.to_owned()),
+                    Some(code),
+                ))
+            }
+            Err(PdfAnalysisError::Invalid) => Ok(Media::result(
+                &book.id,
+                MediaStatus::Error,
+                Some(PDF_MEDIA_TYPE.to_owned()),
+                Some("ERR_1005"),
+            )),
+        };
     }
 
     if detected == "application/zip" {
@@ -370,6 +435,69 @@ pub fn analyze_book(
         Some(detected),
         Some("ERR_1001"),
     ))
+}
+
+#[derive(Debug)]
+enum PdfAnalysisError {
+    Cancelled,
+    Io(io::ErrorKind),
+    Invalid,
+}
+
+fn analyze_pdf(
+    path: &Path,
+    book_id: &str,
+    analyze_dimensions: bool,
+    cancelled: impl Fn() -> bool,
+) -> Result<Media, PdfAnalysisError> {
+    let bytes = std::fs::read(path).map_err(|error| PdfAnalysisError::Io(error.kind()))?;
+    if cancelled() {
+        return Err(PdfAnalysisError::Cancelled);
+    }
+    let pdf = Pdf::new(bytes).map_err(|_| PdfAnalysisError::Invalid)?;
+    let mut pages = Vec::with_capacity(pdf.pages().len());
+    for (index, page) in pdf.pages().iter().enumerate() {
+        if cancelled() {
+            return Err(PdfAnalysisError::Cancelled);
+        }
+        pages.push(BookPage {
+            file_name: (index + 1).to_string(),
+            media_type: String::new(),
+            dimension: if analyze_dimensions {
+                dimension_from_pdf_page(page)
+            } else {
+                None
+            },
+            file_hash: String::new(),
+            file_size: None,
+        });
+    }
+    Ok(Media {
+        status: MediaStatus::Ready,
+        media_type: Some(PDF_MEDIA_TYPE.to_owned()),
+        page_count: i32::try_from(pages.len()).unwrap_or(i32::MAX),
+        pages,
+        files: Vec::new(),
+        comment: None,
+        book_id: book_id.to_owned(),
+        epub_divina_compatible: false,
+        epub_is_kepub: false,
+        created_date: None,
+        last_modified_date: None,
+    })
+}
+
+fn dimension_from_pdf_page(page: &Page<'_>) -> Option<Dimension> {
+    let crop_box = page.crop_box();
+    Some(Dimension {
+        width: rounded_i32(crop_box.width())?,
+        height: rounded_i32(crop_box.height())?,
+    })
+}
+
+fn rounded_i32(value: f64) -> Option<i32> {
+    let rounded = value.round();
+    (rounded.is_finite() && rounded >= f64::from(i32::MIN) && rounded <= f64::from(i32::MAX)).then_some(rounded as i32)
 }
 
 #[derive(Debug)]
@@ -627,12 +755,12 @@ fn rar_is_volume(archive: &Archive) -> bool {
     }
 }
 
-/// Extracts one page from a ready ZIP- or RAR-backed media record.
+/// Extracts one rasterized page from a ready ZIP-, RAR-, or PDF-backed record.
 ///
 /// # Errors
 ///
 /// Returns an error for non-ready media, invalid page numbers, missing files,
-/// encrypted entries, unsupported compression methods, or corrupt archives.
+/// encrypted entries, unsupported compression methods, or corrupt documents.
 pub fn extract_page(book: &Book, media: &Media, page_number: i32) -> Result<TypedBytes, MediaOperationError> {
     if media.status != MediaStatus::Ready {
         return Err(MediaOperationError::NotReady);
@@ -648,6 +776,9 @@ pub fn extract_page(book: &Book, media: &Media, page_number: i32) -> Result<Type
         .url
         .to_file_path()
         .map_err(|()| MediaOperationError::Read("book URL is not a file URL".to_owned()))?;
+    if media.media_type.as_deref() == Some(PDF_MEDIA_TYPE) {
+        return render_pdf_page(&path, usize::try_from(page_number - 1).unwrap_or(usize::MAX));
+    }
     let bytes = match media.media_type.as_deref() {
         Some("application/zip") => extract_zip_entry(&path, &page.file_name)?,
         Some(media_type) if is_rar_media_type(media_type) => extract_rar_entry(&path, &page.file_name)?,
@@ -657,6 +788,133 @@ pub fn extract_page(book: &Book, media: &Media, page_number: i32) -> Result<Type
         bytes,
         media_type: page.media_type.clone(),
     })
+}
+
+/// Extracts one PDF page as a standalone PDF document.
+///
+/// # Errors
+///
+/// Returns an error when media is not a ready PDF, the page is out of bounds,
+/// or the source document cannot be read or rewritten.
+pub fn extract_raw_page(book: &Book, media: &Media, page_number: i32) -> Result<TypedBytes, MediaOperationError> {
+    if media.status != MediaStatus::Ready || media.media_type.as_deref() != Some(PDF_MEDIA_TYPE) {
+        return Err(MediaOperationError::NotReady);
+    }
+    if page_number <= 0 {
+        return Err(MediaOperationError::PageOutOfBounds);
+    }
+    let index = usize::try_from(page_number - 1).map_err(|_| MediaOperationError::PageOutOfBounds)?;
+    media.pages.get(index).ok_or(MediaOperationError::PageOutOfBounds)?;
+    let path = book
+        .url
+        .to_file_path()
+        .map_err(|()| MediaOperationError::Read("book URL is not a file URL".to_owned()))?;
+    let pdf = load_pdf(&path)?;
+    let bytes = write_pdf_pages(&pdf, &[index])?;
+    Ok(TypedBytes {
+        bytes,
+        media_type: PDF_MEDIA_TYPE.to_owned(),
+    })
+}
+
+fn load_pdf(path: &Path) -> Result<Pdf, MediaOperationError> {
+    let bytes = std::fs::read(path).map_err(|error| MediaOperationError::Read(error.to_string()))?;
+    Pdf::new(bytes).map_err(|error| MediaOperationError::Read(format!("invalid PDF: {error:?}")))
+}
+
+fn render_pdf_page(path: &Path, index: usize) -> Result<TypedBytes, MediaOperationError> {
+    let pdf = load_pdf(path)?;
+    let page = pdf.pages().get(index).ok_or(MediaOperationError::PageOutOfBounds)?;
+    let scale = pdf_render_scale(page)
+        .ok_or_else(|| MediaOperationError::Image("PDF page has invalid or unsupported dimensions".to_owned()))?;
+    let pixmap = render(
+        page,
+        &RenderCache::new(),
+        &InterpreterSettings::default(),
+        &RenderSettings {
+            x_scale: scale,
+            y_scale: scale,
+            bg_color: WHITE,
+            ..Default::default()
+        },
+    );
+    let width = u32::from(pixmap.width());
+    let height = u32::from(pixmap.height());
+    let rgba = pixmap.take_unpremultiplied();
+    let mut rgb = Vec::with_capacity(rgba.len().saturating_mul(3));
+    for pixel in rgba {
+        rgb.extend_from_slice(&[pixel.r, pixel.g, pixel.b]);
+    }
+    let image = RgbImage::from_raw(width, height, rgb)
+        .ok_or_else(|| MediaOperationError::Image("PDF renderer returned invalid pixel data".to_owned()))?;
+    let mut bytes = Vec::new();
+    JpegEncoder::new_with_quality(&mut bytes, PDF_JPEG_QUALITY)
+        .encode_image(&image)
+        .map_err(|error| MediaOperationError::Image(error.to_string()))?;
+    Ok(TypedBytes {
+        bytes,
+        media_type: PDF_IMAGE_MEDIA_TYPE.to_owned(),
+    })
+}
+
+fn pdf_render_scale(page: &Page<'_>) -> Option<f32> {
+    let crop_box = page.crop_box();
+    let crop_width = crop_box.width() as f32;
+    let crop_height = crop_box.height() as f32;
+    let (render_width, render_height) = page.render_dimensions();
+    pdf_scale(crop_width, crop_height, render_width, render_height)
+}
+
+fn pdf_scale(crop_width: f32, crop_height: f32, render_width: f32, render_height: f32) -> Option<f32> {
+    let values = [crop_width, crop_height, render_width, render_height];
+    if values.iter().any(|value| !value.is_finite() || *value <= 0.0) {
+        return None;
+    }
+    let requested = PDF_RENDER_SHORT_EDGE / crop_width.min(crop_height);
+    let viewport_limit = f32::from(u16::MAX) / render_width.max(render_height);
+    Some(requested.min(viewport_limit))
+}
+
+fn pdf_output_dimension(dimension: Dimension) -> Option<Dimension> {
+    let width = dimension.width as f32;
+    let height = dimension.height as f32;
+    let scale = pdf_scale(width, height, width, height)?;
+    Some(Dimension {
+        width: rounded_i32(f64::from(width * scale))?,
+        height: rounded_i32(f64::from(height * scale))?,
+    })
+}
+
+fn write_pdf_pages(pdf: &Pdf, page_indices: &[usize]) -> Result<Vec<u8>, MediaOperationError> {
+    let mut output = pdf_writer::Pdf::new();
+    let mut next_ref = Ref::new(1);
+    let catalog_ref = next_ref.bump();
+    let queries = page_indices
+        .iter()
+        .copied()
+        .map(ExtractionQuery::new_page)
+        .collect::<Vec<_>>();
+    let extracted = hayro_write::extract(
+        pdf,
+        Box::new(|| next_ref.bump()),
+        ChunkSettings::default(),
+        |_| unreachable!("page extraction does not write XObjects"),
+        &queries,
+    )
+    .map_err(|error| MediaOperationError::Read(format!("could not extract PDF page: {error:?}")))?;
+    let page_refs = extracted
+        .root_refs
+        .iter()
+        .copied()
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| MediaOperationError::Read(format!("could not extract PDF page: {error:?}")))?;
+    output.catalog(catalog_ref).pages(extracted.page_tree_parent_ref);
+    output
+        .pages(extracted.page_tree_parent_ref)
+        .kids(page_refs.iter().copied())
+        .count(i32::try_from(page_refs.len()).unwrap_or(i32::MAX));
+    output.extend(&extracted.chunk);
+    Ok(output.finish())
 }
 
 fn extract_zip_entry(path: &Path, entry_name: &str) -> Result<Vec<u8>, MediaOperationError> {
@@ -895,6 +1153,30 @@ mod tests {
             .join(name)
     }
 
+    fn kotlin_pdf() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../komga/komga/src/test/resources/pdf/komga.pdf")
+    }
+
+    fn blank_pdf(page_sizes: &[(f32, f32)]) -> Vec<u8> {
+        let mut pdf = pdf_writer::Pdf::new();
+        let catalog_ref = Ref::new(1);
+        let pages_ref = Ref::new(2);
+        let page_refs = (0..page_sizes.len())
+            .map(|index| Ref::new(i32::try_from(index + 3).unwrap()))
+            .collect::<Vec<_>>();
+        pdf.catalog(catalog_ref).pages(pages_ref);
+        pdf.pages(pages_ref)
+            .kids(page_refs.iter().copied())
+            .count(i32::try_from(page_refs.len()).unwrap());
+        for (page_ref, (width, height)) in page_refs.into_iter().zip(page_sizes.iter().copied()) {
+            let mut page = pdf.page(page_ref);
+            page.parent(pages_ref);
+            page.media_box(pdf_writer::Rect::new(0.0, 0.0, width, height));
+            page.resources();
+        }
+        pdf.finish()
+    }
+
     #[test]
     fn analyzes_naturally_sorted_zip_pages_and_files() {
         let temporary = tempfile::tempdir().unwrap();
@@ -1007,6 +1289,82 @@ mod tests {
         assert!(media.pages.iter().all(|page| page.dimension.is_none()));
         assert_eq!(media.pages[0].file_name, "komga-1.png");
         assert_eq!(media.pages[0].file_size, Some(3108));
+    }
+
+    #[test]
+    fn analyzes_and_renders_kotlin_pdf_fixture() {
+        let source = book(&kotlin_pdf());
+        let media = analyze_book(&source, true, || false).unwrap();
+
+        assert_eq!(media.status, MediaStatus::Ready);
+        assert_eq!(media.media_type.as_deref(), Some(PDF_MEDIA_TYPE));
+        assert_eq!(media.page_count, 1);
+        assert_eq!(media.pages[0].file_name, "1");
+        assert_eq!(media.pages[0].media_type, "");
+        assert_eq!(
+            media.pages[0].dimension,
+            Some(Dimension {
+                width: 512,
+                height: 512
+            })
+        );
+        assert_eq!(media.pages[0].file_size, None);
+
+        let dtos = media_page_dtos(&media);
+        assert_eq!(dtos[0].media_type, PDF_IMAGE_MEDIA_TYPE);
+        assert_eq!((dtos[0].width, dtos[0].height), (Some(3200), Some(3200)));
+        assert_eq!(dtos[0].size_bytes, None);
+        assert_eq!(dtos[0].size, "");
+
+        let rendered = extract_page(&source, &media, 1).unwrap();
+        assert_eq!(rendered.media_type, PDF_IMAGE_MEDIA_TYPE);
+        assert!(rendered.bytes.starts_with(&[0xff, 0xd8]));
+        assert_eq!(
+            image::load_from_memory(&rendered.bytes).unwrap().dimensions(),
+            (3200, 3200)
+        );
+
+        let raw = extract_raw_page(&source, &media, 1).unwrap();
+        assert_eq!(raw.media_type, PDF_MEDIA_TYPE);
+        assert!(raw.bytes.starts_with(b"%PDF-"));
+        assert_eq!(Pdf::new(raw.bytes).unwrap().pages().len(), 1);
+    }
+
+    #[test]
+    fn pdf_dimensions_can_be_skipped_and_invalid_documents_report_kotlin_error() {
+        let source = book(&kotlin_pdf());
+        let media = analyze_book(&source, false, || false).unwrap();
+        assert_eq!(media.status, MediaStatus::Ready);
+        assert_eq!(media.pages[0].dimension, None);
+        assert_eq!(media_page_dtos(&media)[0].width, None);
+
+        let temporary = tempfile::tempdir().unwrap();
+        let invalid_path = temporary.path().join("invalid.pdf");
+        fs::write(&invalid_path, b"%PDF-1.7\ninvalid").unwrap();
+        let invalid = analyze_book(&book(&invalid_path), true, || false).unwrap();
+        assert_eq!(invalid.status, MediaStatus::Error);
+        assert_eq!(invalid.media_type.as_deref(), Some(PDF_MEDIA_TYPE));
+        assert_eq!(invalid.comment.as_deref(), Some("ERR_1005"));
+    }
+
+    #[test]
+    fn extracts_the_requested_page_as_a_standalone_pdf() {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("pages.pdf");
+        fs::write(&path, blank_pdf(&[(100.0, 200.0), (300.0, 400.0)])).unwrap();
+        let source = book(&path);
+        let media = analyze_book(&source, true, || false).unwrap();
+        assert_eq!(media.page_count, 2);
+
+        let raw = extract_raw_page(&source, &media, 2).unwrap();
+        let extracted = Pdf::new(raw.bytes).unwrap();
+        assert_eq!(extracted.pages().len(), 1);
+        let crop_box = extracted.pages()[0].crop_box();
+        assert_eq!((crop_box.width(), crop_box.height()), (300.0, 400.0));
+        assert!(matches!(
+            extract_raw_page(&source, &media, 3),
+            Err(MediaOperationError::PageOutOfBounds)
+        ));
     }
 
     #[test]
