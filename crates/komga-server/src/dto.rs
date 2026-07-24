@@ -6,7 +6,11 @@
 
 use std::collections::BTreeSet;
 
-use komga_core::{R2Locator, ScanInterval, SeriesCover};
+use chrono::NaiveDate;
+use komga_core::{
+    AlternateTitle, Author, BookMetadataPatch, MetadataUpdate, R2Locator, ReadingDirection, ScanInterval, SeriesCover,
+    SeriesMetadataPatch, SeriesStatus, WebLink,
+};
 use serde::{Deserialize, Deserializer, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -230,6 +234,175 @@ pub(crate) struct DirectoryRequestDto {
     pub(crate) show_files: bool,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AuthorUpdateDto {
+    name: String,
+    role: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct WebLinkUpdateDto {
+    label: String,
+    url: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AlternateTitleUpdateDto {
+    label: String,
+    title: String,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub(crate) struct BookMetadataUpdateDto {
+    title: Patch<String>,
+    title_lock: Patch<bool>,
+    summary: Patch<String>,
+    summary_lock: Patch<bool>,
+    number: Patch<String>,
+    number_lock: Patch<bool>,
+    number_sort: Patch<f64>,
+    number_sort_lock: Patch<bool>,
+    release_date: Patch<NaiveDate>,
+    release_date_lock: Patch<bool>,
+    authors: Patch<Vec<AuthorUpdateDto>>,
+    authors_lock: Patch<bool>,
+    tags: Patch<BTreeSet<String>>,
+    tags_lock: Patch<bool>,
+    isbn: Patch<String>,
+    isbn_lock: Patch<bool>,
+    links: Patch<Vec<WebLinkUpdateDto>>,
+    links_lock: Patch<bool>,
+}
+
+impl BookMetadataUpdateDto {
+    pub(crate) fn into_patch(self) -> BookMetadataPatch {
+        BookMetadataPatch {
+            title: self.title.preserve_null(),
+            title_lock: self.title_lock.preserve_null(),
+            summary: self.summary.clear_null(),
+            summary_lock: self.summary_lock.preserve_null(),
+            number: self.number.preserve_null(),
+            number_lock: self.number_lock.preserve_null(),
+            number_sort: self.number_sort.preserve_null(),
+            number_sort_lock: self.number_sort_lock.preserve_null(),
+            release_date: self.release_date.clear_null(),
+            release_date_lock: self.release_date_lock.preserve_null(),
+            authors: self.authors.clear_null_with(|authors| {
+                authors
+                    .into_iter()
+                    .map(|author| Author {
+                        name: author.name,
+                        role: author.role,
+                    })
+                    .collect()
+            }),
+            authors_lock: self.authors_lock.preserve_null(),
+            tags: self.tags.clear_null(),
+            tags_lock: self.tags_lock.preserve_null(),
+            isbn: self.isbn.clear_null(),
+            isbn_lock: self.isbn_lock.preserve_null(),
+            links: self.links.clear_null_with(|links| {
+                links
+                    .into_iter()
+                    .map(|link| WebLink {
+                        label: link.label,
+                        url: link.url,
+                    })
+                    .collect()
+            }),
+            links_lock: self.links_lock.preserve_null(),
+        }
+    }
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub(crate) struct SeriesMetadataUpdateDto {
+    status: Patch<SeriesStatus>,
+    status_lock: Patch<bool>,
+    title: Patch<String>,
+    title_lock: Patch<bool>,
+    title_sort: Patch<String>,
+    title_sort_lock: Patch<bool>,
+    summary: Patch<String>,
+    summary_lock: Patch<bool>,
+    publisher: Patch<String>,
+    publisher_lock: Patch<bool>,
+    reading_direction: Patch<ReadingDirection>,
+    reading_direction_lock: Patch<bool>,
+    age_rating: Patch<i32>,
+    age_rating_lock: Patch<bool>,
+    language: Patch<String>,
+    language_lock: Patch<bool>,
+    genres: Patch<BTreeSet<String>>,
+    genres_lock: Patch<bool>,
+    tags: Patch<BTreeSet<String>>,
+    tags_lock: Patch<bool>,
+    total_book_count: Patch<i32>,
+    total_book_count_lock: Patch<bool>,
+    sharing_labels: Patch<BTreeSet<String>>,
+    sharing_labels_lock: Patch<bool>,
+    links: Patch<Vec<WebLinkUpdateDto>>,
+    links_lock: Patch<bool>,
+    alternate_titles: Patch<Vec<AlternateTitleUpdateDto>>,
+    alternate_titles_lock: Patch<bool>,
+}
+
+impl SeriesMetadataUpdateDto {
+    pub(crate) fn into_patch(self) -> SeriesMetadataPatch {
+        SeriesMetadataPatch {
+            status: self.status.preserve_null(),
+            status_lock: self.status_lock.preserve_null(),
+            title: self.title.preserve_null(),
+            title_lock: self.title_lock.preserve_null(),
+            title_sort: self.title_sort.preserve_null(),
+            title_sort_lock: self.title_sort_lock.preserve_null(),
+            summary: self.summary.preserve_null(),
+            summary_lock: self.summary_lock.preserve_null(),
+            reading_direction: self.reading_direction.clear_null(),
+            reading_direction_lock: self.reading_direction_lock.preserve_null(),
+            publisher: self.publisher.preserve_null(),
+            publisher_lock: self.publisher_lock.preserve_null(),
+            age_rating: self.age_rating.clear_null(),
+            age_rating_lock: self.age_rating_lock.preserve_null(),
+            language: self.language.preserve_null(),
+            language_lock: self.language_lock.preserve_null(),
+            genres: self.genres.clear_null(),
+            genres_lock: self.genres_lock.preserve_null(),
+            tags: self.tags.clear_null(),
+            tags_lock: self.tags_lock.preserve_null(),
+            total_book_count: self.total_book_count.clear_null(),
+            total_book_count_lock: self.total_book_count_lock.preserve_null(),
+            sharing_labels: self.sharing_labels.clear_null(),
+            sharing_labels_lock: self.sharing_labels_lock.preserve_null(),
+            links: self.links.clear_null_with(|links| {
+                links
+                    .into_iter()
+                    .map(|link| WebLink {
+                        label: link.label,
+                        url: link.url,
+                    })
+                    .collect()
+            }),
+            links_lock: self.links_lock.preserve_null(),
+            alternate_titles: self.alternate_titles.clear_null_with(|titles| {
+                titles
+                    .into_iter()
+                    .map(|title| AlternateTitle {
+                        label: title.label,
+                        title: title.title,
+                    })
+                    .collect()
+            }),
+            alternate_titles_lock: self.alternate_titles_lock.preserve_null(),
+        }
+    }
+}
+
 #[derive(Debug, Default)]
 pub(crate) enum Patch<T> {
     /// The property was absent and existing state must remain unchanged.
@@ -253,5 +426,30 @@ where
             Some(value) => Self::Value(value),
             None => Self::Null,
         })
+    }
+}
+
+impl<T> Patch<T> {
+    fn preserve_null(self) -> Option<T> {
+        match self {
+            Self::Value(value) => Some(value),
+            Self::Missing | Self::Null => None,
+        }
+    }
+
+    fn clear_null(self) -> MetadataUpdate<T> {
+        match self {
+            Self::Missing => MetadataUpdate::Keep,
+            Self::Null => MetadataUpdate::Clear,
+            Self::Value(value) => MetadataUpdate::Set(value),
+        }
+    }
+
+    fn clear_null_with<U>(self, map: impl FnOnce(T) -> U) -> MetadataUpdate<U> {
+        match self {
+            Self::Missing => MetadataUpdate::Keep,
+            Self::Null => MetadataUpdate::Clear,
+            Self::Value(value) => MetadataUpdate::Set(map(value)),
+        }
     }
 }
