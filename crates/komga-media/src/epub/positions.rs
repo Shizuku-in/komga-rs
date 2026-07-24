@@ -1,3 +1,10 @@
+//! Readium positions and native KEPUB span mapping.
+//!
+//! Fixed-layout publications receive one locator and Kotlin's `kobo.1.1` anchor
+//! per spine resource. Reflowable publications use Readium's 1024-byte position
+//! rule. Native KEPUB documents additionally map locators to the nearest existing
+//! `.koboSpan`; ordinary reflowable EPUBs do not receive synthesized Kobo spans.
+
 use std::{collections::HashMap, fs::File};
 
 use komga_core::{EPUB_PAGE_SUBTYPE, MediaFile, R2Location, R2Locator};
@@ -7,11 +14,15 @@ use zip::ZipArchive;
 
 use super::package::read_entry_text;
 
+/// Failures surfaced separately so analysis can preserve Kotlin error codes.
 pub(super) enum PositionError {
+    /// Server shutdown was requested during resource traversal.
     Cancelled,
+    /// A required XHTML resource could not be parsed or read.
     Invalid,
 }
 
+/// Detects native KEPUB content by looking for Kobo span elements in the spine.
 pub(super) fn is_kepub(
     archive: &mut ZipArchive<File>,
     resources: &[MediaFile],
@@ -37,6 +48,7 @@ pub(super) fn is_kepub(
     Ok(false)
 }
 
+/// Computes publication locators in persisted spine order.
 pub(super) fn compute(
     archive: &mut ZipArchive<File>,
     resources: &[MediaFile],
@@ -72,12 +84,14 @@ pub(super) fn compute(
         if cancelled() {
             return Err(PositionError::Cancelled);
         }
+        // Fixed layouts advance by resource rather than by byte length.
         if fixed_layout {
             positions.push(locator(file, 0.0, next_position, Some("kobo.1.1".to_owned())));
             next_position = next_position.saturating_add(1);
             continue;
         }
         let size = u64::try_from(file.file_size.unwrap_or_default()).unwrap_or_default();
+        // Readium defines one position for each started 1024-byte block.
         let count = usize::try_from(size.saturating_add(1023) / 1024)
             .unwrap_or(usize::MAX)
             .max(1);
@@ -96,6 +110,7 @@ pub(super) fn compute(
         }
     }
 
+    // Kotlin expresses total progression as the one-based position over total.
     let total = positions.len() as f32;
     if total > 0.0 {
         for locator in &mut positions {
@@ -125,6 +140,7 @@ fn locator(file: &MediaFile, progression: f32, position: i32, kobo_span: Option<
     }
 }
 
+/// Approximates each native Kobo span's resource progression from XML offsets.
 fn positions_from_kobo_spans(content: &str, file_size: Option<i64>) -> Vec<(String, f32)> {
     let Ok(document) = Document::parse(content) else {
         return Vec::new();

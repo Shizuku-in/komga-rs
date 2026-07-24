@@ -1,3 +1,9 @@
+//! EPUB navigation extraction with version-compatible fallbacks.
+//!
+//! EPUB 3 NAV documents are preferred for the table of contents, landmarks,
+//! and page list. EPUB 2 NCX supplies TOC and page-list fallbacks, while the OPF
+//! guide supplies landmarks when NAV data is absent.
+
 use std::fs::File;
 
 use komga_core::EpubTocEntry;
@@ -6,6 +12,7 @@ use zip::ZipArchive;
 
 use super::package::{EpubPackage, is_element, normalize_href, parent, read_entry_text};
 
+/// Reads the EPUB 3 TOC, falling back to the EPUB 2 NCX navigation map.
 pub(super) fn toc(archive: &mut ZipArchive<File>, package: &EpubPackage) -> Result<Vec<EpubTocEntry>, String> {
     if let Some(entries) = nav_entries(archive, package, "toc")?
         && !entries.is_empty()
@@ -15,6 +22,7 @@ pub(super) fn toc(archive: &mut ZipArchive<File>, package: &EpubPackage) -> Resu
     ncx_entries(archive, package, "navMap", "navPoint")
 }
 
+/// Reads the EPUB 3 page list, falling back to EPUB 2 NCX page targets.
 pub(super) fn page_list(archive: &mut ZipArchive<File>, package: &EpubPackage) -> Result<Vec<EpubTocEntry>, String> {
     if let Some(entries) = nav_entries(archive, package, "page-list")?
         && !entries.is_empty()
@@ -24,6 +32,7 @@ pub(super) fn page_list(archive: &mut ZipArchive<File>, package: &EpubPackage) -
     ncx_entries(archive, package, "pageList", "pageTarget")
 }
 
+/// Reads EPUB 3 landmarks, falling back to the OPF guide.
 pub(super) fn landmarks(archive: &mut ZipArchive<File>, package: &EpubPackage) -> Result<Vec<EpubTocEntry>, String> {
     if let Some(entries) = nav_entries(archive, package, "landmarks")?
         && !entries.is_empty()

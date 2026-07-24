@@ -97,12 +97,17 @@ async fn get_sibling(state: &AppState, user: &User, book_id: &str, next: bool) -
     Ok(sibling)
 }
 
+/// Loads a book and rejects users who cannot access its containing series.
 pub(crate) async fn load_visible_book(state: &AppState, user: &User, book_id: &str) -> Result<BookDto, ApiError> {
     load_visible_book_context(state, user, book_id)
         .await
         .map(|(book, _)| book)
 }
 
+/// Loads a book with its series and applies library, age, and label restrictions.
+///
+/// Missing rows remain `404`, while an existing but restricted series returns
+/// `403`; callers should use this helper before exposing media-derived details.
 pub(crate) async fn load_visible_book_context(
     state: &AppState,
     user: &User,

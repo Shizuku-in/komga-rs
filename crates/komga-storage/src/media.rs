@@ -58,6 +58,10 @@ struct ThumbnailRow {
 impl Storage {
     /// Loads analyzed media together with naturally ordered pages and files.
     ///
+    /// `MEDIA_FILE` has no explicit ordinal in Kotlin's schema. Its insertion
+    /// order is significant for EPUB because analysis writes spine resources
+    /// before assets, so rows are read by SQLite `rowid` rather than filename.
+    ///
     /// # Errors
     ///
     /// Returns an error when rows cannot be queried or contain an invalid status.
@@ -89,6 +93,7 @@ impl Storage {
         .into_iter()
         .map(PageRow::into_domain)
         .collect();
+        // Kotlin reads these rows in insertion order; rowid preserves the EPUB spine.
         let files = sqlx::query_as::<_, FileRow>(
             r#"SELECT FILE_NAME AS file_name, MEDIA_TYPE AS media_type,
                       SUB_TYPE AS sub_type, FILE_SIZE AS file_size

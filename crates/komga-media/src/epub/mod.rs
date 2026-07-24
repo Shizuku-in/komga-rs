@@ -1,3 +1,11 @@
+//! EPUB package analysis, fixed-layout discovery, and resource extraction.
+//!
+//! Analysis keeps optional publication features independent: navigation,
+//! Divina pages, and positions can each fail with a Kotlin-compatible comment
+//! code while the remaining usable media is still persisted as ready. Spine
+//! resources are emitted before assets because that order is later reused by
+//! WebPub manifests and Readium positions.
+
 mod navigation;
 mod package;
 mod positions;
@@ -12,18 +20,24 @@ use scraper::{Html, Selector};
 
 use crate::{TypedBytes, image_dimension};
 
+/// Kotlin's maximum text length for treating an XHTML spine item as image-only.
 const DIVINA_LETTER_COUNT_THRESHOLD: usize = 15;
 
+/// Failures that prevent the base EPUB package from being analyzed.
 #[derive(Debug)]
 pub(crate) enum AnalysisError {
+    /// Server shutdown was requested between package operations.
     Cancelled,
+    /// The ZIP, container, or required package structure is invalid.
     Invalid,
 }
 
+/// Checks the required EPUB `mimetype` entry without performing full analysis.
 pub(crate) fn is_epub(path: &Path) -> bool {
     package::has_epub_mimetype(path)
 }
 
+/// Analyzes one EPUB while retaining Kotlin-compatible optional-feature errors.
 pub(crate) fn analyze(
     path: &Path,
     book_id: &str,
@@ -39,6 +53,7 @@ pub(crate) fn analyze(
     };
     let mut comments = Vec::new();
 
+    // Navigation failures do not discard otherwise readable publication data.
     let toc = navigation::toc(&mut archive, &package).unwrap_or_else(|_| {
         comments.push("ERR_1035".to_owned());
         Vec::new()
@@ -63,6 +78,7 @@ pub(crate) fn analyze(
             Vec::new()
         }
     };
+    // Kotlin also treats a publication with a complete Divina page set as fixed.
     let fixed_layout = !pages.is_empty() || package.fixed_layout;
     let epub_positions = match positions::compute(&mut archive, &resources, fixed_layout, is_kepub, &cancelled) {
         Ok(positions) => positions,
@@ -110,6 +126,7 @@ pub(crate) fn analyze(
     })
 }
 
+/// Extracts the package-declared cover image, if one exists.
 pub(crate) fn cover(path: &Path) -> Result<Option<TypedBytes>, String> {
     let (mut archive, package) = package::open(path)?;
     let Some(cover) = package.cover else {
@@ -122,12 +139,14 @@ pub(crate) fn cover(path: &Path) -> Result<Option<TypedBytes>, String> {
     }))
 }
 
+/// Extracts one exact ZIP entry previously admitted by media analysis.
 pub(crate) fn extract(path: &Path, entry_name: &str) -> Result<Vec<u8>, String> {
     let file = std::fs::File::open(path).map_err(|error| error.to_string())?;
     let mut archive = zip::ZipArchive::new(file).map_err(|error| error.to_string())?;
     package::read_entry(&mut archive, entry_name)
 }
 
+/// Produces spine-ordered page resources followed by the remaining assets.
 fn resources(
     archive: &mut zip::ZipArchive<std::fs::File>,
     package: &package::EpubPackage,
@@ -163,6 +182,7 @@ fn resources(
         .collect()
 }
 
+/// Estimates reflowable page count from compressed spine bytes in 1024-byte units.
 fn approximate_page_count(archive: &mut zip::ZipArchive<std::fs::File>, package: &package::EpubPackage) -> i32 {
     package
         .spine
@@ -174,6 +194,10 @@ fn approximate_page_count(archive: &mut zip::ZipArchive<std::fs::File>, package:
         .unwrap_or(i32::MAX)
 }
 
+/// Returns a complete image-page set, or an empty set when the EPUB is reflowable.
+///
+/// Every readable spine item must remain below the Kotlin text threshold and
+/// resolve to exactly one image; a partial image set is never exposed as Divina.
 fn divina_pages(
     archive: &mut zip::ZipArchive<std::fs::File>,
     package: &package::EpubPackage,

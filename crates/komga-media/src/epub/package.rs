@@ -1,3 +1,9 @@
+//! EPUB container and OPF package parsing.
+//!
+//! Hrefs follow Kotlin's compatibility behavior: `+` is decoded as a space,
+//! percent escapes are decoded before normalization, fragments are preserved,
+//! and paths attempting to escape the archive root are rejected.
+
 use std::{collections::BTreeSet, fs::File, io::Read, path::Path};
 
 use komga_core::EpubTocEntry;
@@ -5,6 +11,7 @@ use percent_encoding::percent_decode_str;
 use roxmltree::{Document, Node};
 use zip::ZipArchive;
 
+/// One normalized OPF manifest item used by later EPUB analysis stages.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct ManifestItem {
     pub(super) id: String,
@@ -13,6 +20,7 @@ pub(super) struct ManifestItem {
     pub(super) properties: BTreeSet<String>,
 }
 
+/// Parsed package structures needed for resources, navigation, and covers.
 #[derive(Debug)]
 pub(super) struct EpubPackage {
     pub(super) manifest: Vec<ManifestItem>,
@@ -24,6 +32,7 @@ pub(super) struct EpubPackage {
     pub(super) ncx: Option<ManifestItem>,
 }
 
+/// Opens the ZIP and resolves its root OPF through `META-INF/container.xml`.
 pub(super) fn open(path: &Path) -> Result<(ZipArchive<File>, EpubPackage), String> {
     let file = File::open(path).map_err(|error| error.to_string())?;
     let mut archive = ZipArchive::new(file).map_err(|error| error.to_string())?;
@@ -152,6 +161,7 @@ fn parse_package(xml: &str, base_dir: &str) -> Result<EpubPackage, String> {
     })
 }
 
+/// Resolves an encoded package href while preventing archive-root traversal.
 pub(super) fn normalize_href(base_dir: &str, href: &str) -> Result<String, String> {
     let plus_decoded = href.replace('+', " ");
     let decoded = percent_decode_str(&plus_decoded)

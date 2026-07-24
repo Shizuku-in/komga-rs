@@ -1,4 +1,16 @@
-//! WebPub publication manifests for analyzed books.
+//! Kotlin-compatible WebPub publication manifests for analyzed books.
+//!
+//! The transport types in this module mirror Kotlin's Jackson inclusion rules:
+//! publication-level arrays remain present when empty, while empty values inside
+//! links and metadata are omitted. The generic route selects a Divina, PDF, or
+//! EPUB representation from persisted media. PDF and EPUB routes enforce their
+//! requested profile, while Divina reuses any available image-page rendering;
+//! every route applies the same REST visibility checks.
+//!
+//! Manifest links are absolute. Their public origin honors `Forwarded` first,
+//! then the corresponding `X-Forwarded-*` headers, before falling back to the
+//! request URI and `Host`. Manifest responses deliberately do not implement
+//! conditional caching, matching the Kotlin endpoints.
 
 use std::collections::BTreeMap;
 
@@ -30,6 +42,7 @@ const ACQUISITION_REL: &str = "http://opds-spec.org/acquisition";
 
 type LinkProperties = BTreeMap<String, BTreeMap<String, Value>>;
 
+/// A WebPub link with Kotlin's nested empty-value omission behavior.
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct WpLinkDto {
@@ -65,6 +78,7 @@ impl WpLinkDto {
     }
 }
 
+/// Complete publication payload; all collection fields serialize even when empty.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct WpPublicationDto {
@@ -79,6 +93,7 @@ struct WpPublicationDto {
     page_list: Vec<WpLinkDto>,
 }
 
+/// Metadata shared by the Divina, PDF, and EPUB publication profiles.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct WpMetadataDto {
@@ -136,6 +151,7 @@ struct WpMetadataDto {
     rendition: BTreeMap<String, Value>,
 }
 
+/// Series and collection membership exposed through WebPub metadata.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct WpBelongsToDto {
@@ -145,6 +161,7 @@ struct WpBelongsToDto {
     collection: Vec<WpContributorDto>,
 }
 
+/// Named member of a containing series or collection.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct WpContributorDto {
@@ -170,6 +187,7 @@ struct AuthorGroups {
     contributor: Vec<String>,
 }
 
+/// Reading directions supported by Kotlin's WebPub generator.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 enum WpReadingProgressionDto {
@@ -178,6 +196,7 @@ enum WpReadingProgressionDto {
     Ttb,
 }
 
+/// Profile selected by the requested manifest route.
 #[derive(Debug, Clone, Copy)]
 enum RequestedProfile {
     Automatic,
@@ -186,12 +205,14 @@ enum RequestedProfile {
     Epub,
 }
 
+/// Proxy-aware base URL used to build every absolute publication link.
 #[derive(Debug, Clone)]
 struct ManifestUrls {
     base: Url,
 }
 
 impl ManifestUrls {
+    /// Resolves the client-visible origin using Spring's forwarded-header precedence.
     fn from_request(headers: &HeaderMap, uri: &Uri) -> Result<Self, ApiError> {
         let forwarded_proto = forwarded_parameter(headers, "proto");
         let forwarded_host = forwarded_parameter(headers, "host");
@@ -284,6 +305,7 @@ impl ManifestUrls {
     }
 }
 
+/// Returns the manifest selected from the book's persisted media profile.
 pub(crate) async fn get_manifest(
     state: State<AppState>,
     auth: Extension<AuthContext>,
@@ -294,6 +316,7 @@ pub(crate) async fn get_manifest(
     manifest_response(state, auth, path, headers, uri, RequestedProfile::Automatic).await
 }
 
+/// Returns the image-oriented Divina representation.
 pub(crate) async fn get_divina_manifest(
     state: State<AppState>,
     auth: Extension<AuthContext>,
@@ -304,6 +327,7 @@ pub(crate) async fn get_divina_manifest(
     manifest_response(state, auth, path, headers, uri, RequestedProfile::Divina).await
 }
 
+/// Returns the PDF profile or `400` when the book is not a PDF.
 pub(crate) async fn get_pdf_manifest(
     state: State<AppState>,
     auth: Extension<AuthContext>,
@@ -314,6 +338,7 @@ pub(crate) async fn get_pdf_manifest(
     manifest_response(state, auth, path, headers, uri, RequestedProfile::Pdf).await
 }
 
+/// Returns the EPUB profile or `400` when the book is not an EPUB.
 pub(crate) async fn get_epub_manifest(
     state: State<AppState>,
     auth: Extension<AuthContext>,
@@ -324,6 +349,7 @@ pub(crate) async fn get_epub_manifest(
     manifest_response(state, auth, path, headers, uri, RequestedProfile::Epub).await
 }
 
+/// Loads visible content, resolves the requested profile, and serializes its payload.
 async fn manifest_response(
     State(state): State<AppState>,
     Extension(auth): Extension<AuthContext>,
@@ -368,6 +394,7 @@ async fn manifest_response(
     Ok(response)
 }
 
+/// Builds image reading-order links and JPEG alternates for the Divina profile.
 fn divina_manifest(
     book: &komga_core::BookDto,
     series: &SeriesMetadataDto,
@@ -408,6 +435,7 @@ fn divina_manifest(
     publication
 }
 
+/// Builds one raw single-page PDF link for each analyzed document page.
 fn pdf_manifest(
     book: &komga_core::BookDto,
     series: &SeriesMetadataDto,
@@ -423,6 +451,7 @@ fn pdf_manifest(
     publication
 }
 
+/// Builds spine, asset, and navigation links from persisted EPUB analysis.
 fn epub_manifest(
     book: &komga_core::BookDto,
     series: &SeriesMetadataDto,
