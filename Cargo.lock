@@ -1661,6 +1661,8 @@ dependencies = [
  "rars",
  "roxmltree",
  "scraper",
+ "serde",
+ "serde_json",
  "tempfile",
  "thiserror",
  "url",

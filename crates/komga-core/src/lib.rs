@@ -45,7 +45,7 @@ pub use progress::{
     R2Device, R2Progression, ReadProgress, ReadProgressError, SeriesReadProgressDto, completed_progress, page_progress,
     progression, series_read_progress,
 };
-pub use scanner::{Book, ScanError, ScanResult, ScannedSeries, Series, scan_library_files};
+pub use scanner::{Book, ScanError, ScanResult, ScannedSeries, ScannedSidecar, Series, scan_library_files};
 
 /// Every application role recognized by the current Komga compatibility layer.
 ///

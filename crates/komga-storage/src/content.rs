@@ -8,7 +8,7 @@ use url::Url;
 use crate::{Result, Storage, StorageError};
 
 /// Counts of content rows changed while applying one filesystem scan.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ScanApplyStats {
     /// Newly persisted series.
     pub series_added: u64,
@@ -22,6 +22,8 @@ pub struct ScanApplyStats {
     pub books_updated: u64,
     /// Books marked as deleted because their file disappeared.
     pub books_deleted: u64,
+    /// Series whose Mylar sidecar was added or modified.
+    pub sidecars_changed: Vec<String>,
 }
 
 #[derive(Debug, Clone, FromRow)]
@@ -73,6 +75,15 @@ const SELECT_BOOK: &str = r#"
       FROM BOOK"#;
 
 impl Storage {
+    /// Finds one series by identifier, including soft-deleted rows.
+    pub async fn find_series_by_id(&self, series_id: &str) -> Result<Option<Series>> {
+        sqlx::query_as::<_, SeriesRow>(&format!("{SELECT_SERIES} WHERE ID = ?"))
+            .bind(series_id)
+            .fetch_optional(&self.pool)
+            .await?
+            .map(SeriesRow::into_domain)
+            .transpose()
+    }
     /// Finds one persisted book by identifier, including soft-deleted rows.
     ///
     /// # Errors
@@ -317,6 +328,31 @@ impl Storage {
                     insert_book(&mut tx, scanned_book, &series_id, library_id).await?;
                     stats.books_added += 1;
                 }
+            }
+        }
+
+        let scanned_sidecar_urls = scan.sidecars.iter().map(|s| s.url.as_str()).collect::<HashSet<_>>();
+        sqlx::query("DELETE FROM SIDECAR WHERE LIBRARY_ID = ? AND URL NOT IN (SELECT value FROM json_each(?))")
+            .bind(library_id)
+            .bind(serde_json::to_string(&scanned_sidecar_urls).unwrap_or_else(|_| "[]".into()))
+            .execute(&mut *tx)
+            .await?;
+        for sidecar in &scan.sidecars {
+            let previous =
+                sqlx::query_scalar::<_, NaiveDateTime>("SELECT LAST_MODIFIED_TIME FROM SIDECAR WHERE URL = ?")
+                    .bind(sidecar.url.as_str())
+                    .fetch_optional(&mut *tx)
+                    .await?;
+            sqlx::query("INSERT INTO SIDECAR (URL,PARENT_URL,LAST_MODIFIED_TIME,LIBRARY_ID) VALUES (?,?,?,?) ON CONFLICT(URL) DO UPDATE SET PARENT_URL=excluded.PARENT_URL,LAST_MODIFIED_TIME=excluded.LAST_MODIFIED_TIME,LIBRARY_ID=excluded.LIBRARY_ID")
+                .bind(sidecar.url.as_str()).bind(sidecar.parent_url.as_str()).bind(sidecar.last_modified_time).bind(library_id).execute(&mut *tx).await?;
+            if previous != Some(sidecar.last_modified_time)
+                && let Some(id) =
+                    sqlx::query_scalar::<_, String>("SELECT ID FROM SERIES WHERE URL = ? AND DELETED_DATE IS NULL")
+                        .bind(sidecar.parent_url.as_str())
+                        .fetch_optional(&mut *tx)
+                        .await?
+            {
+                stats.sidecars_changed.push(id);
             }
         }
 

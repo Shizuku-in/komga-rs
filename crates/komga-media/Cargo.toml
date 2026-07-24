@@ -6,6 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+chrono.workspace = true
 hayro.workspace = true
 hayro-write.workspace = true
 image.workspace = true
@@ -17,10 +18,11 @@ percent-encoding.workspace = true
 rars.workspace = true
 roxmltree.workspace = true
 scraper.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
 zip.workspace = true
 
 [dev-dependencies]
-chrono.workspace = true
 tempfile.workspace = true
 url.workspace = true

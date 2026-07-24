@@ -156,6 +156,10 @@ pub fn build_app(state: AppState) -> Router {
             "/api/v1/series/{series_id}/metadata",
             patch(metadata_routes::update_series_metadata),
         )
+        .route(
+            "/api/v1/series/{series_id}/metadata/refresh",
+            post(metadata_routes::refresh_series_metadata),
+        )
         .route("/api/v1/books/list", post(content_routes::list_books))
         .route(
             "/api/v1/books/thumbnails",
@@ -256,6 +260,10 @@ pub fn build_app(state: AppState) -> Router {
             patch(metadata_routes::update_book_metadata),
         )
         .route(
+            "/api/v1/books/{book_id}/metadata/refresh",
+            post(metadata_routes::refresh_book_metadata),
+        )
+        .route(
             "/api/v1/books/{book_id}/read-progress",
             patch(read_progress_routes::update_read_progress).delete(read_progress_routes::delete_read_progress),
         )
@@ -336,6 +344,10 @@ pub fn build_app(state: AppState) -> Router {
         .route(
             "/api/v1/libraries/{library_id}/scan",
             post(library_routes::scan_library),
+        )
+        .route(
+            "/api/v1/libraries/{library_id}/metadata/refresh",
+            post(metadata_routes::refresh_library_metadata),
         )
         .route(
             "/api/v1/libraries/{library_id}/empty-trash",

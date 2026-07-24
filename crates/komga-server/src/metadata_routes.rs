@@ -107,6 +107,86 @@ pub(crate) async fn update_series_metadata(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// Queues automatic metadata providers for one book.
+pub(crate) async fn refresh_book_metadata(
+    State(state): State<AppState>,
+    Extension(auth): Extension<AuthContext>,
+    Path(book_id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    require_admin(&auth)?;
+    let book = state
+        .storage
+        .find_book_by_id(&book_id)
+        .await?
+        .filter(|b| b.deleted_date.is_none())
+        .ok_or_else(|| ApiError::not_found("Book not found"))?;
+    state
+        .enqueue_task(&TaskRecord::refresh_book_metadata(
+            &book.id,
+            &book.series_id,
+            DEFAULT_TASK_PRIORITY,
+        ))
+        .await?;
+    Ok(StatusCode::ACCEPTED)
+}
+
+/// Queues automatic metadata providers for one series.
+pub(crate) async fn refresh_series_metadata(
+    State(state): State<AppState>,
+    Extension(auth): Extension<AuthContext>,
+    Path(series_id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    require_admin(&auth)?;
+    let series = state
+        .storage
+        .find_series_by_id(&series_id)
+        .await?
+        .filter(|s| s.deleted_date.is_none())
+        .ok_or_else(|| ApiError::not_found("Series not found"))?;
+    state
+        .enqueue_task(&TaskRecord::refresh_series_metadata(&series.id, DEFAULT_TASK_PRIORITY))
+        .await?;
+    Ok(StatusCode::ACCEPTED)
+}
+
+/// Queues metadata refreshes for all ready books and active series in a library.
+pub(crate) async fn refresh_library_metadata(
+    State(state): State<AppState>,
+    Extension(auth): Extension<AuthContext>,
+    Path(library_id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    require_admin(&auth)?;
+    state
+        .storage
+        .find_library_by_id(&library_id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("Library not found"))?;
+    for (book_id, series_id) in state.storage.list_ready_books_by_library_id(&library_id).await? {
+        state
+            .enqueue_task(&TaskRecord::refresh_book_metadata(
+                &book_id,
+                &series_id,
+                DEFAULT_TASK_PRIORITY,
+            ))
+            .await?;
+    }
+    for series in state
+        .storage
+        .list_series_by_library_id(&library_id)
+        .await?
+        .into_iter()
+        .filter(|s| s.deleted_date.is_none())
+    {
+        state
+            .enqueue_task(&TaskRecord::refresh_series_metadata(
+                &series.id,
+                DEFAULT_TASK_PRIORITY - 1,
+            ))
+            .await?;
+    }
+    Ok(StatusCode::ACCEPTED)
+}
+
 fn map_metadata_error(error: MetadataError) -> ApiError {
     match error {
         MetadataError::Invalid(message) => ApiError::bad_request(message),

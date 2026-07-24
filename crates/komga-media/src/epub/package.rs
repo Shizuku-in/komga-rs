@@ -42,6 +42,13 @@ pub(super) fn open(path: &Path) -> Result<(ZipArchive<File>, EpubPackage), Strin
     Ok((archive, package))
 }
 
+pub(crate) fn metadata_xml(path: &Path) -> Result<String, String> {
+    let file = File::open(path).map_err(|error| error.to_string())?;
+    let mut archive = ZipArchive::new(file).map_err(|error| error.to_string())?;
+    let path = package_path(&mut archive)?;
+    read_entry_text(&mut archive, &path)
+}
+
 pub(super) fn has_epub_mimetype(path: &Path) -> bool {
     let Ok(file) = File::open(path) else {
         return false;

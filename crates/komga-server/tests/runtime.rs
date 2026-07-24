@@ -212,6 +212,17 @@ async fn startup_scheduler_analyzes_supported_media_generates_thumbnails_and_pre
         assert_eq!(thumbnail.thumbnail_type, "GENERATED");
         assert_eq!(thumbnail.media_type, "image/jpeg");
     }
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let queued = tasks.list().await.unwrap();
+            if queued.iter().all(|task| task.simple_type == "EmptyTrash") {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .expect("metadata refresh pipeline did not complete");
     let queued = tasks.list().await.unwrap();
     assert_eq!(queued.len(), 1);
     assert_eq!(queued[0].simple_type, "EmptyTrash");

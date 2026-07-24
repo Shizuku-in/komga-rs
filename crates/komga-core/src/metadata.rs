@@ -167,6 +167,49 @@ pub struct BookMetadata {
 }
 
 impl BookMetadata {
+    /// Applies metadata supplied by an automatic provider.
+    ///
+    /// Locked fields are preserved and provider patches cannot alter lock state.
+    pub fn apply_provider_patch(&self, mut patch: BookMetadataPatch) -> Result<Self, MetadataError> {
+        if self.title_lock {
+            patch.title = None;
+        }
+        if self.summary_lock {
+            patch.summary = MetadataUpdate::Keep;
+        }
+        if self.number_lock {
+            patch.number = None;
+        }
+        if self.number_sort_lock {
+            patch.number_sort = None;
+        }
+        if self.release_date_lock {
+            patch.release_date = MetadataUpdate::Keep;
+        }
+        if self.authors_lock {
+            patch.authors = MetadataUpdate::Keep;
+        }
+        if self.tags_lock {
+            patch.tags = MetadataUpdate::Keep;
+        }
+        if self.isbn_lock {
+            patch.isbn = MetadataUpdate::Keep;
+        }
+        if self.links_lock {
+            patch.links = MetadataUpdate::Keep;
+        }
+        patch.title_lock = None;
+        patch.summary_lock = None;
+        patch.number_lock = None;
+        patch.number_sort_lock = None;
+        patch.release_date_lock = None;
+        patch.authors_lock = None;
+        patch.tags_lock = None;
+        patch.isbn_lock = None;
+        patch.links_lock = None;
+        self.apply_patch(patch)
+    }
+
     /// Applies an API-independent update and returns normalized metadata.
     ///
     /// # Errors
@@ -322,6 +365,67 @@ pub struct SeriesMetadata {
 }
 
 impl SeriesMetadata {
+    /// Applies metadata supplied by an automatic provider while preserving locks.
+    pub fn apply_provider_patch(&self, mut patch: SeriesMetadataPatch) -> Result<Self, MetadataError> {
+        if self.status_lock {
+            patch.status = None;
+        }
+        if self.title_lock {
+            patch.title = None;
+        }
+        if self.title_sort_lock {
+            patch.title_sort = None;
+        }
+        if self.summary_lock {
+            patch.summary = None;
+        }
+        if self.reading_direction_lock {
+            patch.reading_direction = MetadataUpdate::Keep;
+        }
+        if self.publisher_lock {
+            patch.publisher = None;
+        }
+        if self.age_rating_lock {
+            patch.age_rating = MetadataUpdate::Keep;
+        }
+        if self.language_lock {
+            patch.language = None;
+        }
+        if self.genres_lock {
+            patch.genres = MetadataUpdate::Keep;
+        }
+        if self.tags_lock {
+            patch.tags = MetadataUpdate::Keep;
+        }
+        if self.total_book_count_lock {
+            patch.total_book_count = MetadataUpdate::Keep;
+        }
+        if self.sharing_labels_lock {
+            patch.sharing_labels = MetadataUpdate::Keep;
+        }
+        if self.links_lock {
+            patch.links = MetadataUpdate::Keep;
+        }
+        if self.alternate_titles_lock {
+            patch.alternate_titles = MetadataUpdate::Keep;
+        }
+        patch.status_lock = None;
+        patch.title_lock = None;
+        patch.title_sort_lock = None;
+        patch.summary_lock = None;
+        patch.reading_direction_lock = None;
+        patch.publisher_lock = None;
+        patch.age_rating_lock = None;
+        patch.language_lock = None;
+        patch.genres_lock = None;
+        patch.tags_lock = None;
+        patch.total_book_count_lock = None;
+        patch.sharing_labels_lock = None;
+        patch.links_lock = None;
+        patch.alternate_titles_lock = None;
+        self.apply_patch(patch)
+    }
+
     /// Applies an API-independent update and returns normalized metadata.
     ///
     /// # Errors

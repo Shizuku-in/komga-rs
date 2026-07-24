@@ -8,7 +8,7 @@ The reference baseline is Komga commit `4ef86df`. Porting is organized as vertic
 | SQLite | Partial | User, library, settings, task queue, Series/Book, media pages/files, book/series thumbnails, metadata relations, and read-progress schema are compatible with current Flyway databases. The complete schema and all historical migration paths are pending. |
 | Claim and users | Implemented | Claim, current user, CRUD, roles, library sharing fields, age/label restrictions, and password changes. |
 | Authentication | Partial | Basic, in-memory sessions, remember-me cookie, header sessions, logout, and REST API keys are implemented. OAuth2 and authentication activity are pending. |
-| Libraries and scanner | Partial | Library CRUD, filesystem browsing, scan workers, startup/periodic scheduling, Series/Book discovery, change reconciliation, soft deletion, automatic CBZ/CBR/PDF/EPUB analysis, and incremental ComicInfo collection/read-list import are implemented. Sidecars, remaining metadata providers, and trash execution are pending. |
+| Libraries and scanner | Partial | Library CRUD, filesystem browsing, scan workers, startup/periodic scheduling, Series/Book discovery, change reconciliation, soft deletion, automatic CBZ/CBR/PDF/EPUB analysis, ComicInfo/EPUB metadata import, and Mylar `series.json` sidecars are implemented. Artwork sidecars and trash execution are pending. |
 | Series/books/read progress | Partial | Skeleton persistence, natural ordering, modern list/detail APIs, Spring pagination, basic recursive filtering, sibling navigation, access restrictions, progress hydration, per-book and series-level writes, REST Readium progression, Mihon/Tachiyomi series synchronization, administrator book/series metadata mutations, book/series thumbnail management and regeneration, CBZ/CBR/PDF and fixed-layout EPUB pages, EPUB resources/positions, WebPub manifests, and streaming original-file downloads are implemented. Deprecated/specialized lists remain pending. |
 | Collections/read lists | Core complete | CRUD, visible membership, reverse lookup, navigation, Mihon progress, ComicRack matching, streamed ZIP downloads, uploads, dynamic collage posters, and scanner-driven ComicInfo relationship import. |
 | Media | Partial | ZIP/CBZ, RAR4/RAR5/CBR (including solid archives), PDF, and EPUB analysis are implemented without external runtime commands. PDF supports rendered and raw pages; EPUB supports OPF/NAV/NCX discovery, resources, Readium positions, native KEPUB detection, fixed-layout pages, and package covers. Divina, PDF, and EPUB WebPub manifests are available. EPUB metadata import, uncommon image codecs, hashing, and duplicate pages are pending. |
@@ -37,7 +37,7 @@ The reference baseline is Komga commit `4ef86df`. Porting is organized as vertic
 
 ## Next slice
 
-The next dependency-ordered slice is complete ComicInfo/EPUB/Mylar metadata-provider import. Domain-event/SSE integration
+The next dependency-ordered slice is EmptyTrash/deletion cascade or search indexing. Domain-event/SSE integration
 remains later work.
 
 Book and series metadata can be patched through the Kotlin-compatible administrator routes. The HTTP boundary preserves

@@ -7,7 +7,7 @@
 //! WebPub manifests and Readium positions.
 
 mod navigation;
-mod package;
+pub(crate) mod package;
 mod positions;
 
 use std::{collections::BTreeSet, path::Path};

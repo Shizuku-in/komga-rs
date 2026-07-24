@@ -1,0 +1,11 @@
+CREATE TABLE IF NOT EXISTS SIDECAR
+(
+    URL                varchar  NOT NULL PRIMARY KEY,
+    PARENT_URL         varchar  NOT NULL,
+    LAST_MODIFIED_TIME datetime NOT NULL,
+    LIBRARY_ID         varchar  NOT NULL,
+    FOREIGN KEY (LIBRARY_ID) REFERENCES LIBRARY (ID)
+);
+
+CREATE INDEX IF NOT EXISTS idx__sidecar__library_id ON SIDECAR (LIBRARY_ID);
+CREATE INDEX IF NOT EXISTS idx__sidecar__parent_url ON SIDECAR (PARENT_URL);

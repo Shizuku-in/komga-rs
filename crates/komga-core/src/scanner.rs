@@ -83,11 +83,24 @@ pub struct ScannedSeries {
     pub books: Vec<Book>,
 }
 
+/// A supported filesystem sidecar discovered at a series root.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScannedSidecar {
+    /// Exact sidecar file URL.
+    pub url: Url,
+    /// Owning series directory URL.
+    pub parent_url: Url,
+    /// Filesystem modification time.
+    pub last_modified_time: NaiveDateTime,
+}
+
 /// Complete filesystem snapshot produced for one library.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ScanResult {
     /// Discovered series in deterministic path order.
     pub series: Vec<ScannedSeries>,
+    /// Mylar sidecars found for non-one-shot series.
+    pub sidecars: Vec<ScannedSidecar>,
 }
 
 /// Errors that prevent a library filesystem scan from completing.
@@ -246,7 +259,24 @@ pub fn scan_library_files(library: &Library, cancelled: impl Fn() -> bool) -> Re
         }
     }
     scanned.sort_by(|left, right| left.series.url.as_str().cmp(right.series.url.as_str()));
-    Ok(ScanResult { series: scanned })
+    let sidecars = scanned
+        .iter()
+        .filter(|entry| !entry.series.oneshot)
+        .filter_map(|entry| {
+            let directory = entry.series.url.to_file_path().ok()?;
+            let path = directory.join("series.json");
+            let metadata = fs::metadata(&path).ok().filter(|m| m.is_file())?;
+            Some(ScannedSidecar {
+                url: Url::from_file_path(path).ok()?,
+                parent_url: entry.series.url.clone(),
+                last_modified_time: updated_time(&metadata),
+            })
+        })
+        .collect();
+    Ok(ScanResult {
+        series: scanned,
+        sidecars,
+    })
 }
 
 fn should_visit(path: &Path, exclusions: &[String]) -> bool {
