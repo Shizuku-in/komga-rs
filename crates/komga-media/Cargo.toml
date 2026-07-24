@@ -1,0 +1,23 @@
+[package]
+name = "komga-media"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+hayro.workspace = true
+hayro-write.workspace = true
+image.workspace = true
+infer.workspace = true
+komga-core = { path = "../komga-core" }
+natord.workspace = true
+pdf-writer.workspace = true
+rars.workspace = true
+thiserror.workspace = true
+zip.workspace = true
+
+[dev-dependencies]
+chrono.workspace = true
+tempfile.workspace = true
+url.workspace = true

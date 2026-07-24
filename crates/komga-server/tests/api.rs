@@ -5,9 +5,8 @@ use axum::{
 };
 use base64::{Engine, engine::general_purpose::STANDARD};
 use http_body_util::BodyExt;
-use komga_core::{
-    Library, ThumbnailBook, analyze_book, generate_thumbnail, image_dimension, new_id, scan_library_files,
-};
+use komga_core::{Book, Library, Media, ThumbnailBook, new_id, scan_library_files};
+use komga_media::{analyze_book, generate_thumbnail, image_dimension};
 use komga_server::{AppState, REMEMBER_ME_COOKIE, SESSION_COOKIE, SESSION_HEADER, build_app};
 use komga_storage::{Storage, TaskStorage};
 use serde_json::Value;
@@ -62,6 +61,30 @@ fn session_cookie(response: &Response<Body>) -> String {
         .next()
         .unwrap()
         .to_owned()
+}
+
+async fn analyzed_media_fixture(
+    fixture_path: &str,
+    file_name: &str,
+) -> (tempfile::TempDir, Storage, TaskStorage, Book, Media) {
+    let storage = Storage::connect_memory().await.unwrap();
+    let tasks = TaskStorage::connect_memory().await.unwrap();
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path().join("library");
+    fs::create_dir_all(root.join("Series")).unwrap();
+    let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../komga/komga/src/test/resources")
+        .join(fixture_path);
+    fs::copy(fixture, root.join("Series").join(file_name)).unwrap();
+    let library = Library::new("Library".into(), Url::from_directory_path(&root).unwrap());
+    storage.create_library(&library).await.unwrap();
+    let scan = scan_library_files(&library, || false).unwrap();
+    storage.apply_library_scan(&library.id, &scan, false).await.unwrap();
+    let series = storage.list_series_by_library_id(&library.id).await.unwrap();
+    let book = storage.list_books_by_series_id(&series[0].id).await.unwrap().remove(0);
+    let media = analyze_book(&book, true, || false).unwrap();
+    storage.replace_media_analysis(&media).await.unwrap();
+    (temporary, storage, tasks, book, media)
 }
 
 #[tokio::test]
@@ -683,22 +706,7 @@ async fn content_queries_page_filter_restrict_and_navigate_books() {
 
 #[tokio::test]
 async fn cbz_pages_conversion_thumbnail_cache_and_manual_analysis_match_contract() {
-    let storage = Storage::connect_memory().await.unwrap();
-    let tasks = TaskStorage::connect_memory().await.unwrap();
-    let temporary = tempfile::tempdir().unwrap();
-    let root = temporary.path().join("library");
-    fs::create_dir_all(root.join("Series")).unwrap();
-    let fixture =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../komga/komga/src/test/resources/archives/zip.zip");
-    fs::copy(fixture, root.join("Series/Volume 1.cbz")).unwrap();
-    let library = Library::new("Library".into(), Url::from_directory_path(&root).unwrap());
-    storage.create_library(&library).await.unwrap();
-    let scan = scan_library_files(&library, || false).unwrap();
-    storage.apply_library_scan(&library.id, &scan, false).await.unwrap();
-    let series = storage.list_series_by_library_id(&library.id).await.unwrap();
-    let book = storage.list_books_by_series_id(&series[0].id).await.unwrap().remove(0);
-    let media = analyze_book(&book, true, || false).unwrap();
-    storage.replace_media_analysis(&media).await.unwrap();
+    let (_temporary, storage, tasks, book, media) = analyzed_media_fixture("archives/zip.zip", "Volume 1.cbz").await;
     let generated = generate_thumbnail(&book, &media, 300).unwrap();
     let thumbnail = ThumbnailBook {
         id: new_id(),
@@ -862,21 +870,7 @@ async fn cbz_pages_conversion_thumbnail_cache_and_manual_analysis_match_contract
 
 #[tokio::test]
 async fn pdf_pages_render_raw_and_negotiate_like_kotlin() {
-    let storage = Storage::connect_memory().await.unwrap();
-    let tasks = TaskStorage::connect_memory().await.unwrap();
-    let temporary = tempfile::tempdir().unwrap();
-    let root = temporary.path().join("library");
-    fs::create_dir_all(root.join("Series")).unwrap();
-    let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../komga/komga/src/test/resources/pdf/komga.pdf");
-    fs::copy(fixture, root.join("Series/Volume.pdf")).unwrap();
-    let library = Library::new("Library".into(), Url::from_directory_path(&root).unwrap());
-    storage.create_library(&library).await.unwrap();
-    let scan = scan_library_files(&library, || false).unwrap();
-    storage.apply_library_scan(&library.id, &scan, false).await.unwrap();
-    let series = storage.list_series_by_library_id(&library.id).await.unwrap();
-    let book = storage.list_books_by_series_id(&series[0].id).await.unwrap().remove(0);
-    let media = analyze_book(&book, true, || false).unwrap();
-    storage.replace_media_analysis(&media).await.unwrap();
+    let (_temporary, storage, tasks, book, _media) = analyzed_media_fixture("pdf/komga.pdf", "Volume.pdf").await;
 
     let app = build_app(AppState::new(storage, tasks).await.unwrap());
     assert_eq!(claim(&app).await.status(), StatusCode::OK);

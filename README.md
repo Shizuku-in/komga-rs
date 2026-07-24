@@ -84,5 +84,6 @@ RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 The workspace is split by responsibility:
 
 - `komga-core`: framework-free domain types and policy;
+- `komga-media`: filesystem media analysis, page extraction, and image processing;
 - `komga-storage`: SQLite schema compatibility and repositories;
 - `komga-server`: Axum routes, authentication, configuration, and process lifecycle.

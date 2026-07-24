@@ -23,9 +23,9 @@ pub use content::{
     StringOperator, WebLinkDto,
 };
 pub use media::{
-    BookPage, Dimension, ImageOutput, Media, MediaAnalysisError, MediaFile, MediaOperationError, MediaStatus, PageDto,
-    ThumbnailBook, TypedBytes, analyze_book, convert_image, extract_page, extract_raw_page, generate_thumbnail,
-    image_dimension, media_page_dtos,
+    BookPage, Dimension, EPUB_ASSET_SUBTYPE, EPUB_EXTENSION_CLASS, EPUB_MEDIA_TYPE, EPUB_PAGE_SUBTYPE, EpubTocEntry,
+    JPEG_MEDIA_TYPE, Media, MediaExtension, MediaExtensionEpub, MediaFile, MediaProfile, MediaStatus, PDF_MEDIA_TYPE,
+    R2Location, R2Locator, R2Text, RAR_MEDIA_TYPE, RAR4_MEDIA_TYPE, RAR5_MEDIA_TYPE, ThumbnailBook, ZIP_MEDIA_TYPE,
 };
 pub use scanner::{Book, ScanError, ScanResult, ScannedSeries, Series, scan_library_files};
 

@@ -45,4 +45,9 @@ The next dependency-ordered slice is EPUB media support:
 4. serve EPUB resources, pages, and covers through the existing media pipeline;
 5. extend persistence and HTTP contract tests with the Kotlin EPUB fixtures.
 
+Media processing is isolated in `komga-media`: archive, PDF, and image implementations depend on the lightweight
+models and profile classification in `komga-core`. EPUB-specific parsing can therefore be added without pulling
+format libraries into `komga-storage` or transport DTOs into the domain model. The storage layer already supports
+Kotlin's `MediaExtensionEpub` class name and gzip-compressed JSON representation for the EPUB fields listed above.
+
 The current ZIP, RAR, and PDF paths use linked Rust dependencies and do not require `7z`, `unzip`, `unrar`, Poppler, PDFium, or other host commands. RAR support uses `rars` with stable default features; encrypted and multi-volume archives retain Kotlin's unsupported status and error codes. PDF support uses Hayro for analysis, rendering, and single-page extraction and requires Rust 1.96.1 or newer; password-protected PDFs remain unsupported. The image pipeline decodes JPEG, PNG, GIF, WebP, BMP, TIFF, and ICO for dimensions and conversion; other detected image types can be served unchanged but cannot yet be converted into generated JPEG thumbnails.

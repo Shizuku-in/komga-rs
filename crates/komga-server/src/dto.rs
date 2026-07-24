@@ -7,7 +7,19 @@
 use std::collections::BTreeSet;
 
 use komga_core::{ScanInterval, SeriesCover};
-use serde::{Deserialize, Deserializer};
+use serde::{Deserialize, Deserializer, Serialize};
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct PageDto {
+    pub(crate) number: i32,
+    pub(crate) file_name: String,
+    pub(crate) media_type: String,
+    pub(crate) width: Option<i32>,
+    pub(crate) height: Option<i32>,
+    pub(crate) size_bytes: Option<i64>,
+    pub(crate) size: String,
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]

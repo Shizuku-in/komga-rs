@@ -1,5 +1,9 @@
 use chrono::NaiveDateTime;
-use komga_core::{BookPage, Dimension, Media, MediaFile, MediaStatus, ThumbnailBook};
+use flate2::{Compression, read::GzDecoder, write::GzEncoder};
+use komga_core::{
+    BookPage, Dimension, EPUB_EXTENSION_CLASS, Media, MediaExtension, MediaExtensionEpub, MediaFile, MediaStatus,
+    ThumbnailBook,
+};
 use sqlx::FromRow;
 
 use crate::{Result, Storage, StorageError};
@@ -13,6 +17,8 @@ struct MediaRow {
     comment: Option<String>,
     book_id: String,
     page_count: i32,
+    extension_class: Option<String>,
+    extension_value_blob: Option<Vec<u8>>,
     epub_divina_compatible: bool,
     epub_is_kepub: bool,
 }
@@ -60,6 +66,7 @@ impl Storage {
             r#"SELECT MEDIA_TYPE AS media_type, STATUS AS status,
                       CREATED_DATE AS created_date, LAST_MODIFIED_DATE AS last_modified_date,
                       COMMENT AS comment, BOOK_ID AS book_id, PAGE_COUNT AS page_count,
+                      EXTENSION_CLASS AS extension_class, EXTENSION_VALUE_BLOB AS extension_value_blob,
                       EPUB_DIVINA_COMPATIBLE AS epub_divina_compatible,
                       EPUB_IS_KEPUB AS epub_is_kepub
                  FROM MEDIA WHERE BOOK_ID = ?"#,
@@ -121,6 +128,7 @@ impl Storage {
     ///
     /// Returns a database error when any statement in the transaction fails.
     pub async fn replace_media_analysis(&self, media: &Media) -> Result<()> {
+        let (extension_class, extension_value_blob) = encode_media_extension(media.extension.as_ref())?;
         let mut tx = self.pool.begin().await?;
         let previous = sqlx::query_as::<_, (String, i32)>("SELECT STATUS, PAGE_COUNT FROM MEDIA WHERE BOOK_ID = ?")
             .bind(&media.book_id)
@@ -129,7 +137,7 @@ impl Storage {
         sqlx::query(
             r#"UPDATE MEDIA SET STATUS = ?, MEDIA_TYPE = ?, COMMENT = ?, PAGE_COUNT = ?,
                       EPUB_DIVINA_COMPATIBLE = ?, EPUB_IS_KEPUB = ?,
-                      EXTENSION_CLASS = NULL, EXTENSION_VALUE_BLOB = NULL,
+                      EXTENSION_CLASS = ?, EXTENSION_VALUE_BLOB = ?,
                       LAST_MODIFIED_DATE = CURRENT_TIMESTAMP
                  WHERE BOOK_ID = ?"#,
         )
@@ -139,6 +147,8 @@ impl Storage {
         .bind(media.page_count)
         .bind(media.epub_divina_compatible)
         .bind(media.epub_is_kepub)
+        .bind(extension_class)
+        .bind(extension_value_blob)
         .bind(&media.book_id)
         .execute(&mut *tx)
         .await?;
@@ -264,6 +274,7 @@ impl MediaRow {
             page_count: self.page_count,
             files,
             comment: self.comment,
+            extension: decode_media_extension(self.extension_class.as_deref(), self.extension_value_blob.as_deref()),
             book_id: self.book_id,
             epub_divina_compatible: self.epub_divina_compatible,
             epub_is_kepub: self.epub_is_kepub,
@@ -271,6 +282,31 @@ impl MediaRow {
             last_modified_date: Some(self.last_modified_date),
         })
     }
+}
+
+fn encode_media_extension(extension: Option<&MediaExtension>) -> Result<(Option<&'static str>, Option<Vec<u8>>)> {
+    let Some(extension) = extension else {
+        return Ok((None, None));
+    };
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+    match extension {
+        MediaExtension::Epub(value) => serde_json::to_writer(&mut encoder, value),
+    }
+    .map_err(|error| StorageError::InvalidData(format!("could not serialize media extension: {error}")))?;
+    let bytes = encoder
+        .finish()
+        .map_err(|error| StorageError::InvalidData(format!("could not compress media extension: {error}")))?;
+    Ok((Some(extension.class_name()), Some(bytes)))
+}
+
+fn decode_media_extension(extension_class: Option<&str>, bytes: Option<&[u8]>) -> Option<MediaExtension> {
+    if extension_class != Some(EPUB_EXTENSION_CLASS) {
+        return None;
+    }
+    let decoder = GzDecoder::new(bytes?);
+    serde_json::from_reader::<_, MediaExtensionEpub>(decoder)
+        .ok()
+        .map(MediaExtension::Epub)
 }
 
 impl PageRow {
@@ -322,7 +358,10 @@ impl ThumbnailRow {
 mod tests {
     use std::fs;
 
-    use komga_core::{Book, Library, ScanInterval, User, new_id, scan_library_files};
+    use komga_core::{
+        Book, EPUB_MEDIA_TYPE, EpubTocEntry, Library, R2Location, R2Locator, ScanInterval, User, new_id,
+        scan_library_files,
+    };
     use url::Url;
 
     use super::*;
@@ -368,6 +407,7 @@ mod tests {
                 file_size: Some(5),
             }],
             comment: None,
+            extension: None,
             book_id: book_id.into(),
             epub_divina_compatible: false,
             epub_is_kepub: false,
@@ -416,6 +456,52 @@ mod tests {
         .unwrap();
         assert!(progress.contains(&(completed.id, 2)));
         assert!(progress.contains(&(reading.id, 1)));
+    }
+
+    #[tokio::test]
+    async fn epub_extension_round_trips_with_kotlin_class_and_gzip_json() {
+        let storage = Storage::connect_memory().await.unwrap();
+        let temporary = tempfile::tempdir().unwrap();
+        let book = scanned_book(&storage, temporary.path()).await;
+        let extension = MediaExtensionEpub {
+            toc: vec![EpubTocEntry {
+                title: "Chapter 1".into(),
+                href: Some("text/chapter.xhtml".into()),
+                children: Vec::new(),
+            }],
+            is_fixed_layout: true,
+            positions: vec![R2Locator {
+                href: "text/chapter.xhtml".into(),
+                media_type: "application/xhtml+xml".into(),
+                title: Some("Chapter 1".into()),
+                locations: Some(R2Location {
+                    progression: Some(0.0),
+                    position: Some(1),
+                    total_progression: Some(1.0),
+                    ..Default::default()
+                }),
+                text: None,
+                kobo_span: Some("kobo.1.1".into()),
+            }],
+            ..Default::default()
+        };
+        let mut media = ready_media(&book.id);
+        media.media_type = Some(EPUB_MEDIA_TYPE.into());
+        media.extension = Some(MediaExtension::Epub(extension.clone()));
+
+        storage.replace_media_analysis(&media).await.unwrap();
+
+        let loaded = storage.find_media_by_book_id(&book.id).await.unwrap().unwrap();
+        assert_eq!(loaded.extension, Some(MediaExtension::Epub(extension)));
+        let (class_name, blob) = sqlx::query_as::<_, (String, Vec<u8>)>(
+            "SELECT EXTENSION_CLASS, EXTENSION_VALUE_BLOB FROM MEDIA WHERE BOOK_ID = ?",
+        )
+        .bind(&book.id)
+        .fetch_one(&storage.pool)
+        .await
+        .unwrap();
+        assert_eq!(class_name, EPUB_EXTENSION_CLASS);
+        assert!(blob.starts_with(&[0x1f, 0x8b]));
     }
 
     #[tokio::test]

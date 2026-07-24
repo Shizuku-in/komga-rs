@@ -1,6 +1,7 @@
 [workspace]
 members = [
   "crates/komga-core",
+  "crates/komga-media",
   "crates/komga-server",
   "crates/komga-storage",
 ]
@@ -24,6 +25,7 @@ clap = { version = "4.5", features = ["derive", "env"] }
 cookie = "0.18"
 dashmap = "6.1"
 futures-core = "0.3"
+flate2 = "1.1"
 hayro = "0.7.1"
 hayro-write = "0.7.0"
 headers-accept = "0.3.0"

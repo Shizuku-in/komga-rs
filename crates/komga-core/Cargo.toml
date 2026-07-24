@@ -7,13 +7,7 @@ rust-version.workspace = true
 
 [dependencies]
 chrono.workspace = true
-hayro.workspace = true
-hayro-write.workspace = true
-image.workspace = true
-infer.workspace = true
 natord.workspace = true
-pdf-writer.workspace = true
-rars.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
@@ -21,7 +15,6 @@ unicode-normalization.workspace = true
 uuid.workspace = true
 url.workspace = true
 walkdir.workspace = true
-zip.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

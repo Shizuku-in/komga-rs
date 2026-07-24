@@ -2,9 +2,9 @@ use std::collections::BTreeSet;
 
 use komga_core::{
     AllowExclude, AlternateTitleDto, AuthorDto, BookCondition, BookDto, BookMetadataAggregationDto, BookMetadataDto,
-    BookSearch, BooleanOperator, ContentPage, EqualityOperator, MediaDto, PageRequest, ReadProgressDto, ReadStatus,
-    ReadStatusOperator, SeriesCondition, SeriesDto, SeriesMetadataDto, SeriesSearch, SortDirection, StringOperator,
-    User, WebLinkDto,
+    BookSearch, BooleanOperator, ContentPage, EqualityOperator, MediaDto, MediaProfile, PageRequest, ReadProgressDto,
+    ReadStatus, ReadStatusOperator, SeriesCondition, SeriesDto, SeriesMetadataDto, SeriesSearch, SortDirection,
+    StringOperator, User, WebLinkDto,
 };
 use serde::Deserialize;
 use sqlx::{FromRow, QueryBuilder, Sqlite};
@@ -1002,15 +1002,7 @@ fn content_datetime(value: String) -> Result<String> {
 }
 
 fn media_profile(media_type: &str) -> &'static str {
-    match media_type {
-        "application/zip"
-        | "application/x-rar-compressed"
-        | "application/x-rar-compressed; version=4"
-        | "application/x-rar-compressed; version=5" => "DIVINA",
-        "application/pdf" => "PDF",
-        "application/epub+zip" => "EPUB",
-        _ => "",
-    }
+    MediaProfile::from_media_type(media_type).map_or("", MediaProfile::as_str)
 }
 
 fn binary_size(bytes: i64) -> Result<String> {

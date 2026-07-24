@@ -1539,13 +1539,7 @@ name = "komga-core"
 version = "0.1.0"
 dependencies = [
  "chrono",
- "hayro",
- "hayro-write",
- "image",
- "infer",
  "natord",
- "pdf-writer",
- "rars",
  "serde",
  "serde_json",
  "tempfile",
@@ -1554,6 +1548,24 @@ dependencies = [
  "url",
  "uuid",
  "walkdir",
+]
+
+[[package]]
+name = "komga-media"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "hayro",
+ "hayro-write",
+ "image",
+ "infer",
+ "komga-core",
+ "natord",
+ "pdf-writer",
+ "rars",
+ "tempfile",
+ "thiserror",
+ "url",
  "zip",
 ]
 
@@ -1576,6 +1588,7 @@ dependencies = [
  "http-body-util",
  "httpdate",
  "komga-core",
+ "komga-media",
  "komga-storage",
  "mediatype",
  "rand 0.9.5",
@@ -1598,6 +1611,7 @@ name = "komga-storage"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "flate2",
  "komga-core",
  "serde",
  "serde_json",

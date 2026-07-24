@@ -2,10 +2,8 @@
 
 use std::{collections::HashMap, time::Duration};
 
-use komga_core::{
-    MediaAnalysisError, MediaOperationError, MediaStatus, ScanError, ScanInterval, ThumbnailBook, analyze_book,
-    generate_thumbnail, image_dimension, new_id, scan_library_files,
-};
+use komga_core::{MediaStatus, ScanError, ScanInterval, ThumbnailBook, new_id, scan_library_files};
+use komga_media::{MediaAnalysisError, MediaOperationError, analyze_book, generate_thumbnail, image_dimension};
 use komga_storage::{StorageError, TaskRecord};
 use serde::Deserialize;
 use tokio::{task::JoinHandle, time::Instant};

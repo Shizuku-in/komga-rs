@@ -10,9 +10,10 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use headers_accept::Accept;
-use komga_core::{
-    Book, ImageOutput, Media, MediaOperationError, MediaStatus, PageDto, TypedBytes, UserRole, convert_image,
-    extract_page, extract_raw_page, media_page_dtos,
+use komga_core::{Book, Media, MediaProfile, MediaStatus, PDF_MEDIA_TYPE, UserRole};
+use komga_media::{
+    ImageOutput, MediaOperationError, TypedBytes, convert_image, extract_page, extract_raw_page, page_output_dimension,
+    page_output_media_type,
 };
 use komga_storage::TaskRecord;
 use mediatype::{
@@ -22,7 +23,10 @@ use mediatype::{
 use serde::Deserialize;
 use url::Url;
 
-use crate::{AppState, auth::AuthContext, content_routes::load_visible_book, error::ApiError, routes::require_admin};
+use crate::{
+    AppState, auth::AuthContext, content_routes::load_visible_book, dto::PageDto, error::ApiError,
+    routes::require_admin,
+};
 
 static APPLICATION_PDF: MediaType<'static> = MediaType::new(APPLICATION, PDF);
 static IMAGE_JPEG: MediaType<'static> = MediaType::new(IMAGE, JPEG);
@@ -76,7 +80,7 @@ pub(crate) async fn list_pages(
     load_visible_book(&state, &auth.user, &book_id).await?;
     let media = load_media(&state, &book_id).await?;
     ensure_pages_ready(&media)?;
-    Ok(Json(media_page_dtos(&media)))
+    Ok(Json(page_dtos(&media)))
 }
 
 pub(crate) async fn get_page(
@@ -99,7 +103,7 @@ pub(crate) async fn get_page(
     } else {
         page_number
     };
-    if query.content_negotiation && media.media_type.as_deref() == Some("application/pdf") && accepts_pdf(&headers) {
+    if query.content_negotiation && media.profile() == Some(MediaProfile::Pdf) && accepts_pdf(&headers) {
         let raw_book = book.clone();
         let raw_media = media.clone();
         let content = tokio::task::spawn_blocking(move || extract_raw_page(&raw_book, &raw_media, page_number))
@@ -189,7 +193,7 @@ pub(crate) async fn get_raw_page(
     if is_not_modified(&headers, &media) {
         return Ok(not_modified_response(&media));
     }
-    if media.media_type.as_deref() != Some("application/pdf") {
+    if media.profile() != Some(MediaProfile::Pdf) {
         return Err(ApiError::bad_request(
             "Extractor does not support raw extraction of pages",
         ));
@@ -311,6 +315,49 @@ fn accepts_pdf(headers: &HeaderMap) -> bool {
         .is_some_and(|media_type| media_type == &APPLICATION_PDF)
 }
 
+fn page_dtos(media: &Media) -> Vec<PageDto> {
+    media
+        .pages
+        .iter()
+        .enumerate()
+        .map(|(index, page)| {
+            let dimension = page_output_dimension(media, page);
+            PageDto {
+                number: i32::try_from(index + 1).unwrap_or(i32::MAX),
+                file_name: page.file_name.clone(),
+                media_type: page_output_media_type(media, page).to_owned(),
+                width: dimension.map(|value| value.width),
+                height: dimension.map(|value| value.height),
+                size_bytes: page.file_size,
+                size: page.file_size.map(binary_size).unwrap_or_default(),
+            }
+        })
+        .collect()
+}
+
+fn binary_size(bytes: i64) -> String {
+    if bytes < 0 {
+        return String::new();
+    }
+    const UNITS: [&str; 6] = ["B", "KiB", "MiB", "GiB", "TiB", "PiB"];
+    let mut value = bytes as f64;
+    let mut unit = 0;
+    while value >= 1024.0 && unit < UNITS.len() - 1 {
+        value /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{bytes} {}", UNITS[unit])
+    } else {
+        let rounded = (value * 10.0).round() / 10.0;
+        if rounded.fract() == 0.0 {
+            format!("{} {}", rounded as i64, UNITS[unit])
+        } else {
+            format!("{rounded:.1} {}", UNITS[unit])
+        }
+    }
+}
+
 fn content_response(content: TypedBytes, file_stem: &str, media: &Media) -> Response {
     let extension = match content.media_type.as_str() {
         "image/jpeg" => "jpg",
@@ -320,7 +367,7 @@ fn content_response(content: TypedBytes, file_stem: &str, media: &Media) -> Resp
         "image/bmp" => "bmp",
         "image/tiff" => "tiff",
         "image/vnd.microsoft.icon" => "ico",
-        "application/pdf" => "pdf",
+        PDF_MEDIA_TYPE => "pdf",
         _ => "bin",
     };
     let safe_name = file_stem
