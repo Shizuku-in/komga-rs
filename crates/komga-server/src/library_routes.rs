@@ -168,9 +168,9 @@ pub(crate) async fn create_library(
     validate_library(&library, &state.storage.list_libraries().await?)?;
     state.storage.create_library(&library).await?;
     state
-        .tasks
-        .save(&TaskRecord::scan_library(&library.id, false, 4))
+        .enqueue_task(&TaskRecord::scan_library(&library.id, false, 4))
         .await?;
+    state.library_schedule_changed();
     let created = state
         .storage
         .find_library_by_id(&library.id)
@@ -253,9 +253,11 @@ pub(crate) async fn update_library(
     state.storage.update_library(&updated).await?;
     if current.should_rescan(&updated) {
         state
-            .tasks
-            .save(&TaskRecord::scan_library(&library_id, false, 4))
+            .enqueue_task(&TaskRecord::scan_library(&library_id, false, 4))
             .await?;
+    }
+    if current.scan_interval != updated.scan_interval {
+        state.library_schedule_changed();
     }
     Ok(StatusCode::NO_CONTENT)
 }
@@ -267,7 +269,10 @@ pub(crate) async fn delete_library(
 ) -> Result<StatusCode, ApiError> {
     require_admin(&auth)?;
     match state.storage.delete_library_if_empty(&library_id).await? {
-        DeleteLibraryResult::Deleted => Ok(StatusCode::NO_CONTENT),
+        DeleteLibraryResult::Deleted => {
+            state.library_schedule_changed();
+            Ok(StatusCode::NO_CONTENT)
+        }
         DeleteLibraryResult::NotFound => Err(ApiError::not_found("Library not found")),
         DeleteLibraryResult::NotEmpty => Err(ApiError::conflict(
             "Deleting non-empty libraries is not supported in this migration stage",
@@ -290,8 +295,7 @@ pub(crate) async fn scan_library(
     require_admin(&auth)?;
     ensure_library_exists(&state, &library_id).await?;
     state
-        .tasks
-        .save(&TaskRecord::scan_library(&library_id, query.deep, 8))
+        .enqueue_task(&TaskRecord::scan_library(&library_id, query.deep, 8))
         .await?;
     Ok(StatusCode::ACCEPTED)
 }
@@ -303,7 +307,7 @@ pub(crate) async fn empty_trash(
 ) -> Result<StatusCode, ApiError> {
     require_admin(&auth)?;
     ensure_library_exists(&state, &library_id).await?;
-    state.tasks.save(&TaskRecord::empty_trash(&library_id, 6)).await?;
+    state.enqueue_task(&TaskRecord::empty_trash(&library_id, 6)).await?;
     Ok(StatusCode::ACCEPTED)
 }
 

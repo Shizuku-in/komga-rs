@@ -2,7 +2,7 @@
 
 An incremental Rust port of the [Komga](https://github.com/gotson/komga) backend. The Kotlin source checked out in `komga/` is the behavioral reference; the Rust implementation is a separate workspace at the repository root.
 
-> This is not yet a drop-in replacement for a complete Komga server. The implemented slices cover startup, SQLite, server claiming, sessions, API keys, users, library configuration, client settings, and persistent task enqueueing. See [the migration matrix](docs/MIGRATION.md) for exact coverage.
+> This is not yet a drop-in replacement for a complete Komga server. The implemented slices cover startup, SQLite, server claiming, sessions, API keys, users, library configuration, client settings, persistent task processing, and basic filesystem scanning. See [the migration matrix](docs/MIGRATION.md) for exact coverage.
 
 ## Run
 
@@ -58,10 +58,11 @@ Do not run the Kotlin and Rust servers against the same SQLite file at the same 
 - `PATCH|DELETE /api/v1/client-settings/user`
 - `GET /api/v1/oauth2/providers`
 - `DELETE /api/v1/tasks`
+- `GET /sse/v1/events`
 
 Authentication is compatible with the current Komga contract: HTTP Basic, `KOMGA-SESSION`, `X-Auth-Token`, and SHA-512-backed `X-API-Key`. Existing Spring BCrypt `$2a$` password hashes are accepted.
 
-Scan and empty-trash actions are persisted to `tasks.sqlite`, but this stage does not execute them yet. Library deletion is currently limited to empty libraries; deleting a library that still contains series, books, or sidecars returns `409 Conflict`.
+`ScanLibrary` tasks are executed in the background. They discover configured CBX/PDF/EPUB files and persist Kotlin-compatible Series, Book, Media, and initial metadata rows. Archive contents, pages, metadata providers, and thumbnails are not analyzed yet. `EmptyTrash` and other unported task types remain queued and unmodified. Library deletion is currently limited to empty libraries; deleting a library that still contains series, books, or sidecars returns `409 Conflict`.
 
 ## Develop
 

@@ -1,4 +1,4 @@
-use std::{path::Path, str::FromStr, time::Duration};
+use std::{collections::BTreeMap, path::Path, str::FromStr, time::Duration};
 
 use serde::Serialize;
 use sqlx::{
@@ -170,31 +170,87 @@ impl TaskStorage {
     ///
     /// Returns a database error when claiming fails.
     pub async fn take_first(&self, owner: &str) -> Result<Option<TaskRecord>> {
-        let mut tx = self.pool.begin().await?;
-        let task = sqlx::query_as::<_, TaskRecord>(
-            r#"SELECT ID AS id, PRIORITY AS priority, GROUP_ID AS group_id,
-                      CLASS AS class, SIMPLE_TYPE AS simple_type, PAYLOAD AS payload,
-                      OWNER AS owner
-                 FROM TASK
-                WHERE OWNER IS NULL
-                  AND (GROUP_ID IS NULL OR GROUP_ID NOT IN
-                      (SELECT GROUP_ID FROM TASK WHERE OWNER IS NOT NULL AND GROUP_ID IS NOT NULL))
-                ORDER BY PRIORITY DESC, LAST_MODIFIED_DATE
-                LIMIT 1"#,
+        self.take_first_matching(owner, None).await
+    }
+
+    /// Atomically claims the first task with the supplied simple type.
+    ///
+    /// Unsupported task rows remain unowned and untouched for a future port or
+    /// the Kotlin server.
+    ///
+    /// # Errors
+    ///
+    /// Returns a database error when claiming fails.
+    pub async fn take_first_of_type(&self, owner: &str, simple_type: &str) -> Result<Option<TaskRecord>> {
+        self.take_first_matching(owner, Some(simple_type)).await
+    }
+
+    async fn take_first_matching(&self, owner: &str, simple_type: Option<&str>) -> Result<Option<TaskRecord>> {
+        Ok(sqlx::query_as::<_, TaskRecord>(
+            r#"UPDATE TASK SET OWNER = ?
+                 WHERE ID = (
+                    SELECT ID FROM TASK
+                     WHERE OWNER IS NULL
+                       AND (? IS NULL OR SIMPLE_TYPE = ?)
+                       AND (GROUP_ID IS NULL OR GROUP_ID NOT IN
+                           (SELECT GROUP_ID FROM TASK WHERE OWNER IS NOT NULL AND GROUP_ID IS NOT NULL))
+                     ORDER BY PRIORITY DESC, LAST_MODIFIED_DATE
+                     LIMIT 1
+                 )
+                   AND OWNER IS NULL
+             RETURNING ID AS id, PRIORITY AS priority, GROUP_ID AS group_id,
+                       CLASS AS class, SIMPLE_TYPE AS simple_type, PAYLOAD AS payload,
+                       OWNER AS owner"#,
         )
-        .fetch_optional(&mut *tx)
-        .await?;
-        let Some(mut task) = task else {
-            return Ok(None);
-        };
-        sqlx::query("UPDATE TASK SET OWNER = ? WHERE ID = ? AND OWNER IS NULL")
+        .bind(owner)
+        .bind(simple_type)
+        .bind(simple_type)
+        .fetch_optional(&self.pool)
+        .await?)
+    }
+
+    /// Deletes a completed task by ID.
+    ///
+    /// # Errors
+    ///
+    /// Returns a database error when deletion fails.
+    pub async fn delete(&self, task_id: &str) -> Result<bool> {
+        Ok(sqlx::query("DELETE FROM TASK WHERE ID = ?")
+            .bind(task_id)
+            .execute(&self.pool)
+            .await?
+            .rows_affected()
+            == 1)
+    }
+
+    /// Releases a task only when it is owned by the supplied worker.
+    ///
+    /// # Errors
+    ///
+    /// Returns a database error when the update fails.
+    pub async fn release(&self, task_id: &str, owner: &str) -> Result<bool> {
+        Ok(sqlx::query("UPDATE TASK SET OWNER = NULL WHERE ID = ? AND OWNER = ?")
+            .bind(task_id)
             .bind(owner)
-            .bind(&task.id)
-            .execute(&mut *tx)
-            .await?;
-        tx.commit().await?;
-        task.owner = Some(owner.to_owned());
-        Ok(Some(task))
+            .execute(&self.pool)
+            .await?
+            .rows_affected()
+            == 1)
+    }
+
+    /// Counts all queued tasks by Kotlin simple type.
+    ///
+    /// # Errors
+    ///
+    /// Returns a database error when the query fails.
+    pub async fn count_by_simple_type(&self) -> Result<BTreeMap<String, i64>> {
+        Ok(sqlx::query_as::<_, (String, i64)>(
+            "SELECT SIMPLE_TYPE, count(*) FROM TASK GROUP BY SIMPLE_TYPE ORDER BY SIMPLE_TYPE",
+        )
+        .fetch_all(&self.pool)
+        .await?
+        .into_iter()
+        .collect())
     }
 
     /// Deletes every task not currently owned and returns the affected count.

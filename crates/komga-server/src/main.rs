@@ -40,11 +40,21 @@ async fn main() -> anyhow::Result<()> {
         .await
         .with_context(|| format!("failed to bind {address}"))?;
 
+    let state = AppState::new(storage, tasks).await?;
+    let runtime = state.start_runtime().await?;
+    let signal_shutdown = runtime.shutdown_handle();
+    let server_shutdown = runtime.shutdown_handle();
+    tokio::spawn(async move {
+        shutdown_signal().await;
+        signal_shutdown.cancel();
+    });
+
     tracing::info!(%address, database = %database_file.display(), tasks_database = %tasks_database_file.display(), "Komga Rust backend listening");
-    axum::serve(listener, build_app(AppState::new(storage, tasks).await?))
-        .with_graceful_shutdown(shutdown_signal())
-        .await
-        .context("HTTP server failed")
+    let result = axum::serve(listener, build_app(state))
+        .with_graceful_shutdown(server_shutdown.cancelled_owned())
+        .await;
+    runtime.shutdown().await;
+    result.context("HTTP server failed")
 }
 
 async fn shutdown_signal() {

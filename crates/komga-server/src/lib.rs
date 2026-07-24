@@ -14,9 +14,12 @@ mod error;
 mod filesystem_routes;
 mod library_routes;
 mod routes;
+mod runtime;
 mod settings_routes;
+mod sse_routes;
 
 pub use auth::{REMEMBER_ME_COOKIE, SESSION_COOKIE, SESSION_HEADER};
+pub use runtime::{AppRuntime, ShutdownHandle};
 
 use std::sync::Arc;
 
@@ -27,8 +30,9 @@ use axum::{
     middleware,
     routing::{delete, get, patch, post},
 };
-use komga_storage::{Storage, StorageError, TaskStorage};
-use tokio::sync::Mutex;
+use komga_storage::{Storage, StorageError, TaskRecord, TaskStorage};
+use tokio::sync::{Mutex, Notify};
+use tokio_util::sync::CancellationToken;
 use tower_http::{
     cors::CorsLayer,
     request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer},
@@ -46,6 +50,9 @@ pub struct AppState {
     tasks: TaskStorage,
     sessions: SessionStore,
     claim_lock: Arc<Mutex<()>>,
+    task_notify: Arc<Notify>,
+    schedule_notify: Arc<Notify>,
+    shutdown: CancellationToken,
 }
 
 impl AppState {
@@ -61,7 +68,20 @@ impl AppState {
             tasks,
             sessions: SessionStore::new(remember_me_duration_days),
             claim_lock: Arc::new(Mutex::new(())),
+            task_notify: Arc::new(Notify::new()),
+            schedule_notify: Arc::new(Notify::new()),
+            shutdown: CancellationToken::new(),
         })
+    }
+
+    pub(crate) async fn enqueue_task(&self, task: &TaskRecord) -> Result<(), StorageError> {
+        self.tasks.save(task).await?;
+        self.task_notify.notify_waiters();
+        Ok(())
+    }
+
+    pub(crate) fn library_schedule_changed(&self) {
+        self.schedule_notify.notify_one();
     }
 }
 
@@ -121,6 +141,7 @@ pub fn build_app(state: AppState) -> Router {
             patch(settings_routes::save_user_settings).delete(settings_routes::delete_user_settings),
         )
         .route("/api/v1/tasks", delete(settings_routes::clear_tasks))
+        .route("/sse/v1/events", get(sse_routes::events))
         .route_layer(middleware::from_fn_with_state(state.clone(), auth::require_auth));
 
     Router::new()

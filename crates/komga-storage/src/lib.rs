@@ -7,11 +7,13 @@
 
 #![warn(missing_docs)]
 
+mod content;
 mod library;
 mod schema;
 mod settings;
 mod tasks;
 
+pub use content::ScanApplyStats;
 pub use library::DeleteLibraryResult;
 pub use settings::ClientSetting;
 pub use tasks::{TaskRecord, TaskStorage};
@@ -657,8 +659,10 @@ fn is_unique_violation(error: &sqlx::Error) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use super::*;
-    use komga_core::{ALL_ROLES, Library, ScanInterval, new_id};
+    use komga_core::{ALL_ROLES, Library, ScanInterval, new_id, scan_library_files};
     use url::Url;
 
     #[tokio::test]
@@ -875,24 +879,110 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn supported_task_claims_leave_unported_tasks_untouched() {
+        let tasks = TaskStorage::connect_memory().await.unwrap();
+        tasks.save(&TaskRecord::empty_trash("library", 8)).await.unwrap();
+        tasks
+            .save(&TaskRecord::scan_library("library", false, 4))
+            .await
+            .unwrap();
+
+        let scan = tasks
+            .take_first_of_type("worker", "ScanLibrary")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(scan.simple_type, "ScanLibrary");
+        assert!(
+            tasks
+                .take_first_of_type("other", "ScanLibrary")
+                .await
+                .unwrap()
+                .is_none()
+        );
+        let counts = tasks.count_by_simple_type().await.unwrap();
+        assert_eq!(counts["EmptyTrash"], 1);
+        assert_eq!(counts["ScanLibrary"], 1);
+        assert!(tasks.release(&scan.id, "worker").await.unwrap());
+        assert!(tasks.delete(&scan.id).await.unwrap());
+        assert_eq!(tasks.list().await.unwrap()[0].simple_type, "EmptyTrash");
+    }
+
+    #[tokio::test]
+    async fn scan_snapshots_preserve_ids_update_media_and_soft_delete_missing_content() {
+        let storage = Storage::connect_memory().await.unwrap();
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("library");
+        let series_directory = root.join("Series");
+        fs::create_dir_all(&series_directory).unwrap();
+        let book_path = series_directory.join("Volume 1.cbz");
+        fs::write(&book_path, [1_u8]).unwrap();
+        let library = Library::new("Library".into(), Url::from_directory_path(&root).unwrap());
+        storage.create_library(&library).await.unwrap();
+
+        let first_scan = scan_library_files(&library, || false).unwrap();
+        let first_stats = storage
+            .apply_library_scan(&library.id, &first_scan, false)
+            .await
+            .unwrap();
+        assert_eq!(first_stats.series_added, 1);
+        assert_eq!(first_stats.books_added, 1);
+        let original_series = storage.list_series_by_library_id(&library.id).await.unwrap()[0].clone();
+        let original_book = storage.list_books_by_series_id(&original_series.id).await.unwrap()[0].clone();
+
+        let unchanged = scan_library_files(&library, || false).unwrap();
+        assert_eq!(
+            storage.apply_library_scan(&library.id, &unchanged, true).await.unwrap(),
+            ScanApplyStats::default()
+        );
+        assert_eq!(
+            storage.list_series_by_library_id(&library.id).await.unwrap()[0].id,
+            original_series.id
+        );
+        assert_eq!(
+            storage.list_books_by_series_id(&original_series.id).await.unwrap()[0].id,
+            original_book.id
+        );
+
+        fs::write(&book_path, [1_u8, 2, 3]).unwrap();
+        let changed = scan_library_files(&library, || false).unwrap();
+        let changed_stats = storage.apply_library_scan(&library.id, &changed, true).await.unwrap();
+        assert_eq!(changed_stats.books_updated, 1);
+        assert_eq!(
+            sqlx::query_scalar::<_, String>("SELECT STATUS FROM MEDIA WHERE BOOK_ID = ?")
+                .bind(&original_book.id)
+                .fetch_one(storage.pool())
+                .await
+                .unwrap(),
+            "OUTDATED"
+        );
+
+        fs::remove_file(book_path).unwrap();
+        let empty = scan_library_files(&library, || false).unwrap();
+        let deleted_stats = storage.apply_library_scan(&library.id, &empty, false).await.unwrap();
+        assert_eq!(deleted_stats.books_deleted, 1);
+        assert_eq!(deleted_stats.series_deleted, 1);
+        assert!(
+            storage.list_series_by_library_id(&library.id).await.unwrap()[0]
+                .deleted_date
+                .is_some()
+        );
+        assert!(
+            storage.list_books_by_series_id(&original_series.id).await.unwrap()[0]
+                .deleted_date
+                .is_some()
+        );
+    }
+
+    #[tokio::test]
     async fn non_empty_library_deletion_is_guarded() {
         let storage = Storage::connect_memory().await.unwrap();
         let root = tempfile::tempdir().unwrap();
         let library = Library::new("Library".into(), Url::from_file_path(root.path()).unwrap());
         storage.create_library(&library).await.unwrap();
-        sqlx::raw_sql(
-            r#"
-            CREATE TABLE SERIES (
-                ID varchar NOT NULL PRIMARY KEY,
-                LIBRARY_ID varchar NOT NULL,
-                FOREIGN KEY (LIBRARY_ID) REFERENCES LIBRARY (ID)
-            );
-            "#,
+        sqlx::query(
+            "INSERT INTO SERIES (ID, FILE_LAST_MODIFIED, NAME, URL, LIBRARY_ID) VALUES ('series', CURRENT_TIMESTAMP, 'Series', 'file:/tmp/series', ?)",
         )
-        .execute(storage.pool())
-        .await
-        .unwrap();
-        sqlx::query("INSERT INTO SERIES (ID, LIBRARY_ID) VALUES ('series', ?)")
             .bind(&library.id)
             .execute(storage.pool())
             .await

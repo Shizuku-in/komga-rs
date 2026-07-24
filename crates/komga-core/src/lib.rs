@@ -6,11 +6,15 @@
 
 #![warn(missing_docs)]
 
+mod scanner;
+
 use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
 use url::Url;
 use uuid::Uuid;
+
+pub use scanner::{Book, ScanError, ScanResult, ScannedSeries, Series, scan_library_files};
 
 /// Every application role recognized by the current Komga compatibility layer.
 ///

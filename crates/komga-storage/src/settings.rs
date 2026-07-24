@@ -179,4 +179,23 @@ impl Storage {
             .filter(|value| *value > 0)
             .unwrap_or(365))
     }
+
+    /// Reads the configured task worker pool size.
+    ///
+    /// Missing, zero, negative, or malformed values use Kotlin's default of one.
+    ///
+    /// # Errors
+    ///
+    /// Returns a database error when the setting cannot be queried.
+    pub async fn task_pool_size(&self) -> Result<usize> {
+        let value =
+            sqlx::query_scalar::<_, Option<String>>("SELECT VALUE FROM SERVER_SETTINGS WHERE KEY = 'TASK_POOL_SIZE'")
+                .fetch_optional(&self.pool)
+                .await?
+                .flatten();
+        Ok(value
+            .and_then(|value| value.parse::<usize>().ok())
+            .filter(|value| *value > 0)
+            .unwrap_or(1))
+    }
 }
