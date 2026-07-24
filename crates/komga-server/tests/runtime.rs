@@ -6,7 +6,7 @@ use komga_storage::{Storage, TaskRecord, TaskStorage};
 use url::Url;
 
 #[tokio::test]
-async fn startup_scheduler_analyzes_cbz_cbr_and_pdf_generates_thumbnails_and_preserves_unported_tasks() {
+async fn startup_scheduler_analyzes_supported_media_generates_thumbnails_and_preserves_unported_tasks() {
     let storage = Storage::connect_memory().await.unwrap();
     let tasks = TaskStorage::connect_memory().await.unwrap();
     let temporary = tempfile::tempdir().unwrap();
@@ -18,9 +18,12 @@ async fn startup_scheduler_analyzes_cbz_cbr_and_pdf_generates_thumbnails_and_pre
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../komga/komga/src/test/resources/archives/rar4-solid.rar");
     let pdf_fixture =
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../komga/komga/src/test/resources/pdf/komga.pdf");
+    let epub_fixture =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../komga/komga/src/test/resources/archives/epub3.epub");
     fs::copy(zip_fixture, root.join("Series/Volume 1.cbz")).unwrap();
     fs::copy(rar_fixture, root.join("Series/Volume 2.cbr")).unwrap();
     fs::copy(pdf_fixture, root.join("Series/Volume 3.pdf")).unwrap();
+    fs::copy(epub_fixture, root.join("Series/Volume 4.epub")).unwrap();
     let mut library = Library::new("Runtime".into(), Url::from_directory_path(&root).unwrap());
     library.scan_on_startup = true;
     library.scan_interval = ScanInterval::Disabled;
@@ -34,7 +37,7 @@ async fn startup_scheduler_analyzes_cbz_cbr_and_pdf_generates_thumbnails_and_pre
             let series = storage.list_series_by_library_id(&library.id).await.unwrap();
             if let Some(series) = series.first() {
                 let books = storage.list_books_by_series_id(&series.id).await.unwrap();
-                if books.len() == 3 {
+                if books.len() == 4 {
                     let mut complete = true;
                     for book in &books {
                         complete &= storage
@@ -58,7 +61,7 @@ async fn startup_scheduler_analyzes_cbz_cbr_and_pdf_generates_thumbnails_and_pre
     let series = storage.list_series_by_library_id(&library.id).await.unwrap();
     assert_eq!(series.len(), 1);
     let books = storage.list_books_by_series_id(&series[0].id).await.unwrap();
-    assert_eq!(books.len(), 3);
+    assert_eq!(books.len(), 4);
     let zip_media = storage.find_media_by_book_id(&books[0].id).await.unwrap().unwrap();
     assert_eq!(zip_media.pages[0].file_name, "komga.png");
     assert_eq!(
@@ -83,6 +86,14 @@ async fn startup_scheduler_analyzes_cbz_cbr_and_pdf_generates_thumbnails_and_pre
             height: 512
         })
     );
+    let epub_media = storage.find_media_by_book_id(&books[3].id).await.unwrap().unwrap();
+    assert_eq!(epub_media.media_type.as_deref(), Some("application/epub+zip"));
+    assert_eq!(epub_media.page_count, 2);
+    assert!(epub_media.epub_divina_compatible);
+    assert!(matches!(
+        epub_media.extension,
+        Some(komga_core::MediaExtension::Epub(_))
+    ));
     for book in &books {
         let thumbnail = storage.find_selected_book_thumbnail(&book.id).await.unwrap().unwrap();
         assert_eq!(thumbnail.thumbnail_type, "GENERATED");

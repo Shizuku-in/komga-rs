@@ -6,7 +6,7 @@
 
 use std::collections::BTreeSet;
 
-use komga_core::{ScanInterval, SeriesCover};
+use komga_core::{R2Locator, ScanInterval, SeriesCover};
 use serde::{Deserialize, Deserializer, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -19,6 +19,12 @@ pub(crate) struct PageDto {
     pub(crate) height: Option<i32>,
     pub(crate) size_bytes: Option<i64>,
     pub(crate) size: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub(crate) struct PositionsDto {
+    pub(crate) total: i32,
+    pub(crate) positions: Vec<R2Locator>,
 }
 
 #[derive(Debug, Deserialize)]

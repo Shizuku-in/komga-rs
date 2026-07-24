@@ -10,9 +10,10 @@ use komga_media::{analyze_book, generate_thumbnail, image_dimension};
 use komga_server::{AppState, REMEMBER_ME_COOKIE, SESSION_COOKIE, SESSION_HEADER, build_app};
 use komga_storage::{Storage, TaskStorage};
 use serde_json::Value;
-use std::{fs, path::PathBuf, time::Duration};
+use std::{fs, fs::File, io::Write, path::PathBuf, time::Duration};
 use tower::ServiceExt;
 use url::Url;
+use zip::{ZipWriter, write::SimpleFileOptions};
 
 async fn test_app() -> Router {
     app_with_storage(Storage::connect_memory().await.unwrap()).await
@@ -866,6 +867,212 @@ async fn cbz_pages_conversion_thumbnail_cache_and_manual_analysis_match_contract
     assert_eq!(queued[0].simple_type, "AnalyzeBook");
     assert_eq!(queued[0].group_id.as_deref(), Some(book.series_id.as_str()));
     assert_eq!(queued[0].priority, 6);
+}
+
+#[tokio::test]
+async fn epub_pages_resources_positions_and_cache_match_contract() {
+    let (_temporary, storage, tasks, book, media) = analyzed_media_fixture("archives/epub3.epub", "Volume.epub").await;
+    assert!(media.epub_divina_compatible);
+    let app = build_app(AppState::new(storage, tasks).await.unwrap());
+    assert_eq!(claim(&app).await.status(), StatusCode::OK);
+    let admin = basic("admin@example.org", "password");
+
+    let unauthorized_resource = app
+        .clone()
+        .oneshot(
+            Request::get(format!("/api/v1/books/{}/resource/nav.xhtml", book.id))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(unauthorized_resource.status(), StatusCode::UNAUTHORIZED);
+
+    let resource = app
+        .clone()
+        .oneshot(
+            Request::get(format!("/api/v1/books/{}/resource/nav.xhtml", book.id))
+                .header(header::AUTHORIZATION, &admin)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resource.status(), StatusCode::OK);
+    assert_eq!(resource.headers()[header::CONTENT_TYPE], "application/xhtml+xml");
+    assert_eq!(
+        resource.headers()[header::CONTENT_SECURITY_POLICY],
+        "script-src 'none'; object-src 'none';"
+    );
+    assert!(
+        resource.headers()[header::CONTENT_DISPOSITION]
+            .to_str()
+            .unwrap()
+            .contains("nav.xhtml")
+    );
+    let last_modified = resource.headers()[header::LAST_MODIFIED].to_str().unwrap().to_owned();
+    assert!(
+        body_bytes(resource)
+            .await
+            .windows(10)
+            .any(|bytes| bytes == b"Navigation")
+    );
+
+    let cached_resource = app
+        .clone()
+        .oneshot(
+            Request::get(format!("/api/v1/books/{}/resource/nav.xhtml", book.id))
+                .header(header::AUTHORIZATION, &admin)
+                .header(header::IF_MODIFIED_SINCE, &last_modified)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(cached_resource.status(), StatusCode::NOT_MODIFIED);
+    assert_eq!(
+        cached_resource.headers()[header::CONTENT_SECURITY_POLICY],
+        "script-src 'none'; object-src 'none';"
+    );
+
+    let missing_resource = app
+        .clone()
+        .oneshot(
+            Request::get(format!("/api/v1/books/{}/resource/META-INF/container.xml", book.id))
+                .header(header::AUTHORIZATION, &admin)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(missing_resource.status(), StatusCode::NOT_FOUND);
+
+    let positions = app
+        .clone()
+        .oneshot(
+            Request::get(format!("/api/v1/books/{}/positions", book.id))
+                .header(header::AUTHORIZATION, &admin)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(positions.status(), StatusCode::OK);
+    assert_eq!(
+        positions.headers()[header::CONTENT_TYPE],
+        "application/vnd.readium.position-list+json"
+    );
+    let positions_last_modified = positions.headers()[header::LAST_MODIFIED].to_str().unwrap().to_owned();
+    let positions = body_json(positions).await;
+    assert_eq!(positions["total"], 2);
+    assert_eq!(positions["positions"][0]["href"], "titlepage.xhtml");
+    assert_eq!(positions["positions"][1]["locations"]["totalProgression"], 1.0);
+
+    let cached_positions = app
+        .clone()
+        .oneshot(
+            Request::get(format!("/api/v1/books/{}/positions", book.id))
+                .header(header::AUTHORIZATION, &admin)
+                .header(header::IF_MODIFIED_SINCE, positions_last_modified)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(cached_positions.status(), StatusCode::NOT_MODIFIED);
+
+    let pages = app
+        .clone()
+        .oneshot(
+            Request::get(format!("/api/v1/books/{}/pages", book.id))
+                .header(header::AUTHORIZATION, &admin)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(pages.status(), StatusCode::OK);
+    let pages = body_json(pages).await;
+    assert_eq!(pages.as_array().unwrap().len(), 2);
+    assert_eq!(pages[0]["fileName"], "cover.jpeg");
+
+    let page = app
+        .oneshot(
+            Request::get(format!("/api/v1/books/{}/pages/2", book.id))
+                .header(header::AUTHORIZATION, admin)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(page.status(), StatusCode::OK);
+    assert_eq!(page.headers()[header::CONTENT_TYPE], "image/png");
+    assert!(body_bytes(page).await.starts_with(b"\x89PNG"));
+}
+
+#[tokio::test]
+async fn epub_fonts_are_anonymous_but_document_resources_require_authentication() {
+    let storage = Storage::connect_memory().await.unwrap();
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path().join("library");
+    fs::create_dir_all(root.join("Series")).unwrap();
+    let path = root.join("Series/Fonts.epub");
+    let mut writer = ZipWriter::new(File::create(&path).unwrap());
+    let options = SimpleFileOptions::default();
+    writer.start_file("mimetype", options).unwrap();
+    writer.write_all(b"application/epub+zip").unwrap();
+    writer.start_file("META-INF/container.xml", options).unwrap();
+    writer
+        .write_all(
+            br#"<?xml version="1.0"?><container xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#,
+        )
+        .unwrap();
+    writer.start_file("content.opf", options).unwrap();
+    writer
+        .write_all(
+            br#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0"><metadata/><manifest><item id="page" href="page.xhtml" media-type="application/xhtml+xml"/><item id="font" href="font.ttf" media-type="font/ttf"/></manifest><spine><itemref idref="page"/></spine></package>"#,
+        )
+        .unwrap();
+    writer.start_file("page.xhtml", options).unwrap();
+    writer
+        .write_all(b"<html><body>reflowable document content</body></html>")
+        .unwrap();
+    writer.start_file("font.ttf", options).unwrap();
+    writer.write_all(b"fixture-font").unwrap();
+    writer.finish().unwrap();
+
+    let library = Library::new("Library".into(), Url::from_directory_path(&root).unwrap());
+    storage.create_library(&library).await.unwrap();
+    let scan = scan_library_files(&library, || false).unwrap();
+    storage.apply_library_scan(&library.id, &scan, false).await.unwrap();
+    let series = storage.list_series_by_library_id(&library.id).await.unwrap();
+    let book = storage.list_books_by_series_id(&series[0].id).await.unwrap().remove(0);
+    let media = analyze_book(&book, false, || false).unwrap();
+    storage.replace_media_analysis(&media).await.unwrap();
+    let app = app_with_storage(storage).await;
+
+    let font = app
+        .clone()
+        .oneshot(
+            Request::get(format!("/api/v1/books/{}/resource/font.ttf", book.id))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(font.status(), StatusCode::OK);
+    assert_eq!(font.headers()[header::CONTENT_TYPE], "font/ttf");
+    assert_eq!(body_bytes(font).await, b"fixture-font");
+
+    let document = app
+        .oneshot(
+            Request::get(format!("/api/v1/books/{}/resource/page.xhtml", book.id))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(document.status(), StatusCode::UNAUTHORIZED);
 }
 
 #[tokio::test]

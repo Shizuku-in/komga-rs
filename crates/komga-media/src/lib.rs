@@ -6,11 +6,12 @@ use std::io;
 use thiserror::Error;
 
 use komga_core::{
-    Book, BookPage, Dimension, EPUB_MEDIA_TYPE, JPEG_MEDIA_TYPE as PDF_IMAGE_MEDIA_TYPE, Media, MediaProfile,
-    MediaStatus, PDF_MEDIA_TYPE, ZIP_MEDIA_TYPE,
+    Book, BookPage, Dimension, EPUB_MEDIA_TYPE, JPEG_MEDIA_TYPE, Media, MediaProfile, MediaStatus, PDF_MEDIA_TYPE,
+    ZIP_MEDIA_TYPE,
 };
 
 mod archive;
+mod epub;
 mod image_ops;
 mod pdf;
 
@@ -60,6 +61,12 @@ pub enum MediaOperationError {
     /// The requested one-based page number is outside the book.
     #[error("page number does not exist")]
     PageOutOfBounds,
+    /// The requested operation is not supported by this media profile.
+    #[error("book media profile does not support this operation")]
+    UnsupportedProfile,
+    /// The requested analyzed resource does not exist.
+    #[error("book resource does not exist")]
+    ResourceNotFound,
     /// The source file or archive entry could not be read.
     #[error("could not read book content: {0}")]
     Read(String),
@@ -70,9 +77,8 @@ pub enum MediaOperationError {
 
 /// Detects and analyzes a book using Kotlin-compatible media state transitions.
 ///
-/// ZIP/CBZ, RAR/CBR, and PDF books are analyzed without external commands.
-/// Recognized EPUB and other formats remain unsupported until their extractors
-/// are introduced.
+/// ZIP/CBZ, RAR/CBR, PDF, and EPUB books are analyzed without external
+/// commands.
 ///
 /// # Errors
 ///
@@ -91,7 +97,7 @@ pub fn analyze_book(
             return Ok(Media::result(&book.id, MediaStatus::Error, None, Some("ERR_1005")));
         }
     };
-    let detected = match infer::get_from_path(&path) {
+    let mut detected = match infer::get_from_path(&path) {
         Ok(Some(kind)) => archive::normalize_media_type(kind.mime_type()).to_owned(),
         Ok(None) => "application/octet-stream".to_owned(),
         Err(error) => {
@@ -108,12 +114,31 @@ pub fn analyze_book(
         .extension()
         .and_then(|value| value.to_str())
         .is_some_and(|value| value.eq_ignore_ascii_case("epub"))
+        && detected != EPUB_MEDIA_TYPE
     {
-        return Ok(if detected == EPUB_MEDIA_TYPE {
-            Media::result(&book.id, MediaStatus::Unsupported, Some(detected), Some("ERR_1001"))
+        if epub::is_epub(&path) {
+            detected = EPUB_MEDIA_TYPE.to_owned();
         } else {
-            Media::result(&book.id, MediaStatus::Error, Some(detected), Some("ERR_1032"))
-        });
+            return Ok(Media::result(
+                &book.id,
+                MediaStatus::Error,
+                Some(detected),
+                Some("ERR_1032"),
+            ));
+        }
+    }
+
+    if detected == EPUB_MEDIA_TYPE {
+        return match epub::analyze(&path, &book.id, analyze_dimensions, cancelled) {
+            Ok(media) => Ok(media),
+            Err(epub::AnalysisError::Cancelled) => Err(MediaAnalysisError::Cancelled),
+            Err(epub::AnalysisError::Invalid) => Ok(Media::result(
+                &book.id,
+                MediaStatus::Error,
+                Some(EPUB_MEDIA_TYPE.to_owned()),
+                Some("ERR_1005"),
+            )),
+        };
     }
 
     if detected == PDF_MEDIA_TYPE {
@@ -197,7 +222,7 @@ pub fn analyze_book(
 /// PDF pages are persisted without an image media type and render as JPEG.
 pub fn page_output_media_type<'a>(media: &Media, page: &'a BookPage) -> &'a str {
     if media.profile() == Some(MediaProfile::Pdf) {
-        PDF_IMAGE_MEDIA_TYPE
+        JPEG_MEDIA_TYPE
     } else {
         &page.media_type
     }
@@ -214,7 +239,8 @@ pub fn page_output_dimension(media: &Media, page: &BookPage) -> Option<Dimension
     }
 }
 
-/// Extracts one rasterized page from a ready ZIP-, RAR-, or PDF-backed record.
+/// Extracts one rasterized page from a ready ZIP-, RAR-, PDF-, or fixed-layout
+/// EPUB-backed record.
 ///
 /// # Errors
 ///
@@ -235,8 +261,20 @@ pub fn extract_page(book: &Book, media: &Media, page_number: i32) -> Result<Type
         .url
         .to_file_path()
         .map_err(|()| MediaOperationError::Read("book URL is not a file URL".to_owned()))?;
-    if media.profile() == Some(MediaProfile::Pdf) {
-        return pdf::render_page(&path, usize::try_from(page_number - 1).unwrap_or(usize::MAX));
+    match media.profile() {
+        Some(MediaProfile::Pdf) => {
+            return pdf::render_page(&path, usize::try_from(page_number - 1).unwrap_or(usize::MAX));
+        }
+        Some(MediaProfile::Epub) if media.epub_divina_compatible => {
+            return epub::extract(&path, &page.file_name)
+                .map(|bytes| TypedBytes {
+                    bytes,
+                    media_type: page.media_type.clone(),
+                })
+                .map_err(MediaOperationError::Read);
+        }
+        Some(MediaProfile::Epub) => return Err(MediaOperationError::UnsupportedProfile),
+        _ => {}
     }
     let bytes = match media.media_type.as_deref() {
         Some(ZIP_MEDIA_TYPE) => archive::extract_zip_entry(&path, &page.file_name)?,
@@ -248,6 +286,41 @@ pub fn extract_page(book: &Book, media: &Media, page_number: i32) -> Result<Type
     Ok(TypedBytes {
         bytes,
         media_type: page.media_type.clone(),
+    })
+}
+
+/// Extracts one declared resource from a ready EPUB.
+///
+/// Resource names must exactly match an analyzed `MEDIA_FILE` entry. This
+/// prevents callers from using the API as an unrestricted ZIP reader.
+///
+/// # Errors
+///
+/// Returns an error when the media is not ready, is not EPUB, the resource was
+/// not declared during analysis, or the archive entry cannot be read.
+pub fn extract_resource(book: &Book, media: &Media, resource: &str) -> Result<TypedBytes, MediaOperationError> {
+    if media.status != MediaStatus::Ready {
+        return Err(MediaOperationError::NotReady);
+    }
+    if media.profile() != Some(MediaProfile::Epub) {
+        return Err(MediaOperationError::UnsupportedProfile);
+    }
+    let file = media
+        .files
+        .iter()
+        .find(|file| file.file_name == resource)
+        .ok_or(MediaOperationError::ResourceNotFound)?;
+    let path = book
+        .url
+        .to_file_path()
+        .map_err(|()| MediaOperationError::Read("book URL is not a file URL".to_owned()))?;
+    let bytes = epub::extract(&path, resource).map_err(MediaOperationError::Read)?;
+    Ok(TypedBytes {
+        bytes,
+        media_type: file
+            .media_type
+            .clone()
+            .unwrap_or_else(|| "application/octet-stream".to_owned()),
     })
 }
 
@@ -288,13 +361,26 @@ pub fn convert_image(
     image_ops::convert(source, output, max_edge)
 }
 
-/// Generates a JPEG poster from the first page of a ready book.
+/// Generates a JPEG poster from an EPUB package cover or the first page.
 ///
 /// # Errors
 ///
 /// Returns page extraction or image conversion errors unchanged.
 pub fn generate_thumbnail(book: &Book, media: &Media, max_edge: u32) -> Result<TypedBytes, MediaOperationError> {
-    let cover = extract_page(book, media, 1)?;
+    if media.status != MediaStatus::Ready {
+        return Err(MediaOperationError::NotReady);
+    }
+    let cover = if media.profile() == Some(MediaProfile::Epub) {
+        let path = book
+            .url
+            .to_file_path()
+            .map_err(|()| MediaOperationError::Read("book URL is not a file URL".to_owned()))?;
+        epub::cover(&path)
+            .map_err(MediaOperationError::Read)?
+            .map_or_else(|| extract_page(book, media, 1), Ok)?
+    } else {
+        extract_page(book, media, 1)?
+    };
     convert_image(&cover.bytes, ImageOutput::Jpeg, Some(max_edge))
 }
 
@@ -360,6 +446,12 @@ mod tests {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../komga/komga/src/test/resources/pdf/komga.pdf")
     }
 
+    fn kotlin_epub(name: &str) -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../komga/komga/src/test/resources/epub")
+            .join(name)
+    }
+
     fn blank_pdf(page_sizes: &[(f32, f32)]) -> Vec<u8> {
         let mut pdf = pdf_writer::Pdf::new();
         let catalog_ref = Ref::new(1);
@@ -378,6 +470,26 @@ mod tests {
             page.resources();
         }
         pdf.finish()
+    }
+
+    fn write_epub(path: &Path, opf: &str, entries: &[(&str, &[u8])]) {
+        let mut writer = ZipWriter::new(File::create(path).unwrap());
+        let options = SimpleFileOptions::default();
+        writer.start_file("mimetype", options).unwrap();
+        writer.write_all(EPUB_MEDIA_TYPE.as_bytes()).unwrap();
+        writer.start_file("META-INF/container.xml", options).unwrap();
+        writer
+            .write_all(
+                br#"<?xml version="1.0"?><container xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#,
+            )
+            .unwrap();
+        writer.start_file("content.opf", options).unwrap();
+        writer.write_all(opf.as_bytes()).unwrap();
+        for (name, bytes) in entries {
+            writer.start_file(*name, options).unwrap();
+            writer.write_all(bytes).unwrap();
+        }
+        writer.finish().unwrap();
     }
 
     #[test]
@@ -513,7 +625,7 @@ mod tests {
         );
         assert_eq!(media.pages[0].file_size, None);
 
-        assert_eq!(page_output_media_type(&media, &media.pages[0]), PDF_IMAGE_MEDIA_TYPE);
+        assert_eq!(page_output_media_type(&media, &media.pages[0]), JPEG_MEDIA_TYPE);
         assert_eq!(
             page_output_dimension(&media, &media.pages[0]),
             Some(Dimension {
@@ -523,7 +635,7 @@ mod tests {
         );
 
         let rendered = extract_page(&source, &media, 1).unwrap();
-        assert_eq!(rendered.media_type, PDF_IMAGE_MEDIA_TYPE);
+        assert_eq!(rendered.media_type, JPEG_MEDIA_TYPE);
         assert!(rendered.bytes.starts_with(&[0xff, 0xd8]));
         assert_eq!(
             image::load_from_memory(&rendered.bytes).unwrap().dimensions(),
@@ -534,6 +646,120 @@ mod tests {
         assert_eq!(raw.media_type, PDF_MEDIA_TYPE);
         assert!(raw.bytes.starts_with(b"%PDF-"));
         assert_eq!(Pdf::new(raw.bytes).unwrap().pages().len(), 1);
+    }
+
+    #[test]
+    fn analyzes_fixed_layout_epub_and_extracts_pages_resources_and_cover() {
+        let source = book(&kotlin_archive("epub3.epub"));
+        let media = analyze_book(&source, true, || false).unwrap();
+
+        assert_eq!(media.status, MediaStatus::Ready);
+        assert_eq!(media.media_type.as_deref(), Some(EPUB_MEDIA_TYPE));
+        assert_eq!(media.page_count, 2);
+        assert!(media.epub_divina_compatible);
+        assert!(!media.epub_is_kepub);
+        assert_eq!(media.pages[0].file_name, "cover.jpeg");
+        assert_eq!(media.pages[1].file_name, "0_0.png");
+        assert_eq!(media.pages[1].dimension, Some(Dimension { width: 38, height: 38 }));
+        assert_eq!(media.comment, None);
+
+        let Some(komga_core::MediaExtension::Epub(extension)) = media.extension.as_ref() else {
+            panic!("expected EPUB extension");
+        };
+        assert!(extension.is_fixed_layout);
+        assert_eq!(extension.positions.len(), 2);
+        assert_eq!(extension.positions[0].href, "titlepage.xhtml");
+        assert_eq!(extension.positions[1].href, "page_1.xhtml");
+
+        let first_page = extract_page(&source, &media, 1).unwrap();
+        assert_eq!(first_page.media_type, "image/jpeg");
+        assert!(first_page.bytes.starts_with(&[0xff, 0xd8]));
+        let resource = extract_resource(&source, &media, "nav.xhtml").unwrap();
+        assert_eq!(resource.media_type, "application/xhtml+xml");
+        assert!(resource.bytes.windows(10).any(|bytes| bytes == b"Navigation"));
+        assert!(matches!(
+            extract_resource(&source, &media, "META-INF/container.xml"),
+            Err(MediaOperationError::ResourceNotFound)
+        ));
+
+        let thumbnail = generate_thumbnail(&source, &media, 300).unwrap();
+        assert_eq!(thumbnail.media_type, JPEG_MEDIA_TYPE);
+        assert_eq!(
+            image::load_from_memory(&thumbnail.bytes).unwrap().dimensions(),
+            (48, 48)
+        );
+    }
+
+    #[test]
+    fn analyzes_reflowable_epub_navigation_positions_and_invalid_extension() {
+        let source = book(&kotlin_epub("The Incomplete Theft - Ralph Burke.epub"));
+        let media = analyze_book(&source, false, || false).unwrap();
+
+        assert_eq!(media.status, MediaStatus::Ready);
+        assert_eq!(media.media_type.as_deref(), Some(EPUB_MEDIA_TYPE));
+        assert!(!media.epub_divina_compatible);
+        assert!(media.pages.is_empty());
+        assert_eq!(
+            media
+                .files
+                .iter()
+                .filter(|file| file.sub_type.as_deref() == Some("EPUB_PAGE"))
+                .count(),
+            4
+        );
+        assert_eq!(media.comment, None);
+        let Some(komga_core::MediaExtension::Epub(extension)) = media.extension.as_ref() else {
+            panic!("expected EPUB extension");
+        };
+        assert!(!extension.is_fixed_layout);
+        assert_eq!(extension.toc[0].title, "The Incomplete Theft");
+        assert_eq!(
+            extension.toc[0].href.as_deref(),
+            Some("OEBPS/@public@vhost@g@gutenberg@html@files@65659@65659-h@65659-h-0.htm_split_001.html")
+        );
+        assert!(!extension.positions.is_empty());
+        assert!(extension.positions.iter().all(|position| position.kobo_span.is_none()));
+        assert!(matches!(
+            extract_page(&source, &media, 1),
+            Err(MediaOperationError::PageOutOfBounds)
+        ));
+
+        let invalid = analyze_book(&book(&kotlin_archive("zip-as-epub.epub")), false, || false).unwrap();
+        assert_eq!(invalid.status, MediaStatus::Error);
+        assert_eq!(invalid.media_type.as_deref(), Some(ZIP_MEDIA_TYPE));
+        assert_eq!(invalid.comment.as_deref(), Some("ERR_1032"));
+    }
+
+    #[test]
+    fn detects_native_kepub_positions_and_reports_missing_manifest_resources() {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("native-kepub.epub");
+        let opf = r#"<?xml version="1.0"?>
+            <package xmlns="http://www.idpf.org/2007/opf" version="3.0">
+              <metadata/>
+              <manifest>
+                <item id="page" href="page.xhtml" media-type="application/xhtml+xml"/>
+                <item id="missing" href="missing.css" media-type="text/css"/>
+              </manifest>
+              <spine><itemref idref="page"/></spine>
+            </package>"#;
+        let page = format!(
+            "<html><body><span class=\"koboSpan\" id=\"kobo.1.1\">start</span>{}<span class=\"koboSpan\" id=\"kobo.1.2\">end</span></body></html>",
+            "x".repeat(1200)
+        );
+        write_epub(&path, opf, &[("page.xhtml", page.as_bytes())]);
+
+        let media = analyze_book(&book(&path), false, || false).unwrap();
+        assert_eq!(media.status, MediaStatus::Ready);
+        assert!(media.epub_is_kepub);
+        assert!(!media.epub_divina_compatible);
+        assert_eq!(media.comment.as_deref(), Some("ERR_1033 [missing.css]"));
+        let Some(komga_core::MediaExtension::Epub(extension)) = media.extension else {
+            panic!("expected EPUB extension");
+        };
+        assert_eq!(extension.positions.len(), 2);
+        assert_eq!(extension.positions[0].kobo_span.as_deref(), Some("kobo.1.1"));
+        assert!(extension.positions[1].kobo_span.is_some());
     }
 
     #[test]

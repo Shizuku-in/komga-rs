@@ -13,7 +13,10 @@ infer.workspace = true
 komga-core = { path = "../komga-core" }
 natord.workspace = true
 pdf-writer.workspace = true
+percent-encoding.workspace = true
 rars.workspace = true
+roxmltree.workspace = true
+scraper.workspace = true
 thiserror.workspace = true
 zip.workspace = true
 

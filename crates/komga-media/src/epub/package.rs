@@ -1,0 +1,256 @@
+use std::{collections::BTreeSet, fs::File, io::Read, path::Path};
+
+use komga_core::EpubTocEntry;
+use percent_encoding::percent_decode_str;
+use roxmltree::{Document, Node};
+use zip::ZipArchive;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ManifestItem {
+    pub(super) id: String,
+    pub(super) path: String,
+    pub(super) media_type: String,
+    pub(super) properties: BTreeSet<String>,
+}
+
+#[derive(Debug)]
+pub(super) struct EpubPackage {
+    pub(super) manifest: Vec<ManifestItem>,
+    pub(super) spine: Vec<ManifestItem>,
+    pub(super) fixed_layout: bool,
+    pub(super) guide: Vec<EpubTocEntry>,
+    pub(super) cover: Option<ManifestItem>,
+    pub(super) nav: Option<ManifestItem>,
+    pub(super) ncx: Option<ManifestItem>,
+}
+
+pub(super) fn open(path: &Path) -> Result<(ZipArchive<File>, EpubPackage), String> {
+    let file = File::open(path).map_err(|error| error.to_string())?;
+    let mut archive = ZipArchive::new(file).map_err(|error| error.to_string())?;
+    let package_path = package_path(&mut archive)?;
+    let package_xml = read_entry_text(&mut archive, &package_path)?;
+    let package = parse_package(&package_xml, parent(&package_path))?;
+    Ok((archive, package))
+}
+
+pub(super) fn has_epub_mimetype(path: &Path) -> bool {
+    let Ok(file) = File::open(path) else {
+        return false;
+    };
+    let Ok(mut archive) = ZipArchive::new(file) else {
+        return false;
+    };
+    read_entry_text(&mut archive, "mimetype").is_ok_and(|value| value.trim() == "application/epub+zip")
+}
+
+fn package_path(archive: &mut ZipArchive<File>) -> Result<String, String> {
+    let container = read_entry_text(archive, "META-INF/container.xml")?;
+    let document = Document::parse(&container).map_err(|error| error.to_string())?;
+    let rootfile = document
+        .descendants()
+        .find(|node| is_element(*node, "rootfile"))
+        .and_then(|node| node.attribute("full-path"))
+        .ok_or_else(|| "META-INF/container.xml does not contain a rootfile".to_owned())?;
+    normalize_href("", rootfile).map(|value| remove_fragment(&value).to_owned())
+}
+
+fn parse_package(xml: &str, base_dir: &str) -> Result<EpubPackage, String> {
+    let document = Document::parse(xml).map_err(|error| error.to_string())?;
+    let manifest_node = document
+        .descendants()
+        .find(|node| is_element(*node, "manifest"))
+        .ok_or_else(|| "OPF does not contain a manifest".to_owned())?;
+    let manifest = manifest_node
+        .children()
+        .filter(|node| is_element(*node, "item"))
+        .map(|node| {
+            let id = required_attribute(node, "id")?.to_owned();
+            let href = required_attribute(node, "href")?;
+            let path = normalize_href(base_dir, href)?;
+            let media_type = required_attribute(node, "media-type")?.to_owned();
+            let properties = node
+                .attribute("properties")
+                .unwrap_or_default()
+                .split_whitespace()
+                .map(str::to_owned)
+                .collect();
+            Ok(ManifestItem {
+                id,
+                path: remove_fragment(&path).to_owned(),
+                media_type,
+                properties,
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+
+    let spine = document
+        .descendants()
+        .find(|node| is_element(*node, "spine"))
+        .into_iter()
+        .flat_map(|node| node.children())
+        .filter(|node| is_element(*node, "itemref"))
+        .filter_map(|node| node.attribute("idref"))
+        .filter_map(|id| manifest.iter().find(|item| item.id == id).cloned())
+        .collect::<Vec<_>>();
+
+    let fixed_layout = document.descendants().any(|node| {
+        is_element(node, "meta")
+            && ((node.attribute("property") == Some("rendition:layout") && normalized_text(node) == "pre-paginated")
+                || (node.attribute("name") == Some("fixed-layout") && node.attribute("content") == Some("true")))
+    });
+
+    let guide = document
+        .descendants()
+        .find(|node| is_element(*node, "guide"))
+        .into_iter()
+        .flat_map(|node| node.children())
+        .filter(|node| is_element(*node, "reference"))
+        .map(|node| {
+            let href = node
+                .attribute("href")
+                .filter(|value| !value.is_empty())
+                .map(|value| normalize_href(base_dir, value))
+                .transpose()?;
+            Ok(EpubTocEntry {
+                title: node.attribute("title").unwrap_or_default().to_owned(),
+                href,
+                children: Vec::new(),
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+
+    let cover_id = document.descendants().find_map(|node| {
+        (is_element(node, "meta") && node.attribute("name") == Some("cover"))
+            .then(|| node.attribute("content"))
+            .flatten()
+    });
+    let cover = manifest
+        .iter()
+        .find(|item| item.properties.contains("cover-image"))
+        .or_else(|| cover_id.and_then(|id| manifest.iter().find(|item| item.id == id)))
+        .or_else(|| manifest.iter().find(|item| item.id == "cover-image"))
+        .cloned();
+    let nav = manifest.iter().find(|item| item.properties.contains("nav")).cloned();
+    let ncx = manifest
+        .iter()
+        .find(|item| item.media_type == "application/x-dtbncx+xml")
+        .or_else(|| {
+            manifest
+                .iter()
+                .find(|item| matches!(item.id.to_ascii_lowercase().as_str(), "toc" | "ncx" | "ncxtoc"))
+        })
+        .cloned();
+
+    Ok(EpubPackage {
+        manifest,
+        spine,
+        fixed_layout,
+        guide,
+        cover,
+        nav,
+        ncx,
+    })
+}
+
+pub(super) fn normalize_href(base_dir: &str, href: &str) -> Result<String, String> {
+    let plus_decoded = href.replace('+', " ");
+    let decoded = percent_decode_str(&plus_decoded)
+        .decode_utf8()
+        .map_err(|error| error.to_string())?;
+    let (path, fragment) = decoded
+        .split_once('#')
+        .map_or((decoded.as_ref(), None), |(path, fragment)| (path, Some(fragment)));
+    let mut components = Vec::new();
+    for component in base_dir
+        .split('/')
+        .chain(path.trim_start_matches('/').split('/'))
+        .filter(|component| !component.is_empty() && *component != ".")
+    {
+        if component == ".." {
+            components
+                .pop()
+                .ok_or_else(|| format!("EPUB href escapes the archive root: {href:?}"))?;
+        } else {
+            components.push(component);
+        }
+    }
+    let mut normalized = components.join("/");
+    if let Some(fragment) = fragment.filter(|value| !value.is_empty()) {
+        normalized.push('#');
+        normalized.push_str(fragment);
+    }
+    Ok(normalized)
+}
+
+pub(super) fn parent(path: &str) -> &str {
+    path.rsplit_once('/').map_or("", |(parent, _)| parent)
+}
+
+pub(super) fn remove_fragment(path: &str) -> &str {
+    path.split_once('#').map_or(path, |(path, _)| path)
+}
+
+pub(super) fn read_entry(archive: &mut ZipArchive<File>, name: &str) -> Result<Vec<u8>, String> {
+    let mut entry = archive.by_name(name).map_err(|error| error.to_string())?;
+    let mut bytes = Vec::with_capacity(usize::try_from(entry.size().min(16 * 1024 * 1024)).unwrap_or(0));
+    entry.read_to_end(&mut bytes).map_err(|error| error.to_string())?;
+    Ok(bytes)
+}
+
+pub(super) fn read_entry_text(archive: &mut ZipArchive<File>, name: &str) -> Result<String, String> {
+    String::from_utf8(read_entry(archive, name)?).map_err(|error| error.to_string())
+}
+
+pub(super) fn entry_sizes(archive: &mut ZipArchive<File>, name: &str) -> Option<(i64, u64)> {
+    archive.by_name(name).ok().and_then(|entry| {
+        i64::try_from(entry.size())
+            .ok()
+            .map(|size| (size, entry.compressed_size()))
+    })
+}
+
+fn required_attribute<'a>(node: Node<'a, 'a>, name: &str) -> Result<&'a str, String> {
+    node.attribute(name)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| format!("OPF item is missing {name}"))
+}
+
+fn normalized_text(node: Node<'_, '_>) -> String {
+    node.descendants()
+        .filter(|child| child.is_text())
+        .filter_map(|child| child.text())
+        .flat_map(str::split_whitespace)
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+pub(super) fn is_element(node: Node<'_, '_>, name: &str) -> bool {
+    node.is_element() && node.tag_name().name().eq_ignore_ascii_case(name)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{fs, path::PathBuf};
+
+    use super::*;
+
+    #[test]
+    fn parses_opf_guide_and_normalizes_encoded_paths() {
+        let content = fs::read_to_string(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../komga/komga/src/test/resources/epub/clash.opf"),
+        )
+        .unwrap();
+        let package = parse_package(&content, "PREFIX").unwrap();
+        assert_eq!(package.guide.len(), 3);
+        assert_eq!(package.guide[0].title, "Table Of Contents");
+        assert_eq!(
+            package.guide[0].href.as_deref(),
+            Some("PREFIX/Text/Mart_9780553897852_epub_toc_r1.htm")
+        );
+        assert_eq!(
+            normalize_href("OPS/Text", "../Images/cover%20page.jpg#cover").unwrap(),
+            "OPS/Images/cover page.jpg#cover"
+        );
+        assert!(normalize_href("", "../outside.xhtml").is_err());
+    }
+}

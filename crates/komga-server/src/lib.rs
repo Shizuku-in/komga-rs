@@ -116,6 +116,7 @@ pub fn build_app(state: AppState) -> Router {
         .route("/api/v1/books/{book_id}", get(content_routes::get_book))
         .route("/api/v1/books/{book_id}/analyze", post(media_routes::analyze_book))
         .route("/api/v1/books/{book_id}/pages", get(media_routes::list_pages))
+        .route("/api/v1/books/{book_id}/positions", get(media_routes::get_positions))
         .route(
             "/api/v1/books/{book_id}/pages/{page_number}",
             get(media_routes::get_page),
@@ -181,6 +182,10 @@ pub fn build_app(state: AppState) -> Router {
             get(settings_routes::list_global_settings),
         )
         .route("/api/v1/oauth2/providers", get(settings_routes::oauth_providers))
+        .route(
+            "/api/v1/books/{book_id}/resource/{*resource}",
+            get(media_routes::get_epub_resource),
+        )
         .merge(protected)
         .layer(DefaultBodyLimit::max(2 * 1024 * 1024))
         .layer(CorsLayer::permissive())

@@ -10,10 +10,10 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use headers_accept::Accept;
-use komga_core::{Book, Media, MediaProfile, MediaStatus, PDF_MEDIA_TYPE, UserRole};
+use komga_core::{Book, Media, MediaExtension, MediaProfile, MediaStatus, PDF_MEDIA_TYPE, UserRole};
 use komga_media::{
-    ImageOutput, MediaOperationError, TypedBytes, convert_image, extract_page, extract_raw_page, page_output_dimension,
-    page_output_media_type,
+    ImageOutput, MediaOperationError, TypedBytes, convert_image, extract_page, extract_raw_page, extract_resource,
+    page_output_dimension, page_output_media_type,
 };
 use komga_storage::TaskRecord;
 use mediatype::{
@@ -24,7 +24,11 @@ use serde::Deserialize;
 use url::Url;
 
 use crate::{
-    AppState, auth::AuthContext, content_routes::load_visible_book, dto::PageDto, error::ApiError,
+    AppState,
+    auth::{self, AuthContext},
+    content_routes::load_visible_book,
+    dto::{PageDto, PositionsDto},
+    error::ApiError,
     routes::require_admin,
 };
 
@@ -253,6 +257,78 @@ pub(crate) async fn get_book_thumbnail(
     ))
 }
 
+pub(crate) async fn get_positions(
+    State(state): State<AppState>,
+    Extension(auth): Extension<AuthContext>,
+    Path(book_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    load_visible_book(&state, &auth.user, &book_id).await?;
+    let media = load_media(&state, &book_id).await?;
+    if is_not_modified(&headers, &media) {
+        return Ok(not_modified_response(&media));
+    }
+    let Some(MediaExtension::Epub(extension)) = media.extension.as_ref() else {
+        return Err(ApiError::not_found("EPUB positions not found"));
+    };
+    let mut response = Json(PositionsDto {
+        total: i32::try_from(extension.positions.len()).unwrap_or(i32::MAX),
+        positions: extension.positions.clone(),
+    })
+    .into_response();
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/vnd.readium.position-list+json"),
+    );
+    set_last_modified(response.headers_mut(), &media);
+    Ok(response)
+}
+
+pub(crate) async fn get_epub_resource(
+    State(state): State<AppState>,
+    Path((book_id, resource)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    let resource = resource.trim_start_matches('/').to_owned();
+    let is_font = is_font_resource(&resource);
+    let user = auth::optional_user(&state, &headers).await?;
+    if !is_font {
+        let user = user.as_ref().ok_or_else(ApiError::unauthorized)?;
+        load_visible_book(&state, user, &book_id).await?;
+    }
+    let book = state
+        .storage
+        .find_book_by_id(&book_id)
+        .await?
+        .filter(|book| book.deleted_date.is_none())
+        .ok_or_else(|| ApiError::not_found("Book not found"))?;
+    let media = load_media(&state, &book_id).await?;
+    if media.profile() != Some(MediaProfile::Epub) {
+        return Err(ApiError::bad_request(format!(
+            "Book media type '{}' not compatible with requested profile",
+            media.media_type.as_deref().unwrap_or_default()
+        )));
+    }
+    if !media.files.iter().any(|file| file.file_name == resource) {
+        return Err(ApiError::not_found("EPUB resource not found"));
+    }
+    if is_not_modified(&headers, &media) {
+        let mut response = not_modified_response(&media);
+        set_epub_content_security_policy(response.headers_mut());
+        return Ok(response);
+    }
+    let source_media = media.clone();
+    let source_resource = resource.clone();
+    let content = tokio::task::spawn_blocking(move || extract_resource(&book, &source_media, &source_resource))
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, %book_id, "EPUB resource extractor panicked");
+            ApiError::internal("Could not read EPUB resource")
+        })?
+        .map_err(map_media_error)?;
+    Ok(epub_resource_response(content, &resource, &media))
+}
+
 async fn load_visible_book_media(
     state: &AppState,
     auth: &AuthContext,
@@ -298,6 +374,10 @@ fn require_page_streaming(auth: &AuthContext) -> Result<(), ApiError> {
 fn map_media_error(error: MediaOperationError) -> ApiError {
     match error {
         MediaOperationError::PageOutOfBounds => ApiError::bad_request("Page number does not exist"),
+        MediaOperationError::UnsupportedProfile => {
+            ApiError::bad_request("Book media profile does not support this operation")
+        }
+        MediaOperationError::ResourceNotFound => ApiError::not_found("EPUB resource not found"),
         MediaOperationError::NotReady => ApiError::not_found("Book analysis failed"),
         MediaOperationError::Image(message) => ApiError::not_found(message),
         MediaOperationError::Read(message) => {
@@ -305,6 +385,13 @@ fn map_media_error(error: MediaOperationError) -> ApiError {
             ApiError::not_found("File not found, it may have moved")
         }
     }
+}
+
+fn is_font_resource(resource: &str) -> bool {
+    resource
+        .rsplit_once('.')
+        .map(|(_, extension)| extension.to_ascii_lowercase())
+        .is_some_and(|extension| matches!(extension.as_str(), "otf" | "woff" | "woff2" | "eot" | "ttf" | "svg"))
 }
 
 fn accepts_pdf(headers: &HeaderMap) -> bool {
@@ -393,6 +480,39 @@ fn content_response(content: TypedBytes, file_stem: &str, media: &Media) -> Resp
     response
 }
 
+fn epub_resource_response(content: TypedBytes, resource: &str, media: &Media) -> Response {
+    let file_name = resource.rsplit('/').next().unwrap_or(resource);
+    let safe_name = file_name
+        .chars()
+        .map(|value| {
+            if value.is_ascii_control() || matches!(value, '"' | '\\') {
+                '_'
+            } else {
+                value
+            }
+        })
+        .collect::<String>();
+    let mut response = Body::from(content.bytes).into_response();
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_str(&content.media_type)
+            .unwrap_or_else(|_| HeaderValue::from_static("application/octet-stream")),
+    );
+    if let Ok(value) = HeaderValue::from_str(&format!("inline; filename=\"{safe_name}\"")) {
+        response.headers_mut().insert(header::CONTENT_DISPOSITION, value);
+    }
+    set_epub_content_security_policy(response.headers_mut());
+    set_last_modified(response.headers_mut(), media);
+    response
+}
+
+fn set_epub_content_security_policy(headers: &mut HeaderMap) {
+    headers.insert(
+        header::CONTENT_SECURITY_POLICY,
+        HeaderValue::from_static("script-src 'none'; object-src 'none';"),
+    );
+}
+
 fn not_modified_response(media: &Media) -> Response {
     let mut response = StatusCode::NOT_MODIFIED.into_response();
     set_last_modified(response.headers_mut(), media);
@@ -457,5 +577,22 @@ mod tests {
         }
         assert!(!accepts_pdf(&HeaderMap::new()));
         assert!(!accepts_pdf(&headers("not a media type")));
+    }
+
+    #[test]
+    fn epub_font_resources_match_kotlin_anonymous_extensions() {
+        for resource in [
+            "font.otf",
+            "font.WOFF",
+            "font.woff2",
+            "font.eot",
+            "font.ttf",
+            "image.svg",
+        ] {
+            assert!(is_font_resource(resource), "{resource}");
+        }
+        for resource in ["chapter.xhtml", "style.css", "cover.jpg", "font.svgz"] {
+            assert!(!is_font_resource(resource), "{resource}");
+        }
     }
 }
