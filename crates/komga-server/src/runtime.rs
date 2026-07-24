@@ -97,6 +97,12 @@ struct BookTaskPayload {
     book_id: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SeriesTaskPayload {
+    series_id: String,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TaskOutcome {
     Completed,
@@ -104,7 +110,12 @@ enum TaskOutcome {
     Retry,
 }
 
-const SUPPORTED_TASK_TYPES: [&str; 3] = ["ScanLibrary", "AnalyzeBook", "GenerateBookThumbnail"];
+const SUPPORTED_TASK_TYPES: [&str; 4] = [
+    "ScanLibrary",
+    "AnalyzeBook",
+    "GenerateBookThumbnail",
+    "AggregateSeriesMetadata",
+];
 
 async fn worker_loop(state: AppState, index: usize) {
     let owner = format!("komga-rs-{}-{index}", std::process::id());
@@ -153,6 +164,7 @@ async fn process_task(state: &AppState, task: &TaskRecord) -> TaskOutcome {
         "ScanLibrary" => process_scan_task(state, task).await,
         "AnalyzeBook" => process_analyze_book_task(state, task).await,
         "GenerateBookThumbnail" => process_generate_thumbnail_task(state, task).await,
+        "AggregateSeriesMetadata" => process_aggregate_series_metadata_task(state, task).await,
         _ => TaskOutcome::Completed,
     }
 }
@@ -364,6 +376,34 @@ async fn process_generate_thumbnail_task(state: &AppState, task: &TaskRecord) ->
         return TaskOutcome::Retry;
     }
     TaskOutcome::Completed
+}
+
+async fn process_aggregate_series_metadata_task(state: &AppState, task: &TaskRecord) -> TaskOutcome {
+    let payload = match serde_json::from_str::<SeriesTaskPayload>(&task.payload) {
+        Ok(payload) => payload,
+        Err(error) => {
+            tracing::error!(%error, task_id = %task.id, "invalid AggregateSeriesMetadata payload");
+            return TaskOutcome::Completed;
+        }
+    };
+    if state.shutdown.is_cancelled() {
+        return TaskOutcome::Cancelled;
+    }
+    match state
+        .storage
+        .rebuild_book_metadata_aggregation(&payload.series_id)
+        .await
+    {
+        Ok(true) => TaskOutcome::Completed,
+        Ok(false) => {
+            tracing::warn!(series_id = %payload.series_id, "aggregation task references a missing series");
+            TaskOutcome::Completed
+        }
+        Err(error) => {
+            tracing::error!(%error, series_id = %payload.series_id, "could not aggregate series metadata");
+            TaskOutcome::Retry
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]

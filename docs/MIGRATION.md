@@ -9,13 +9,13 @@ The reference baseline is Komga commit `4ef86df`. Porting is organized as vertic
 | Claim and users | Implemented | Claim, current user, CRUD, roles, library sharing fields, age/label restrictions, and password changes. |
 | Authentication | Partial | Basic, in-memory sessions, remember-me cookie, header sessions, logout, and REST API keys are implemented. OAuth2 and authentication activity are pending. |
 | Libraries and scanner | Partial | Library CRUD, filesystem browsing, scan workers, startup/periodic scheduling, Series/Book discovery, change reconciliation, soft deletion, and automatic CBZ/CBR/PDF/EPUB analysis are implemented. Sidecars, metadata providers, and trash execution are pending. |
-| Series/books/read progress | Partial | Skeleton persistence, natural ordering, modern list/detail APIs, Spring pagination, basic recursive filtering, sibling navigation, access restrictions, progress hydration and per-book writes, REST Readium progression, CBZ/CBR/PDF and fixed-layout EPUB pages, EPUB resources/positions, WebPub manifests, generated book thumbnails, and streaming original-file downloads are implemented. Metadata mutations, series/bulk progress operations, deprecated/specialized lists, and thumbnail management are pending. |
+| Series/books/read progress | Partial | Skeleton persistence, natural ordering, modern list/detail APIs, Spring pagination, basic recursive filtering, sibling navigation, access restrictions, progress hydration and per-book writes, REST Readium progression, metadata write models and transactional repositories, CBZ/CBR/PDF and fixed-layout EPUB pages, EPUB resources/positions, WebPub manifests, generated book thumbnails, and streaming original-file downloads are implemented. Metadata mutation routes, series/bulk progress operations, deprecated/specialized lists, and thumbnail management are pending. |
 | Collections/read lists | Pending | CRUD, matching, thumbnails, generated archives, and progress aggregation. |
 | Media | Partial | ZIP/CBZ, RAR4/RAR5/CBR (including solid archives), PDF, and EPUB analysis are implemented without external runtime commands. PDF supports rendered and raw pages; EPUB supports OPF/NAV/NCX discovery, resources, Readium positions, native KEPUB detection, fixed-layout pages, and package covers. Divina, PDF, and EPUB WebPub manifests are available. EPUB metadata import, uncommon image codecs, hashing, and duplicate pages are pending. |
 | Search | Pending | Lucene-equivalent multilingual indexing and lifecycle. |
 | OPDS | Pending | OPDS 1 XML and OPDS 2 JSON catalogs. |
 | Device sync | Pending | Kobo, KOReader, sync points, and KEPUB conversion. |
-| Operations | Partial | Persistent task storage, atomic worker ownership, startup recovery, scan/media/thumbnail workers, library scheduling, task-status SSE, task clearing, client settings, and selected server settings are implemented. Metrics, announcements, full server settings, fonts, and release checks are pending. |
+| Operations | Partial | Persistent task storage, atomic worker ownership, startup recovery, scan/media/thumbnail/metadata-aggregation workers, library scheduling, task-status SSE, task clearing, client settings, and selected server settings are implemented. Metrics, announcements, full server settings, fonts, and release checks are pending. |
 | Web UI packaging | Pending | Static asset build/embedding and SPA fallback. |
 
 ## Compatibility rules
@@ -37,13 +37,18 @@ The reference baseline is Komga commit `4ef86df`. Porting is organized as vertic
 
 ## Next slice
 
-The next dependency-ordered slice is book and series metadata mutations:
+The next dependency-ordered slice is the book and series metadata HTTP contract:
 
 1. expose the single-book, bulk-book, and series metadata `PATCH` routes;
-2. preserve omitted-versus-null patch behavior, field locks, and Kotlin validation rules;
-3. update authors, tags, genres, links, alternate titles, and sharing labels transactionally;
-4. rebuild the affected series metadata aggregation after book updates;
-5. port authorization, persistence, partial-update, explicit-null, and lock contract tests.
+2. map each field's omitted-versus-null behavior into the existing domain patch commands;
+3. enforce administrator authorization and Kotlin validation responses;
+4. enqueue one deduplicated `AggregateSeriesMetadata` task per affected series after book updates;
+5. port single, bulk, partial-update, explicit-null, lock, validation, and missing-ID contract tests.
+
+Metadata architecture is prepared without exposing mutation routes yet. `komga-core` owns normalized book and series
+metadata, explicit keep/clear/set commands, and Kotlin-compatible aggregation policy. `komga-storage` atomically replaces
+metadata relations and aggregations using the existing schema. The runtime can claim Kotlin-compatible
+`AggregateSeriesMetadata` tasks, rebuild the projection, and safely discard tasks for deleted series.
 
 Per-book reading progress now supports one-based page updates, completion, idempotent deletion, and REST Readium
 progression retrieval and synchronization. Locators are validated against analyzed media, serialized as Kotlin-compatible

@@ -1,6 +1,6 @@
 use std::{fs, path::PathBuf, time::Duration};
 
-use komga_core::{Library, ScanInterval};
+use komga_core::{BookMetadataPatch, Library, MetadataUpdate, ScanInterval, scan_library_files};
 use komga_server::AppState;
 use komga_storage::{Storage, TaskRecord, TaskStorage};
 use url::Url;
@@ -102,6 +102,74 @@ async fn startup_scheduler_analyzes_supported_media_generates_thumbnails_and_pre
     let queued = tasks.list().await.unwrap();
     assert_eq!(queued.len(), 1);
     assert_eq!(queued[0].simple_type, "EmptyTrash");
+
+    runtime.shutdown().await;
+}
+
+#[tokio::test]
+async fn aggregate_series_metadata_tasks_rebuild_persisted_projections() {
+    let storage = Storage::connect_memory().await.unwrap();
+    let tasks = TaskStorage::connect_memory().await.unwrap();
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path().join("library");
+    fs::create_dir_all(root.join("Series")).unwrap();
+    fs::write(root.join("Series/Volume 1.cbz"), [1]).unwrap();
+    fs::write(root.join("Series/Volume 2.cbz"), [2]).unwrap();
+    let mut library = Library::new("Metadata".into(), Url::from_directory_path(&root).unwrap());
+    library.scan_interval = ScanInterval::Disabled;
+    storage.create_library(&library).await.unwrap();
+    let scan = scan_library_files(&library, || false).unwrap();
+    storage.apply_library_scan(&library.id, &scan, false).await.unwrap();
+    let series = storage.list_series_by_library_id(&library.id).await.unwrap().remove(0);
+    let books = storage.list_books_by_series_id(&series.id).await.unwrap();
+    let existing = storage.find_book_metadata(&books[0].id).await.unwrap().unwrap();
+    let updated = existing
+        .apply_patch(BookMetadataPatch {
+            summary: MetadataUpdate::Set("Runtime summary".into()),
+            tags: MetadataUpdate::Set(["runtime".into()].into()),
+            ..Default::default()
+        })
+        .unwrap();
+    storage.save_book_metadata(&updated).await.unwrap();
+
+    let task = TaskRecord::aggregate_series_metadata(&series.id, 5);
+    assert_eq!(task.id, format!("AGGREGATE_SERIES_METADATA_{}", series.id));
+    assert_eq!(task.group_id.as_deref(), Some(series.id.as_str()));
+    assert_eq!(
+        task.class,
+        "org.gotson.komga.application.tasks.Task$AggregateSeriesMetadata"
+    );
+    assert_eq!(task.simple_type, "AggregateSeriesMetadata");
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&task.payload).unwrap()["seriesId"],
+        series.id
+    );
+    tasks.save(&task).await.unwrap();
+
+    let state = AppState::new(storage.clone(), tasks.clone()).await.unwrap();
+    let runtime = state.start_runtime().await.unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let aggregation = storage
+                .find_book_metadata_aggregation(&series.id)
+                .await
+                .unwrap()
+                .unwrap();
+            if aggregation.summary == "Runtime summary" && tasks.list().await.unwrap().is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("metadata aggregation task did not complete");
+    let aggregation = storage
+        .find_book_metadata_aggregation(&series.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(aggregation.summary_number, "1");
+    assert_eq!(aggregation.tags, ["runtime".into()].into());
 
     runtime.shutdown().await;
 }

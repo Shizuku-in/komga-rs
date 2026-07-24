@@ -109,6 +109,26 @@ impl TaskRecord {
             owner: None,
         }
     }
+
+    /// Builds a Kotlin-compatible series metadata aggregation task.
+    pub fn aggregate_series_metadata(series_id: &str, priority: i32) -> Self {
+        let id = format!("AGGREGATE_SERIES_METADATA_{series_id}");
+        Self {
+            id: id.clone(),
+            priority,
+            group_id: Some(series_id.to_owned()),
+            class: "org.gotson.komga.application.tasks.Task$AggregateSeriesMetadata".into(),
+            simple_type: "AggregateSeriesMetadata".into(),
+            payload: serde_json::json!({
+                "seriesId": series_id,
+                "priority": priority,
+                "groupId": series_id,
+                "uniqueId": id,
+            })
+            .to_string(),
+            owner: None,
+        }
+    }
 }
 
 /// Cloneable handle to Komga's separate persistent task queue.

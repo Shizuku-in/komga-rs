@@ -1,6 +1,6 @@
 use std::{fs, path::PathBuf};
 
-use komga_core::{BookSearch, PageRequest, ScanInterval, SeriesSearch, User, scan_library_files};
+use komga_core::{BookSearch, PageRequest, ScanInterval, SeriesSearch, SeriesStatus, User, scan_library_files};
 use komga_storage::{Storage, TaskStorage};
 use url::Url;
 
@@ -61,6 +61,20 @@ async fn opens_kotlin_flyway_databases_and_maps_current_rows() {
         .unwrap();
     assert_eq!(book_page.content[0].series_title, "Kotlin Series");
     assert_eq!(book_page.content[0].media.status, "UNKNOWN");
+    let series_metadata = storage.find_series_metadata(&series[0].id).await.unwrap().unwrap();
+    assert_eq!(series_metadata.status, SeriesStatus::Ongoing);
+    assert_eq!(series_metadata.title, "Kotlin Series");
+    let books = storage.list_books_by_series_id(&series[0].id).await.unwrap();
+    let book_metadata = storage.find_book_metadata(&books[0].id).await.unwrap().unwrap();
+    assert_eq!(book_metadata.title, "Volume 1");
+    assert!(storage.rebuild_book_metadata_aggregation(&series[0].id).await.unwrap());
+    assert!(
+        storage
+            .find_book_metadata_aggregation(&series[0].id)
+            .await
+            .unwrap()
+            .is_some()
+    );
 
     let tasks = TaskStorage::connect_path(&tasks_database).await.unwrap();
     let queued = tasks.list().await.unwrap();
