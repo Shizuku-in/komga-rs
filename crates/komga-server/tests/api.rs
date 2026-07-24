@@ -683,13 +683,39 @@ async fn content_queries_page_filter_restrict_and_navigate_books() {
         .clone()
         .oneshot(
             Request::get(format!("/api/v1/series/{series_id}"))
-                .header(header::AUTHORIZATION, restricted)
+                .header(header::AUTHORIZATION, &restricted)
                 .body(Body::empty())
                 .unwrap(),
         )
         .await
         .unwrap();
     assert_eq!(restricted_detail.status(), StatusCode::FORBIDDEN);
+
+    let restricted_manifest = app
+        .clone()
+        .oneshot(
+            Request::get(format!("/api/v1/books/{first_id}/manifest"))
+                .header(header::AUTHORIZATION, restricted)
+                .header(header::HOST, "reader.example")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(restricted_manifest.status(), StatusCode::FORBIDDEN);
+
+    let unanalyzed_manifest = app
+        .clone()
+        .oneshot(
+            Request::get(format!("/api/v1/books/{first_id}/manifest"))
+                .header(header::AUTHORIZATION, &admin)
+                .header(header::HOST, "reader.example")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(unanalyzed_manifest.status(), StatusCode::NOT_FOUND);
 
     let unsupported = app
         .clone()
@@ -867,6 +893,287 @@ async fn cbz_pages_conversion_thumbnail_cache_and_manual_analysis_match_contract
     assert_eq!(queued[0].simple_type, "AnalyzeBook");
     assert_eq!(queued[0].group_id.as_deref(), Some(book.series_id.as_str()));
     assert_eq!(queued[0].priority, 6);
+}
+
+#[tokio::test]
+async fn divina_webpub_manifest_matches_kotlin_contract() {
+    let (_temporary, storage, tasks, book, _media) = analyzed_media_fixture("archives/zip.zip", "Volume 1.cbz").await;
+    let app = build_app(AppState::new(storage, tasks).await.unwrap());
+
+    let unauthorized = app
+        .clone()
+        .oneshot(
+            Request::get(format!("/api/v1/books/{}/manifest", book.id))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+
+    assert_eq!(claim(&app).await.status(), StatusCode::OK);
+    let manifest = app
+        .clone()
+        .oneshot(
+            Request::get(format!("/api/v1/books/{}/manifest", book.id))
+                .header(header::AUTHORIZATION, basic("admin@example.org", "password"))
+                .header("forwarded", "for=192.0.2.10;proto=https;host=reader.example")
+                .header("x-forwarded-prefix", "/komga")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(manifest.status(), StatusCode::OK);
+    assert_eq!(manifest.headers()[header::CONTENT_TYPE], "application/divina+json");
+    assert!(!manifest.headers().contains_key(header::LAST_MODIFIED));
+    let manifest = body_json(manifest).await;
+    assert_eq!(
+        manifest["context"],
+        "https://readium.org/webpub-manifest/context.jsonld"
+    );
+    assert_eq!(manifest["metadata"]["title"], "Volume 1");
+    assert_eq!(
+        manifest["metadata"]["conformsTo"],
+        "https://readium.org/webpub-manifest/profiles/divina"
+    );
+    assert_eq!(manifest["metadata"]["numberOfPages"], 1);
+    assert_eq!(manifest["metadata"]["belongsTo"]["series"][0]["name"], "Series");
+    assert_eq!(
+        manifest["links"][0],
+        serde_json::json!({
+            "rel": "self",
+            "href": format!("https://reader.example/komga/api/v1/books/{}/manifest", book.id),
+            "type": "application/divina+json"
+        })
+    );
+    assert_eq!(manifest["links"][1]["rel"], "http://opds-spec.org/acquisition");
+    assert_eq!(manifest["links"][1]["type"], "application/vnd.comicbook+zip");
+    assert_eq!(
+        manifest["readingOrder"][0]["href"],
+        format!(
+            "https://reader.example/komga/api/v1/books/{}/pages/1?contentNegotiation=false",
+            book.id
+        )
+    );
+    assert_eq!(manifest["readingOrder"][0]["type"], "image/png");
+    assert_eq!(manifest["readingOrder"][0]["width"], 48);
+    assert_eq!(manifest["resources"][0]["type"], "image/jpeg");
+    assert_eq!(manifest["images"], serde_json::json!([]));
+    assert_eq!(manifest["toc"], serde_json::json!([]));
+
+    let mismatch = app
+        .oneshot(
+            Request::get(format!("/api/v1/books/{}/manifest/pdf", book.id))
+                .header(header::AUTHORIZATION, basic("admin@example.org", "password"))
+                .header(header::HOST, "reader.example")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(mismatch.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn divina_manifest_advertises_jpeg_alternate_for_convertible_pages() {
+    let storage = Storage::connect_memory().await.unwrap();
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path().join("library");
+    fs::create_dir_all(root.join("Series")).unwrap();
+    let archive_path = root.join("Series/Volume.cbz");
+    let mut writer = ZipWriter::new(File::create(&archive_path).unwrap());
+    writer.start_file("page.webp", SimpleFileOptions::default()).unwrap();
+    writer
+        .write_all(
+            &fs::read(
+                PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../komga/komga/src/test/resources/hashpage/e-sou.webp/1.webp"),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    writer.finish().unwrap();
+
+    let library = Library::new("Library".into(), Url::from_directory_path(&root).unwrap());
+    storage.create_library(&library).await.unwrap();
+    let scan = scan_library_files(&library, || false).unwrap();
+    storage.apply_library_scan(&library.id, &scan, false).await.unwrap();
+    let series = storage.list_series_by_library_id(&library.id).await.unwrap();
+    let book = storage.list_books_by_series_id(&series[0].id).await.unwrap().remove(0);
+    let media = analyze_book(&book, true, || false).unwrap();
+    storage.replace_media_analysis(&media).await.unwrap();
+
+    let app = app_with_storage(storage).await;
+    assert_eq!(claim(&app).await.status(), StatusCode::OK);
+    let manifest = app
+        .oneshot(
+            Request::get(format!("/api/v1/books/{}/manifest", book.id))
+                .header(header::AUTHORIZATION, basic("admin@example.org", "password"))
+                .header(header::HOST, "reader.example")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(manifest.status(), StatusCode::OK);
+    let manifest = body_json(manifest).await;
+    assert_eq!(manifest["readingOrder"][0]["type"], "image/webp");
+    assert_eq!(manifest["readingOrder"][0]["alternate"][0]["type"], "image/jpeg");
+    assert!(
+        manifest["readingOrder"][0]["alternate"][0]["href"]
+            .as_str()
+            .unwrap()
+            .ends_with("?contentNegotiation=false&convert=jpeg")
+    );
+}
+
+#[tokio::test]
+async fn pdf_webpub_and_divina_manifests_match_kotlin_contract() {
+    let (_temporary, storage, tasks, book, _media) = analyzed_media_fixture("pdf/komga.pdf", "Volume.pdf").await;
+    let app = build_app(AppState::new(storage, tasks).await.unwrap());
+    assert_eq!(claim(&app).await.status(), StatusCode::OK);
+    let admin = basic("admin@example.org", "password");
+
+    let manifest = app
+        .clone()
+        .oneshot(
+            Request::get(format!("/api/v1/books/{}/manifest", book.id))
+                .header(header::AUTHORIZATION, &admin)
+                .header(header::HOST, "reader.example:25600")
+                .header(header::IF_MODIFIED_SINCE, "Wed, 21 Oct 2099 07:28:00 GMT")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(manifest.status(), StatusCode::OK);
+    assert_eq!(manifest.headers()[header::CONTENT_TYPE], "application/webpub+json");
+    assert!(!manifest.headers().contains_key(header::LAST_MODIFIED));
+    let manifest = body_json(manifest).await;
+    assert_eq!(
+        manifest["metadata"]["conformsTo"],
+        "https://readium.org/webpub-manifest/profiles/pdf"
+    );
+    assert_eq!(manifest["readingOrder"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        manifest["readingOrder"][0]["href"],
+        format!("http://reader.example:25600/api/v1/books/{}/pages/1/raw", book.id)
+    );
+    assert_eq!(manifest["readingOrder"][0]["type"], "application/pdf");
+    assert_eq!(manifest["links"][1]["type"], "application/divina+json");
+    assert!(
+        manifest["links"][1]["href"]
+            .as_str()
+            .unwrap()
+            .ends_with("/manifest/divina")
+    );
+    assert_eq!(manifest["links"][2]["type"], "application/pdf");
+
+    let divina = app
+        .clone()
+        .oneshot(
+            Request::get(format!("/api/v1/books/{}/manifest/divina", book.id))
+                .header(header::AUTHORIZATION, &admin)
+                .header(header::HOST, "reader.example")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(divina.status(), StatusCode::OK);
+    assert_eq!(divina.headers()[header::CONTENT_TYPE], "application/divina+json");
+    let divina = body_json(divina).await;
+    assert_eq!(divina["readingOrder"][0]["type"], "image/jpeg");
+    assert_eq!(divina["readingOrder"][0]["width"], 3200);
+
+    let mismatch = app
+        .oneshot(
+            Request::get(format!("/api/v1/books/{}/manifest/epub", book.id))
+                .header(header::AUTHORIZATION, admin)
+                .header(header::HOST, "reader.example")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(mismatch.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn epub_webpub_manifest_preserves_spine_navigation_and_resources() {
+    let (_temporary, storage, tasks, book, _media) = analyzed_media_fixture("archives/epub3.epub", "Volume.epub").await;
+    let app = build_app(AppState::new(storage, tasks).await.unwrap());
+    assert_eq!(claim(&app).await.status(), StatusCode::OK);
+    let admin = basic("admin@example.org", "password");
+
+    let manifest = app
+        .clone()
+        .oneshot(
+            Request::get(format!("/api/v1/books/{}/manifest/epub", book.id))
+                .header(header::AUTHORIZATION, &admin)
+                .header(header::HOST, "reader.example")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(manifest.status(), StatusCode::OK);
+    assert_eq!(manifest.headers()[header::CONTENT_TYPE], "application/webpub+json");
+    let manifest = body_json(manifest).await;
+    assert_eq!(
+        manifest["metadata"]["conformsTo"],
+        "https://readium.org/webpub-manifest/profiles/epub"
+    );
+    assert_eq!(manifest["metadata"]["rendition"]["layout"], "fixed");
+    assert!(
+        manifest["readingOrder"][0]["href"]
+            .as_str()
+            .unwrap()
+            .ends_with("/resource/titlepage.xhtml")
+    );
+    assert!(
+        manifest["readingOrder"][1]["href"]
+            .as_str()
+            .unwrap()
+            .ends_with("/resource/page_1.xhtml")
+    );
+    assert_eq!(manifest["readingOrder"][0]["type"], "application/xhtml+xml");
+    assert_eq!(manifest["resources"][0]["type"], "image/jpeg");
+    assert!(
+        manifest["resources"][1]["href"]
+            .as_str()
+            .unwrap()
+            .ends_with("/resource/page_styles.css")
+    );
+    assert!(
+        manifest["toc"][0]["href"]
+            .as_str()
+            .unwrap()
+            .ends_with("/resource/page_1.xhtml")
+    );
+    assert_eq!(manifest["toc"][0]["title"], "Page 1");
+    assert!(
+        manifest["landmarks"][0]["href"]
+            .as_str()
+            .unwrap()
+            .ends_with("/resource/titlepage.xhtml")
+    );
+    assert_eq!(manifest["links"][1]["type"], "application/divina+json");
+    assert_eq!(manifest["links"][2]["type"], "application/epub+zip");
+
+    let generic = app
+        .oneshot(
+            Request::get(format!("/api/v1/books/{}/manifest", book.id))
+                .header(header::AUTHORIZATION, admin)
+                .header(header::HOST, "reader.example")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(generic.status(), StatusCode::OK);
+    assert_eq!(generic.headers()[header::CONTENT_TYPE], "application/webpub+json");
 }
 
 #[tokio::test]

@@ -361,6 +361,12 @@ pub fn convert_image(
     image_ops::convert(source, output, max_edge)
 }
 
+/// Reports whether the linked image pipeline can decode a media type for
+/// conversion to JPEG or PNG.
+pub fn can_convert_image_media_type(media_type: &str) -> bool {
+    image_ops::can_decode_media_type(media_type)
+}
+
 /// Generates a JPEG poster from an EPUB package cover or the first page.
 ///
 /// # Errors
@@ -837,5 +843,24 @@ mod tests {
         let media = analyze_book(&book(&path), false, || false).unwrap();
         assert_eq!(media.status, MediaStatus::Unsupported);
         assert_eq!(media.comment.as_deref(), Some("ERR_1004"));
+    }
+
+    #[test]
+    fn image_conversion_capabilities_match_enabled_decoders() {
+        for media_type in [
+            "image/jpeg",
+            "image/png",
+            "image/gif",
+            "image/webp",
+            "image/bmp",
+            "image/tiff",
+            "image/x-icon",
+            "image/vnd.microsoft.icon; charset=binary",
+        ] {
+            assert!(can_convert_image_media_type(media_type), "{media_type}");
+        }
+        for media_type in ["image/svg+xml", "application/pdf", "application/octet-stream"] {
+            assert!(!can_convert_image_media_type(media_type), "{media_type}");
+        }
     }
 }

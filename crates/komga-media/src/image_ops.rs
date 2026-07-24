@@ -50,6 +50,26 @@ pub(crate) fn dimension(bytes: &[u8]) -> Option<Dimension> {
     })
 }
 
+pub(crate) fn can_decode_media_type(media_type: &str) -> bool {
+    let media_type = media_type
+        .split(';')
+        .next()
+        .unwrap_or(media_type)
+        .trim()
+        .to_ascii_lowercase();
+    matches!(
+        media_type.as_str(),
+        "image/jpeg"
+            | "image/png"
+            | "image/gif"
+            | "image/webp"
+            | "image/bmp"
+            | "image/tiff"
+            | "image/x-icon"
+            | "image/vnd.microsoft.icon"
+    )
+}
+
 fn flatten_alpha(image: &DynamicImage) -> RgbImage {
     let rgba = image.to_rgba8();
     RgbImage::from_fn(rgba.width(), rgba.height(), |x, y| {

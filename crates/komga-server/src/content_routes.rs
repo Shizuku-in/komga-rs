@@ -98,6 +98,16 @@ async fn get_sibling(state: &AppState, user: &User, book_id: &str, next: bool) -
 }
 
 pub(crate) async fn load_visible_book(state: &AppState, user: &User, book_id: &str) -> Result<BookDto, ApiError> {
+    load_visible_book_context(state, user, book_id)
+        .await
+        .map(|(book, _)| book)
+}
+
+pub(crate) async fn load_visible_book_context(
+    state: &AppState,
+    user: &User,
+    book_id: &str,
+) -> Result<(BookDto, SeriesDto), ApiError> {
     let book = state
         .storage
         .find_book_dto_by_id(book_id, &user.id)
@@ -109,7 +119,7 @@ pub(crate) async fn load_visible_book(state: &AppState, user: &User, book_id: &s
         .await?
         .ok_or_else(|| ApiError::not_found("Series not found"))?;
     ensure_series_visible(user, &series)?;
-    Ok(book)
+    Ok((book, series))
 }
 
 fn ensure_series_visible(user: &User, series: &SeriesDto) -> Result<(), ApiError> {

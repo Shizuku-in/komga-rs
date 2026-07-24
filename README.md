@@ -57,6 +57,16 @@ Do not run the Kotlin and Rust servers against the same SQLite file at the same 
 - `GET /api/v1/books/{id}`
 - `GET /api/v1/books/{id}/previous`
 - `GET /api/v1/books/{id}/next`
+- `POST /api/v1/books/{id}/analyze`
+- `GET /api/v1/books/{id}/pages`
+- `GET /api/v1/books/{id}/pages/{number}`
+- `GET /api/v1/books/{id}/pages/{number}/raw`
+- `GET /api/v1/books/{id}/pages/{number}/thumbnail`
+- `GET /api/v1/books/{id}/thumbnail`
+- `GET /api/v1/books/{id}/positions`
+- `GET /api/v1/books/{id}/resource/{resource}`
+- `GET /api/v1/books/{id}/manifest`
+- `GET /api/v1/books/{id}/manifest/{divina|pdf|epub}`
 - `POST /api/v1/filesystem`
 - `GET /api/v1/client-settings/global/list`
 - `PATCH|DELETE /api/v1/client-settings/global`
@@ -68,7 +78,7 @@ Do not run the Kotlin and Rust servers against the same SQLite file at the same 
 
 Authentication is compatible with the current Komga contract: HTTP Basic, `KOMGA-SESSION`, `X-Auth-Token`, and SHA-512-backed `X-API-Key`. Existing Spring BCrypt `$2a$` password hashes are accepted.
 
-`ScanLibrary` tasks are executed in the background. They discover configured CBX/PDF/EPUB files and persist Kotlin-compatible Series, Book, Media, and initial metadata rows. CBZ, CBR, PDF, and EPUB contents are analyzed and receive generated book thumbnails; fixed-layout EPUB pages, publication resources, navigation, and reading positions are available through the REST API. EPUB metadata providers are still pending. `EmptyTrash` and other unported task types remain queued and unmodified. Library deletion is currently limited to empty libraries; deleting a library that still contains series, books, or sidecars returns `409 Conflict`.
+`ScanLibrary` tasks are executed in the background. They discover configured CBX/PDF/EPUB files and persist Kotlin-compatible Series, Book, Media, and initial metadata rows. CBZ, CBR, PDF, and EPUB contents are analyzed and receive generated book thumbnails; fixed-layout EPUB pages, publication resources, navigation, reading positions, and Divina/PDF/EPUB WebPub manifests are available through the REST API. EPUB metadata providers and book-file downloads are still pending. `EmptyTrash` and other unported task types remain queued and unmodified. Library deletion is currently limited to empty libraries; deleting a library that still contains series, books, or sidecars returns `409 Conflict`.
 
 The modern Series and Book list endpoints support Spring-style pagination and the initial condition subset for library, series, deleted, one-shot, title, status, and per-user read state. Library sharing, age, and sharing-label restrictions are applied before pagination. Lucene `fullTextSearch` and conditions owned by collections, read lists, posters, and media profiles return `400 Bad Request` until those slices are implemented.
 

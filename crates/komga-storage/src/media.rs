@@ -92,7 +92,7 @@ impl Storage {
         let files = sqlx::query_as::<_, FileRow>(
             r#"SELECT FILE_NAME AS file_name, MEDIA_TYPE AS media_type,
                       SUB_TYPE AS sub_type, FILE_SIZE AS file_size
-                 FROM MEDIA_FILE WHERE BOOK_ID = ? ORDER BY FILE_NAME"#,
+                 FROM MEDIA_FILE WHERE BOOK_ID = ? ORDER BY rowid"#,
         )
         .bind(book_id)
         .fetch_all(&self.pool)
@@ -359,8 +359,8 @@ mod tests {
     use std::fs;
 
     use komga_core::{
-        Book, EPUB_MEDIA_TYPE, EpubTocEntry, Library, R2Location, R2Locator, ScanInterval, User, new_id,
-        scan_library_files,
+        Book, EPUB_ASSET_SUBTYPE, EPUB_MEDIA_TYPE, EPUB_PAGE_SUBTYPE, EpubTocEntry, Library, R2Location, R2Locator,
+        ScanInterval, User, new_id, scan_library_files,
     };
     use url::Url;
 
@@ -400,12 +400,26 @@ mod tests {
                 },
             ],
             page_count: 2,
-            files: vec![MediaFile {
-                file_name: "notes.txt".into(),
-                media_type: Some("text/plain".into()),
-                sub_type: None,
-                file_size: Some(5),
-            }],
+            files: vec![
+                MediaFile {
+                    file_name: "z-last.xhtml".into(),
+                    media_type: Some("application/xhtml+xml".into()),
+                    sub_type: Some(EPUB_PAGE_SUBTYPE.into()),
+                    file_size: Some(5),
+                },
+                MediaFile {
+                    file_name: "a-first.xhtml".into(),
+                    media_type: Some("application/xhtml+xml".into()),
+                    sub_type: Some(EPUB_PAGE_SUBTYPE.into()),
+                    file_size: Some(6),
+                },
+                MediaFile {
+                    file_name: "cover.jpg".into(),
+                    media_type: Some("image/jpeg".into()),
+                    sub_type: Some(EPUB_ASSET_SUBTYPE.into()),
+                    file_size: Some(7),
+                },
+            ],
             comment: None,
             extension: None,
             book_id: book_id.into(),
@@ -446,7 +460,14 @@ mod tests {
         let media = storage.find_media_by_book_id(&book.id).await.unwrap().unwrap();
         assert_eq!(media.status, MediaStatus::Ready);
         assert_eq!(media.pages.len(), 2);
-        assert_eq!(media.files[0].file_name, "notes.txt");
+        assert_eq!(
+            media
+                .files
+                .iter()
+                .map(|file| file.file_name.as_str())
+                .collect::<Vec<_>>(),
+            ["z-last.xhtml", "a-first.xhtml", "cover.jpg"]
+        );
         let progress = sqlx::query_as::<_, (String, i32)>(
             "SELECT USER_ID, PAGE FROM READ_PROGRESS WHERE BOOK_ID = ? ORDER BY USER_ID",
         )

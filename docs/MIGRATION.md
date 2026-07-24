@@ -9,9 +9,9 @@ The reference baseline is Komga commit `4ef86df`. Porting is organized as vertic
 | Claim and users | Implemented | Claim, current user, CRUD, roles, library sharing fields, age/label restrictions, and password changes. |
 | Authentication | Partial | Basic, in-memory sessions, remember-me cookie, header sessions, logout, and REST API keys are implemented. OAuth2 and authentication activity are pending. |
 | Libraries and scanner | Partial | Library CRUD, filesystem browsing, scan workers, startup/periodic scheduling, Series/Book discovery, change reconciliation, soft deletion, and automatic CBZ/CBR/PDF/EPUB analysis are implemented. Sidecars, metadata providers, and trash execution are pending. |
-| Series/books/read progress | Partial | Skeleton persistence, natural ordering, modern list/detail APIs, Spring pagination, basic recursive filtering, sibling navigation, access restrictions, existing progress hydration, CBZ/CBR/PDF and fixed-layout EPUB pages, EPUB resources/positions, and generated book thumbnails are implemented. Metadata mutations, progress writes, WebPub manifests, deprecated/specialized lists, thumbnail management, and downloads are pending. |
+| Series/books/read progress | Partial | Skeleton persistence, natural ordering, modern list/detail APIs, Spring pagination, basic recursive filtering, sibling navigation, access restrictions, existing progress hydration, CBZ/CBR/PDF and fixed-layout EPUB pages, EPUB resources/positions, WebPub manifests, and generated book thumbnails are implemented. Metadata mutations, progress writes, deprecated/specialized lists, thumbnail management, and downloads are pending. |
 | Collections/read lists | Pending | CRUD, matching, thumbnails, generated archives, and progress aggregation. |
-| Media | Partial | ZIP/CBZ, RAR4/RAR5/CBR (including solid archives), PDF, and EPUB analysis are implemented without external runtime commands. PDF supports rendered and raw pages; EPUB supports OPF/NAV/NCX discovery, resources, Readium positions, native KEPUB detection, fixed-layout pages, and package covers. WebPub manifests, EPUB metadata import, uncommon image codecs, hashing, and duplicate pages are pending. |
+| Media | Partial | ZIP/CBZ, RAR4/RAR5/CBR (including solid archives), PDF, and EPUB analysis are implemented without external runtime commands. PDF supports rendered and raw pages; EPUB supports OPF/NAV/NCX discovery, resources, Readium positions, native KEPUB detection, fixed-layout pages, and package covers. Divina, PDF, and EPUB WebPub manifests are available. EPUB metadata import, uncommon image codecs, hashing, and duplicate pages are pending. |
 | Search | Pending | Lucene-equivalent multilingual indexing and lifecycle. |
 | OPDS | Pending | OPDS 1 XML and OPDS 2 JSON catalogs. |
 | Device sync | Pending | Kobo, KOReader, sync points, and KEPUB conversion. |
@@ -28,7 +28,7 @@ The reference baseline is Komga commit `4ef86df`. Porting is organized as vertic
 
 ## Current limitations
 
-- Scan workers analyze ZIP/CBZ, RAR/CBR, PDF, and EPUB files and generate book covers. Encrypted and multi-volume RAR archives, password-protected PDFs, and DRM-protected or obfuscated EPUB resources remain unsupported. Page hashes, duplicate detection, EPUB metadata providers, WebPub manifests, and KEPUB conversion are not implemented.
+- Scan workers analyze ZIP/CBZ, RAR/CBR, PDF, and EPUB files and generate book covers. Encrypted and multi-volume RAR archives, password-protected PDFs, and DRM-protected or obfuscated EPUB resources remain unsupported. Page hashes, duplicate detection, EPUB metadata providers, and KEPUB conversion are not implemented.
 - Series/Book queries do not yet support Lucene `fullTextSearch`, collection/read-list/poster/media-profile conditions, deprecated GET lists, alphabetical groups, or latest/new/updated feeds. Unsupported request bodies and sort fields return `400 Bad Request`.
 - `EmptyTrash` and unknown Kotlin tasks remain queued and are not claimed by Rust workers.
 - Only empty libraries can be deleted. Non-empty library deletion returns `409 Conflict` until the full series/book cascade is ported.
@@ -37,13 +37,13 @@ The reference baseline is Komga commit `4ef86df`. Porting is organized as vertic
 
 ## Next slice
 
-The next dependency-ordered slice is WebPub publication support:
+The next dependency-ordered slice is book file delivery:
 
-1. add Kotlin-compatible WebPub metadata, link, contributor, and publication DTOs at the server boundary;
-2. generate profile-specific manifests for Divina, PDF, and EPUB media;
-3. expose the generic and profile-specific manifest routes with current visibility and cache rules;
-4. reuse EPUB resources, navigation, landmarks, page lists, and positions without moving transport DTOs into `komga-core`;
-5. port HTTP contract tests for media types, links, metadata, restrictions, and conditional requests.
+1. expose the REST book-file route and its filename-suffix compatibility alias;
+2. enforce the `FILE_DOWNLOAD` role and existing library, age, and sharing-label restrictions;
+3. stream source files without buffering them in memory and preserve Kotlin content type, length, and attachment filename headers;
+4. retain Kotlin's missing-book and moved-file error behavior;
+5. port HTTP contract tests for authorization, headers, large streaming bodies, and missing files.
 
 Media processing remains isolated in `komga-media`: archive, PDF, EPUB, and image implementations depend on the
 lightweight models and profile classification in `komga-core`. The storage layer reads and writes Kotlin's

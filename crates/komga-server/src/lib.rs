@@ -19,6 +19,7 @@ mod routes;
 mod runtime;
 mod settings_routes;
 mod sse_routes;
+mod webpub_routes;
 
 pub use auth::{REMEMBER_ME_COOKIE, SESSION_COOKIE, SESSION_HEADER};
 pub use runtime::{AppRuntime, ShutdownHandle};
@@ -117,6 +118,19 @@ pub fn build_app(state: AppState) -> Router {
         .route("/api/v1/books/{book_id}/analyze", post(media_routes::analyze_book))
         .route("/api/v1/books/{book_id}/pages", get(media_routes::list_pages))
         .route("/api/v1/books/{book_id}/positions", get(media_routes::get_positions))
+        .route("/api/v1/books/{book_id}/manifest", get(webpub_routes::get_manifest))
+        .route(
+            "/api/v1/books/{book_id}/manifest/divina",
+            get(webpub_routes::get_divina_manifest),
+        )
+        .route(
+            "/api/v1/books/{book_id}/manifest/pdf",
+            get(webpub_routes::get_pdf_manifest),
+        )
+        .route(
+            "/api/v1/books/{book_id}/manifest/epub",
+            get(webpub_routes::get_epub_manifest),
+        )
         .route(
             "/api/v1/books/{book_id}/pages/{page_number}",
             get(media_routes::get_page),
