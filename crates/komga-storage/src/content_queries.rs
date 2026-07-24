@@ -117,6 +117,17 @@ struct BookQueryRow {
     progress_device_name: Option<String>,
 }
 
+/// A visible read-list member projected for archive generation.
+#[derive(Debug, Clone, PartialEq, Eq, FromRow)]
+pub struct ReadListFile {
+    /// Stable book identifier.
+    pub book_id: String,
+    /// Original persisted book URL.
+    pub url: String,
+    /// Zero-based stored position in the read list.
+    pub number: i64,
+}
+
 #[derive(Debug, Deserialize)]
 struct AuthorJson {
     name: String,
@@ -215,6 +226,23 @@ SELECT b.ID AS id, b.SERIES_ID AS series_id, sm.TITLE AS series_title,
   LEFT JOIN READ_PROGRESS rp ON rp.BOOK_ID = b.ID AND rp.USER_ID = "#;
 
 impl Storage {
+    /// Returns visible read-list source files in stored member order.
+    pub async fn read_list_files(&self, read_list_id: &str, user: &User) -> Result<Vec<ReadListFile>> {
+        let mut query = QueryBuilder::new(
+            r#"SELECT b.ID book_id,b.URL url,rb.NUMBER number
+                 FROM READLIST_BOOK rb
+                 JOIN BOOK b ON b.ID=rb.BOOK_ID
+                 JOIN MEDIA m ON m.BOOK_ID=b.ID
+                 JOIN BOOK_METADATA bm ON bm.BOOK_ID=b.ID
+                 JOIN SERIES_METADATA sm ON sm.SERIES_ID=b.SERIES_ID
+                WHERE rb.READLIST_ID="#,
+        );
+        query.push_bind(read_list_id.to_owned());
+        push_book_visibility(&mut query, user);
+        query.push(" ORDER BY rb.NUMBER,b.ID");
+        Ok(query.build_query_as().fetch_all(&self.pool).await?)
+    }
+
     /// Lists visible series using the supported Kotlin search-condition subset.
     ///
     /// # Errors

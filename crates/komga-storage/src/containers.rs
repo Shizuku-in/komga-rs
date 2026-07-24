@@ -1,6 +1,6 @@
 //! Transactional collections and read lists.
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use chrono::Utc;
 use komga_core::{
@@ -38,6 +38,7 @@ struct ReadListRow {
 
 #[derive(Debug, FromRow)]
 struct ReadListMatchRow {
+    request_index: i64,
     series_id: String,
     series_title: String,
     release_date: Option<String>,
@@ -97,59 +98,82 @@ impl Storage {
         let duplicate = names
             .iter()
             .any(|name| normalized_name(name) == normalized_name(&request.name));
-        let mut requests = Vec::with_capacity(request.books.len());
-        for book_request in request.books {
-            let mut rows = Vec::new();
-            for series in &book_request.series {
-                rows.extend(
-                    sqlx::query_as::<_, ReadListMatchRow>(
-                        r#"SELECT sm.SERIES_ID series_id, sm.TITLE series_title,
-                                  CAST(bma.RELEASE_DATE AS TEXT) release_date,
-                                  bm.BOOK_ID book_id, bm.NUMBER book_number, bm.TITLE book_title
-                             FROM SERIES_METADATA sm
-                             LEFT JOIN BOOK_METADATA_AGGREGATION bma ON bma.SERIES_ID=sm.SERIES_ID
-                             JOIN BOOK b ON b.SERIES_ID=sm.SERIES_ID
-                             JOIN BOOK_METADATA bm ON bm.BOOK_ID=b.ID
-                            WHERE sm.TITLE=? COLLATE NOCASE
-                              AND ltrim(bm.NUMBER,'0')=ltrim(?,'0') COLLATE NOCASE
-                            ORDER BY sm.SERIES_ID,bm.BOOK_ID"#,
-                    )
-                    .bind(series)
-                    .bind(&book_request.number)
-                    .fetch_all(&self.pool)
-                    .await?,
-                );
-            }
-            let mut matches: Vec<ReadListRequestBookMatchDto> = Vec::new();
-            for row in rows {
-                if let Some(group) = matches.iter_mut().find(|group| group.series.series_id == row.series_id) {
-                    if !group.books.iter().any(|book| book.book_id == row.book_id) {
-                        group.books.push(ReadListRequestBookMatchBookDto {
-                            book_id: row.book_id,
-                            number: row.book_number,
-                            title: row.book_title,
-                        });
-                    }
-                } else {
-                    matches.push(ReadListRequestBookMatchDto {
-                        series: ReadListRequestBookMatchSeriesDto {
-                            series_id: row.series_id,
-                            title: row.series_title,
-                            release_date: row.release_date,
-                        },
-                        books: vec![ReadListRequestBookMatchBookDto {
-                            book_id: row.book_id,
-                            number: row.book_number,
-                            title: row.book_title,
-                        }],
-                    });
+        let request_rows = request
+            .books
+            .iter()
+            .enumerate()
+            .flat_map(|(request_index, book)| {
+                book.series.iter().enumerate().map(move |(candidate_index, series)| {
+                    serde_json::json!({
+                        "requestIndex": request_index,
+                        "candidateIndex": candidate_index,
+                        "series": series,
+                        "number": book.number,
+                    })
+                })
+            })
+            .collect::<Vec<_>>();
+        let rows = sqlx::query_as::<_, ReadListMatchRow>(
+            r#"WITH request AS (
+                   SELECT json_extract(value,'$.requestIndex') request_index,
+                          json_extract(value,'$.candidateIndex') candidate_index,
+                          json_extract(value,'$.series') series,
+                          json_extract(value,'$.number') number
+                     FROM json_each(?)
+               )
+               SELECT request.request_index request_index,
+                      sm.SERIES_ID series_id, sm.TITLE series_title,
+                      CAST(bma.RELEASE_DATE AS TEXT) release_date,
+                      bm.BOOK_ID book_id, bm.NUMBER book_number, bm.TITLE book_title
+                 FROM request
+                 JOIN SERIES_METADATA sm ON request.series=sm.TITLE COLLATE NOCASE
+                 LEFT JOIN BOOK_METADATA_AGGREGATION bma ON bma.SERIES_ID=sm.SERIES_ID
+                 JOIN BOOK b ON b.SERIES_ID=sm.SERIES_ID
+                 JOIN BOOK_METADATA bm ON bm.BOOK_ID=b.ID
+                    AND ltrim(bm.NUMBER,'0')=ltrim(request.number,'0') COLLATE NOCASE
+                ORDER BY request.request_index,request.candidate_index,sm.SERIES_ID,bm.BOOK_ID"#,
+        )
+        .bind(serde_json::to_string(&request_rows).map_err(|error| StorageError::InvalidData(error.to_string()))?)
+        .fetch_all(&self.pool)
+        .await?;
+        let mut grouped = (0..request.books.len())
+            .map(|_| {
+                (
+                    Vec::<ReadListRequestBookMatchDto>::new(),
+                    HashMap::<String, usize>::new(),
+                )
+            })
+            .collect::<Vec<_>>();
+        for row in rows {
+            let Some((matches, positions)) = usize::try_from(row.request_index)
+                .ok()
+                .and_then(|index| grouped.get_mut(index))
+            else {
+                return Err(StorageError::InvalidData("invalid ComicRack request index".into()));
+            };
+            if let Some(position) = positions.get(&row.series_id).copied() {
+                if !matches[position].books.iter().any(|book| book.book_id == row.book_id) {
+                    matches[position].books.push(match_book(row));
                 }
+            } else {
+                let series_id = row.series_id.clone();
+                positions.insert(series_id, matches.len());
+                matches.push(ReadListRequestBookMatchDto {
+                    series: ReadListRequestBookMatchSeriesDto {
+                        series_id: row.series_id.clone(),
+                        title: row.series_title.clone(),
+                        release_date: row.release_date.clone(),
+                    },
+                    books: vec![match_book(row)],
+                });
             }
-            requests.push(ReadListRequestBookMatchesDto {
-                request: book_request,
-                matches,
-            });
         }
+        let requests = request
+            .books
+            .into_iter()
+            .zip(grouped)
+            .map(|(request, (matches, _))| ReadListRequestBookMatchesDto { request, matches })
+            .collect();
         Ok(ReadListRequestMatchDto {
             read_list_match: ReadListMatchDto {
                 name: request.name,
@@ -793,6 +817,14 @@ impl Storage {
             created_date: row.created_date,
             last_modified_date: row.last_modified_date,
         }))
+    }
+}
+
+fn match_book(row: ReadListMatchRow) -> ReadListRequestBookMatchBookDto {
+    ReadListRequestBookMatchBookDto {
+        book_id: row.book_id,
+        number: row.book_number,
+        title: row.book_title,
     }
 }
 

@@ -23,10 +23,6 @@ pub enum ComicRackListError {
 /// Parses a ComicRack `.cbl` document without resolving external resources.
 pub fn parse_read_list(bytes: &[u8]) -> Result<ReadListRequest, ComicRackListError> {
     let text = std::str::from_utf8(bytes).map_err(|_| ComicRackListError::InvalidXml)?;
-    let lowercase = text.to_ascii_lowercase();
-    if lowercase.contains("<!doctype") || lowercase.contains("<!entity") {
-        return Err(ComicRackListError::InvalidXml);
-    }
     let document = roxmltree::Document::parse(text).map_err(|_| ComicRackListError::InvalidXml)?;
     let root = document.root_element();
     if root.tag_name().name() != "ReadingList" {
@@ -82,6 +78,7 @@ mod tests {
         assert_eq!(request.books[0].series, ["Saga (2)", "Saga"]);
         assert_eq!(request.books[0].number, "007");
         assert_eq!(request.books[1].series, ["One"]);
+        assert!(parse_read_list(b"<ReadingList><Name>&lt;!doctype is text</Name><Books><Book Series=\"One\" Number=\"1\"/></Books></ReadingList>").is_ok());
     }
 
     #[test]

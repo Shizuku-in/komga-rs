@@ -18,6 +18,8 @@ mod filesystem_routes;
 mod library_routes;
 mod media_routes;
 mod metadata_routes;
+mod read_list_file_routes;
+mod read_list_match_routes;
 mod read_progress_routes;
 mod routes;
 mod runtime;
@@ -206,7 +208,7 @@ pub fn build_app(state: AppState) -> Router {
         )
         .route(
             "/api/v1/readlists/match/comicrack",
-            axum::routing::post(container_routes::match_comicrack_read_list),
+            axum::routing::post(read_list_match_routes::match_comicrack_read_list),
         )
         .route(
             "/api/v1/readlists/{id}",
@@ -215,7 +217,10 @@ pub fn build_app(state: AppState) -> Router {
                 .delete(container_routes::delete_read_list),
         )
         .route("/api/v1/readlists/{id}/books", get(container_routes::read_list_books))
-        .route("/api/v1/readlists/{id}/file", get(container_routes::download_read_list))
+        .route(
+            "/api/v1/readlists/{id}/file",
+            get(read_list_file_routes::download_read_list),
+        )
         .route(
             "/api/v1/readlists/{id}/thumbnail",
             get(container_routes::get_read_list_thumbnail),

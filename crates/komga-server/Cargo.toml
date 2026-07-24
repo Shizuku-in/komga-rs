@@ -41,4 +41,3 @@ zip.workspace = true
 http-body-util.workspace = true
 tempfile.workspace = true
 tower.workspace = true
-zip.workspace = true

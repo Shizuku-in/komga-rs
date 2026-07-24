@@ -61,7 +61,8 @@ async fn body_frames(response: Response<Body>) -> (usize, Vec<u8>) {
 
 #[tokio::test]
 async fn comicrack_match_requires_admin_and_returns_complete_preview() {
-    let app = test_app().await;
+    let storage = Storage::connect_memory().await.unwrap();
+    let app = app_with_storage(storage.clone()).await;
     let xml =
         br#"<ReadingList><Name>Unicode list</Name><Books><Book Series="Missing" Number="01"/></Books></ReadingList>"#;
     let (content_type, body) = multipart_file(xml);
@@ -78,6 +79,46 @@ async fn comicrack_match_requires_admin_and_returns_complete_preview() {
     assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
 
     assert_eq!(claim(&app).await.status(), StatusCode::OK);
+    let reader = User::new("reader@example.org".into(), bcrypt::hash("reader-password", 4).unwrap());
+    storage.create_user(&reader).await.unwrap();
+    let forbidden = app
+        .clone()
+        .oneshot(
+            Request::post("/api/v1/readlists/match/comicrack")
+                .header(header::AUTHORIZATION, basic("reader@example.org", "reader-password"))
+                .header(header::CONTENT_TYPE, &content_type)
+                .body(Body::from(body.clone()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(forbidden.status(), StatusCode::FORBIDDEN);
+    let missing = app
+        .clone()
+        .oneshot(
+            Request::post("/api/v1/readlists/match/comicrack")
+                .header(header::AUTHORIZATION, basic("admin@example.org", "password"))
+                .header(header::CONTENT_TYPE, "multipart/form-data; boundary=empty")
+                .body(Body::from("--empty--\r\n"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(missing.status(), StatusCode::BAD_REQUEST);
+    let (invalid_type, invalid_body) = multipart_file(b"not XML");
+    let invalid = app
+        .clone()
+        .oneshot(
+            Request::post("/api/v1/readlists/match/comicrack")
+                .header(header::AUTHORIZATION, basic("admin@example.org", "password"))
+                .header(header::CONTENT_TYPE, invalid_type)
+                .body(Body::from(invalid_body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(invalid.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(body_json(invalid).await["message"], "ERR_1015");
     let response = app
         .clone()
         .oneshot(
@@ -146,10 +187,12 @@ async fn read_list_file_is_a_streamed_stored_zip64_archive() {
     assert_eq!(matched.requests[0].matches.len(), 1);
     assert_eq!(matched.requests[0].matches[0].series.series_id, book.series_id);
     assert_eq!(matched.requests[0].matches[0].books[0].book_id, book.id);
-    let source = fs::read(book.url.to_file_path().unwrap()).unwrap();
+    let source_path = book.url.to_file_path().unwrap();
+    let source = fs::read(&source_path).unwrap();
     let app = build_app(AppState::new(storage, tasks).await.unwrap());
     assert_eq!(claim(&app).await.status(), StatusCode::OK);
     let response = app
+        .clone()
         .oneshot(
             Request::get("/api/v1/readlists/list/file")
                 .header(header::AUTHORIZATION, basic("admin@example.org", "password"))
@@ -176,6 +219,22 @@ async fn read_list_file_is_a_streamed_stored_zip64_archive() {
     let mut actual = Vec::new();
     entry.read_to_end(&mut actual).unwrap();
     assert_eq!(actual, source);
+
+    fs::remove_file(source_path).unwrap();
+    let response = app
+        .oneshot(
+            Request::get("/api/v1/readlists/list/file")
+                .header(header::AUTHORIZATION, basic("admin@example.org", "password"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        ZipArchive::new(Cursor::new(body_bytes(response).await)).unwrap().len(),
+        0
+    );
 }
 
 fn multipart_file(bytes: &[u8]) -> (String, Vec<u8>) {
@@ -991,6 +1050,18 @@ async fn book_file_download_uses_analyzed_media_types_and_unknown_fallback() {
 #[tokio::test]
 async fn book_file_download_enforces_role_library_age_and_label_restrictions() {
     let (_temporary, storage, tasks, book, _media) = analyzed_media_fixture("archives/zip.zip", "Volume.cbz").await;
+    storage
+        .create_read_list(
+            "restricted-list",
+            &komga_core::ReadListCreation {
+                name: "Restricted list".into(),
+                summary: String::new(),
+                ordered: true,
+                book_ids: vec![book.id.clone()],
+            },
+        )
+        .await
+        .unwrap();
     let app = build_app(AppState::new(storage.clone(), tasks).await.unwrap());
     assert_eq!(claim(&app).await.status(), StatusCode::OK);
     let password_hash = bcrypt::hash("reader-password", 4).unwrap();
@@ -1049,6 +1120,36 @@ async fn book_file_download_enforces_role_library_age_and_label_restrictions() {
             response.status(),
             StatusCode::FORBIDDEN,
             "unexpected status for {email}"
+        );
+    }
+
+    let read_list_path = "/api/v1/readlists/restricted-list/file";
+    let no_role_response = app
+        .clone()
+        .oneshot(
+            Request::get(read_list_path)
+                .header(header::AUTHORIZATION, basic("no-role@example.org", "reader-password"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(no_role_response.status(), StatusCode::FORBIDDEN);
+    for email in ["no-library@example.org", "age@example.org", "label@example.org"] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::get(read_list_path)
+                    .header(header::AUTHORIZATION, basic(email, "reader-password"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::NOT_FOUND,
+            "unexpected ZIP status for {email}"
         );
     }
 }

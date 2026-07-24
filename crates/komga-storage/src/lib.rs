@@ -20,6 +20,7 @@ mod tasks;
 
 pub use containers::ContainerThumbnail;
 pub use content::ScanApplyStats;
+pub use content_queries::ReadListFile;
 pub use library::DeleteLibraryResult;
 pub use settings::ClientSetting;
 pub use tasks::{TaskRecord, TaskStorage};
