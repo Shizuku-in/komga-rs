@@ -88,5 +88,23 @@ pub(crate) async fn reconcile_library_schema(pool: &SqlitePool) -> Result<()> {
         .execute(pool)
         .await?;
     }
+    reconcile_container_thumbnail_schema(pool).await?;
+    Ok(())
+}
+
+async fn reconcile_container_thumbnail_schema(pool: &SqlitePool) -> Result<()> {
+    for table in ["THUMBNAIL_COLLECTION", "THUMBNAIL_READLIST"] {
+        let columns = sqlx::query(&format!("PRAGMA table_info({table})"))
+            .fetch_all(pool)
+            .await?
+            .into_iter()
+            .map(|row| row.get::<String, _>("name").to_ascii_uppercase())
+            .collect::<BTreeSet<_>>();
+        if !columns.contains("URL") {
+            sqlx::query(&format!("ALTER TABLE {table} ADD COLUMN URL varchar NULL"))
+                .execute(pool)
+                .await?;
+        }
+    }
     Ok(())
 }

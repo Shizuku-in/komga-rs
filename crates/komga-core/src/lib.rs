@@ -6,6 +6,7 @@
 
 #![warn(missing_docs)]
 
+mod containers;
 mod content;
 mod media;
 mod metadata;
@@ -18,6 +19,9 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 use uuid::Uuid;
 
+pub use containers::{
+    CollectionCreation, CollectionDto, ReadListCreation, ReadListDto, ReadListProgressUpdate, ReadListReadProgressDto,
+};
 pub use content::{
     AlternateTitleDto, AuthorDto, BookCondition, BookDto, BookMetadataAggregationDto, BookMetadataDto, BookSearch,
     BooleanOperator, ContentPage, EqualityOperator, MediaDto, PageRequest, ReadProgressDto, ReadStatus,
@@ -28,7 +32,7 @@ pub use media::{
     BookPage, Dimension, EPUB_ASSET_SUBTYPE, EPUB_EXTENSION_CLASS, EPUB_MEDIA_TYPE, EPUB_PAGE_SUBTYPE, EpubTocEntry,
     JPEG_MEDIA_TYPE, Media, MediaExtension, MediaExtensionEpub, MediaFile, MediaProfile, MediaStatus, PDF_MEDIA_TYPE,
     R2Location, R2Locator, R2Text, RAR_MEDIA_TYPE, RAR4_MEDIA_TYPE, RAR5_MEDIA_TYPE, ThumbnailBook, ThumbnailBookDto,
-    ThumbnailSeries, ThumbnailSeriesDto, ZIP_MEDIA_TYPE,
+    ThumbnailCollectionDto, ThumbnailReadListDto, ThumbnailSeries, ThumbnailSeriesDto, ZIP_MEDIA_TYPE,
 };
 pub use metadata::{
     AlternateTitle, Author, BookMetadata, BookMetadataAggregation, BookMetadataPatch, MetadataError, MetadataUpdate,

@@ -10,7 +10,7 @@ The reference baseline is Komga commit `4ef86df`. Porting is organized as vertic
 | Authentication | Partial | Basic, in-memory sessions, remember-me cookie, header sessions, logout, and REST API keys are implemented. OAuth2 and authentication activity are pending. |
 | Libraries and scanner | Partial | Library CRUD, filesystem browsing, scan workers, startup/periodic scheduling, Series/Book discovery, change reconciliation, soft deletion, and automatic CBZ/CBR/PDF/EPUB analysis are implemented. Sidecars, metadata providers, and trash execution are pending. |
 | Series/books/read progress | Partial | Skeleton persistence, natural ordering, modern list/detail APIs, Spring pagination, basic recursive filtering, sibling navigation, access restrictions, progress hydration, per-book and series-level writes, REST Readium progression, Mihon/Tachiyomi series synchronization, administrator book/series metadata mutations, book/series thumbnail management and regeneration, CBZ/CBR/PDF and fixed-layout EPUB pages, EPUB resources/positions, WebPub manifests, and streaming original-file downloads are implemented. Deprecated/specialized lists remain pending. |
-| Collections/read lists | Pending | CRUD, matching, thumbnails, generated archives, and progress aggregation. |
+| Collections/read lists | Core complete | CRUD, visible membership, reverse lookup, navigation, Mihon progress, uploads, and dynamic collage posters. ComicRack matching and read-list ZIP remain pending. |
 | Media | Partial | ZIP/CBZ, RAR4/RAR5/CBR (including solid archives), PDF, and EPUB analysis are implemented without external runtime commands. PDF supports rendered and raw pages; EPUB supports OPF/NAV/NCX discovery, resources, Readium positions, native KEPUB detection, fixed-layout pages, and package covers. Divina, PDF, and EPUB WebPub manifests are available. EPUB metadata import, uncommon image codecs, hashing, and duplicate pages are pending. |
 | Search | Pending | Lucene-equivalent multilingual indexing and lifecycle. |
 | OPDS | Pending | OPDS 1 XML and OPDS 2 JSON catalogs. |
@@ -29,7 +29,7 @@ The reference baseline is Komga commit `4ef86df`. Porting is organized as vertic
 ## Current limitations
 
 - Scan workers analyze ZIP/CBZ, RAR/CBR, PDF, and EPUB files and generate book covers. Encrypted and multi-volume RAR archives, password-protected PDFs, and DRM-protected or obfuscated EPUB resources remain unsupported. Page hashes, duplicate detection, EPUB metadata providers, and KEPUB conversion are not implemented.
-- Series/Book queries do not yet support Lucene `fullTextSearch`, collection/read-list/poster/media-profile conditions, deprecated GET lists, alphabetical groups, or latest/new/updated feeds. Unsupported request bodies and sort fields return `400 Bad Request`.
+- Series/Book queries do not yet support Lucene `fullTextSearch`, poster/media-profile conditions, deprecated GET lists, alphabetical groups, or latest/new/updated feeds. Collection/read-list membership conditions are supported. Unsupported request bodies and sort fields return `400 Bad Request`.
 - `EmptyTrash` and unknown Kotlin tasks remain queued and are not claimed by Rust workers.
 - Only empty libraries can be deleted. Non-empty library deletion returns `409 Conflict` until the full series/book cascade is ported.
 - The OAuth provider endpoint intentionally returns an empty list until OAuth authentication is implemented.
@@ -37,8 +37,8 @@ The reference baseline is Komga commit `4ef86df`. Porting is organized as vertic
 
 ## Next slice
 
-The next dependency-ordered slice is collections and read lists: CRUD, membership and matching, progress aggregation,
-and their thumbnail contracts using the poster lifecycle now available for books and series.
+The next dependency-ordered slice is ComicRack `.cbl` matching and generated read-list ZIP downloads. Scanner-driven
+collection/read-list imports and domain-event/SSE integration remain later work.
 
 Book and series metadata can be patched through the Kotlin-compatible administrator routes. The HTTP boundary preserves
 each field's distinct omitted-versus-null behavior, while `komga-core` owns normalization and validation. Bulk book

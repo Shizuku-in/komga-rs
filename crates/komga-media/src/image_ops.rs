@@ -5,6 +5,35 @@ use komga_core::Dimension;
 
 use crate::{ImageOutput, MediaOperationError, TypedBytes};
 
+pub(crate) fn collage(sources: &[Vec<u8>], size: u32) -> Result<Vec<u8>, MediaOperationError> {
+    let width = size.max(2);
+    let height = width.saturating_mul(3) / 2;
+    let cell_w = width / 2;
+    let cell_h = height / 2;
+    let mut canvas = RgbImage::new(width, height);
+    for slot in 0..if sources.is_empty() { 0 } else { 4usize } {
+        let reader = ImageReader::new(Cursor::new(&sources[slot % sources.len()]))
+            .with_guessed_format()
+            .map_err(|e| MediaOperationError::Image(e.to_string()))?;
+        let tile = reader
+            .decode()
+            .map_err(|e| MediaOperationError::Image(e.to_string()))?
+            .resize_to_fill(cell_w, cell_h, FilterType::Lanczos3)
+            .to_rgb8();
+        image::imageops::replace(
+            &mut canvas,
+            &tile,
+            i64::from((slot as u32 % 2) * cell_w),
+            i64::from((slot as u32 / 2) * cell_h),
+        );
+    }
+    let mut output = Cursor::new(Vec::new());
+    DynamicImage::ImageRgb8(canvas)
+        .write_to(&mut output, ImageFormat::Jpeg)
+        .map_err(|e| MediaOperationError::Image(e.to_string()))?;
+    Ok(output.into_inner())
+}
+
 pub(crate) fn convert(
     source: &[u8],
     output: ImageOutput,

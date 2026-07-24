@@ -143,14 +143,14 @@ fn ensure_series_visible(user: &User, series: &SeriesDto) -> Result<(), ApiError
     Ok(())
 }
 
-fn restrict_book_url(book: &mut BookDto) {
+pub(crate) fn restrict_book_url(book: &mut BookDto) {
     book.url = FilePath::new(&book.url)
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_default();
 }
 
-fn parse_page_request(raw_query: Option<&str>) -> Result<PageRequest, ApiError> {
+pub(crate) fn parse_page_request(raw_query: Option<&str>) -> Result<PageRequest, ApiError> {
     let mut request = PageRequest::default();
     for (key, value) in url::form_urlencoded::parse(raw_query.unwrap_or_default().as_bytes()) {
         match key.as_ref() {
@@ -224,7 +224,7 @@ pub(crate) struct SpringPage<T> {
 }
 
 impl<T> SpringPage<T> {
-    fn from_content(page: ContentPage<T>) -> Self {
+    pub(crate) fn from_content(page: ContentPage<T>) -> Self {
         let sorted = !page.sort.is_empty();
         let total_pages = page.total_elements.div_ceil(page.size);
         let number_of_elements = page.content.len();

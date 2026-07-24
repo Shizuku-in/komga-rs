@@ -13,6 +13,37 @@ use komga_core::{
 };
 use serde::{Deserialize, Deserializer, Serialize};
 
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct CollectionPatchDto {
+    #[serde(default)]
+    pub(crate) name: Patch<String>,
+    #[serde(default)]
+    pub(crate) ordered: Patch<bool>,
+    #[serde(default)]
+    pub(crate) series_ids: Patch<Vec<String>>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct ReadListPatchDto {
+    #[serde(default)]
+    pub(crate) name: Patch<String>,
+    #[serde(default)]
+    pub(crate) summary: Patch<String>,
+    #[serde(default)]
+    pub(crate) ordered: Patch<bool>,
+    #[serde(default)]
+    pub(crate) book_ids: Patch<Vec<String>>,
+}
+
+pub(crate) fn preserving<T>(patch: Patch<T>) -> Option<T> {
+    match patch {
+        Patch::Value(value) => Some(value),
+        Patch::Missing | Patch::Null => None,
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct PageDto {

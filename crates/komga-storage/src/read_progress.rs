@@ -217,7 +217,7 @@ async fn aggregate_series_progress(tx: &mut Transaction<'_, Sqlite>, book_id: &s
     aggregate_series_progress_by_series(tx, &series_id, user_id).await
 }
 
-async fn aggregate_series_progress_by_series(
+pub(crate) async fn aggregate_series_progress_by_series(
     tx: &mut Transaction<'_, Sqlite>,
     series_id: &str,
     user_id: &str,

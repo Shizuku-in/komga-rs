@@ -499,6 +499,11 @@ fn push_series_condition(query: &mut QueryBuilder<'static, Sqlite>, condition: &
             push_condition_group(query, conditions, " OR ", push_series_condition);
         }
         SeriesCondition::LibraryId { operator } => push_equality(query, "s.LIBRARY_ID", operator),
+        SeriesCondition::CollectionId { operator } => {
+            query.push("EXISTS(SELECT 1 FROM COLLECTION_SERIES cs WHERE cs.SERIES_ID = s.ID AND ");
+            push_equality(query, "cs.COLLECTION_ID", operator);
+            query.push(")");
+        }
         SeriesCondition::Deleted { deleted } => push_optional_boolean(query, "s.DELETED_DATE", deleted),
         SeriesCondition::OneShot { operator } => push_boolean(query, "s.ONESHOT", operator),
         SeriesCondition::Title { title } => push_string_operator(query, "sm.TITLE", title),
@@ -518,6 +523,11 @@ fn push_book_condition(query: &mut QueryBuilder<'static, Sqlite>, condition: &Bo
         }
         BookCondition::LibraryId { operator } => push_equality(query, "b.LIBRARY_ID", operator),
         BookCondition::SeriesId { operator } => push_equality(query, "b.SERIES_ID", operator),
+        BookCondition::ReadListId { operator } => {
+            query.push("EXISTS(SELECT 1 FROM READLIST_BOOK rb WHERE rb.BOOK_ID = b.ID AND ");
+            push_equality(query, "rb.READLIST_ID", operator);
+            query.push(")");
+        }
         BookCondition::Deleted { deleted } => push_optional_boolean(query, "b.DELETED_DATE", deleted),
         BookCondition::OneShot { operator } => push_boolean(query, "b.ONESHOT", operator),
         BookCondition::Title { title } => push_string_operator(query, "bm.TITLE", title),
@@ -705,6 +715,7 @@ fn series_sort_column(property: &str) -> Option<&'static str> {
         "readDate" => Some("rps.MOST_RECENT_READ_DATE"),
         "name" => Some("s.NAME COLLATE NOCASE"),
         "booksCount" => Some("s.BOOK_COUNT"),
+        "collection.number" => Some("(SELECT cs.NUMBER FROM COLLECTION_SERIES cs WHERE cs.SERIES_ID = s.ID)"),
         _ => None,
     }
 }
@@ -727,6 +738,7 @@ fn book_sort_column(property: &str) -> Option<&'static str> {
         "metadata.releaseDate" => Some("bm.RELEASE_DATE"),
         "readProgress.lastModified" => Some("rp.LAST_MODIFIED_DATE"),
         "readProgress.readDate" => Some("rp.READ_DATE"),
+        "readList.number" => Some("(SELECT rb.NUMBER FROM READLIST_BOOK rb WHERE rb.BOOK_ID = b.ID)"),
         _ => None,
     }
 }

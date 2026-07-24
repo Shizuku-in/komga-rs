@@ -422,6 +422,52 @@ pub struct ThumbnailSeriesDto {
     pub height: i32,
 }
 
+/// Uploaded collection poster metadata.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThumbnailCollectionDto {
+    /// Stable identifier.
+    pub id: String,
+    /// Owning collection.
+    pub collection_id: String,
+    /// Kotlin thumbnail type.
+    #[serde(rename = "type")]
+    pub thumbnail_type: String,
+    /// Whether selected.
+    pub selected: bool,
+    /// Encoded media type.
+    pub media_type: String,
+    /// Encoded size.
+    pub file_size: i64,
+    /// Width in pixels.
+    pub width: i32,
+    /// Height in pixels.
+    pub height: i32,
+}
+
+/// Uploaded read-list poster metadata.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThumbnailReadListDto {
+    /// Stable identifier.
+    pub id: String,
+    /// Owning read list.
+    pub read_list_id: String,
+    /// Kotlin thumbnail type.
+    #[serde(rename = "type")]
+    pub thumbnail_type: String,
+    /// Whether selected.
+    pub selected: bool,
+    /// Encoded media type.
+    pub media_type: String,
+    /// Encoded size.
+    pub file_size: i64,
+    /// Width in pixels.
+    pub width: i32,
+    /// Height in pixels.
+    pub height: i32,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

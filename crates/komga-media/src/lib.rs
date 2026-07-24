@@ -395,6 +395,11 @@ pub fn image_dimension(bytes: &[u8]) -> Option<Dimension> {
     image_ops::dimension(bytes)
 }
 
+/// Builds a two-by-two JPEG poster, cycling one to four source images.
+pub fn collage_thumbnail(sources: &[Vec<u8>], size: u32) -> Result<Vec<u8>, MediaOperationError> {
+    image_ops::collage(sources, size)
+}
+
 /// Detects an image media type from encoded bytes.
 pub fn detect_image_media_type(bytes: &[u8]) -> Option<String> {
     infer::get(bytes)

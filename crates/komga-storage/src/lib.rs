@@ -7,6 +7,7 @@
 
 #![warn(missing_docs)]
 
+mod containers;
 mod content;
 mod content_queries;
 mod library;
@@ -17,6 +18,7 @@ mod schema;
 mod settings;
 mod tasks;
 
+pub use containers::ContainerThumbnail;
 pub use content::ScanApplyStats;
 pub use library::DeleteLibraryResult;
 pub use settings::ClientSetting;

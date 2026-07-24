@@ -24,7 +24,7 @@ use komga_storage::TaskRecord;
 
 #[derive(Debug, Default, Deserialize)]
 pub(crate) struct UploadQuery {
-    selected: Option<bool>,
+    pub(crate) selected: Option<bool>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -43,7 +43,7 @@ pub(crate) async fn get_book_thumbnail(
     thumbnail_response(selected_book_thumbnail_bytes(&state, &book_id).await?, &headers)
 }
 
-async fn selected_book_thumbnail_bytes(state: &AppState, book_id: &str) -> Result<Vec<u8>, ApiError> {
+pub(crate) async fn selected_book_thumbnail_bytes(state: &AppState, book_id: &str) -> Result<Vec<u8>, ApiError> {
     let thumbnail = state
         .storage
         .find_selected_book_thumbnail(book_id)
@@ -332,15 +332,15 @@ pub(crate) async fn regenerate_book_thumbnails(
     Ok(StatusCode::ACCEPTED)
 }
 
-struct Upload {
-    bytes: Vec<u8>,
-    selected: bool,
-    media_type: String,
-    file_size: i64,
-    dimension: Dimension,
+pub(crate) struct Upload {
+    pub(crate) bytes: Vec<u8>,
+    pub(crate) selected: bool,
+    pub(crate) media_type: String,
+    pub(crate) file_size: i64,
+    pub(crate) dimension: Dimension,
 }
 
-async fn parse_upload(mut multipart: Multipart, query_selected: Option<bool>) -> Result<Upload, ApiError> {
+pub(crate) async fn parse_upload(mut multipart: Multipart, query_selected: Option<bool>) -> Result<Upload, ApiError> {
     let mut bytes = None;
     let mut form_selected = None;
     while let Some(field) = multipart.next_field().await.map_err(map_multipart_error)? {
@@ -379,7 +379,7 @@ fn map_multipart_error(error: MultipartError) -> ApiError {
     }
 }
 
-async fn read_thumbnail(bytes: Option<Vec<u8>>, url: Option<String>) -> Result<Vec<u8>, ApiError> {
+pub(crate) async fn read_thumbnail(bytes: Option<Vec<u8>>, url: Option<String>) -> Result<Vec<u8>, ApiError> {
     if let Some(bytes) = bytes {
         return Ok(bytes);
     }
@@ -392,7 +392,7 @@ async fn read_thumbnail(bytes: Option<Vec<u8>>, url: Option<String>) -> Result<V
         .map_err(|_| ApiError::not_found("Thumbnail not found"))
 }
 
-fn thumbnail_response(bytes: Vec<u8>, headers: &HeaderMap) -> Result<Response, ApiError> {
+pub(crate) fn thumbnail_response(bytes: Vec<u8>, headers: &HeaderMap) -> Result<Response, ApiError> {
     let etag = format!("\"{}\"", hex::encode(Sha256::digest(&bytes)));
     if headers
         .get(header::IF_NONE_MATCH)

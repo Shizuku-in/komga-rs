@@ -10,6 +10,7 @@ mod auth;
 mod book_file_routes;
 /// Command-line and environment configuration.
 pub mod config;
+mod container_routes;
 mod content_routes;
 mod dto;
 mod error;
@@ -118,6 +119,10 @@ pub fn build_app(state: AppState) -> Router {
         .route("/api/v1/series/list", post(content_routes::list_series))
         .route("/api/v1/series/{series_id}", get(content_routes::get_series))
         .route(
+            "/api/v1/series/{series_id}/collections",
+            get(container_routes::series_collections),
+        )
+        .route(
             "/api/v1/series/{series_id}/thumbnail",
             get(thumbnail_routes::get_series_thumbnail),
         )
@@ -159,6 +164,83 @@ pub fn build_app(state: AppState) -> Router {
             patch(metadata_routes::update_book_metadata_batch),
         )
         .route("/api/v1/books/{book_id}", get(content_routes::get_book))
+        .route(
+            "/api/v1/books/{book_id}/readlists",
+            get(container_routes::book_read_lists),
+        )
+        .route(
+            "/api/v1/collections",
+            get(container_routes::list_collections).post(container_routes::create_collection),
+        )
+        .route(
+            "/api/v1/collections/{id}",
+            get(container_routes::get_collection)
+                .patch(container_routes::patch_collection)
+                .delete(container_routes::delete_collection),
+        )
+        .route(
+            "/api/v1/collections/{id}/series",
+            get(container_routes::collection_series),
+        )
+        .route(
+            "/api/v1/collections/{id}/thumbnail",
+            get(container_routes::get_collection_thumbnail),
+        )
+        .route(
+            "/api/v1/collections/{id}/thumbnails",
+            get(container_routes::list_collection_thumbnails)
+                .post(container_routes::upload_collection_thumbnail)
+                .layer(DefaultBodyLimit::max(10 * 1024 * 1024)),
+        )
+        .route(
+            "/api/v1/collections/{id}/thumbnails/{thumbnail_id}",
+            get(container_routes::get_collection_thumbnail_id).delete(container_routes::delete_collection_thumbnail),
+        )
+        .route(
+            "/api/v1/collections/{id}/thumbnails/{thumbnail_id}/selected",
+            axum::routing::put(container_routes::select_collection_thumbnail),
+        )
+        .route(
+            "/api/v1/readlists",
+            get(container_routes::list_read_lists).post(container_routes::create_read_list),
+        )
+        .route(
+            "/api/v1/readlists/{id}",
+            get(container_routes::get_read_list)
+                .patch(container_routes::patch_read_list)
+                .delete(container_routes::delete_read_list),
+        )
+        .route("/api/v1/readlists/{id}/books", get(container_routes::read_list_books))
+        .route(
+            "/api/v1/readlists/{id}/thumbnail",
+            get(container_routes::get_read_list_thumbnail),
+        )
+        .route(
+            "/api/v1/readlists/{id}/thumbnails",
+            get(container_routes::list_read_list_thumbnails)
+                .post(container_routes::upload_read_list_thumbnail)
+                .layer(DefaultBodyLimit::max(10 * 1024 * 1024)),
+        )
+        .route(
+            "/api/v1/readlists/{id}/thumbnails/{thumbnail_id}",
+            get(container_routes::get_read_list_thumbnail_id).delete(container_routes::delete_read_list_thumbnail),
+        )
+        .route(
+            "/api/v1/readlists/{id}/thumbnails/{thumbnail_id}/selected",
+            axum::routing::put(container_routes::select_read_list_thumbnail),
+        )
+        .route(
+            "/api/v1/readlists/{id}/books/{book_id}/previous",
+            get(container_routes::previous),
+        )
+        .route(
+            "/api/v1/readlists/{id}/books/{book_id}/next",
+            get(container_routes::next),
+        )
+        .route(
+            "/api/v1/readlists/{id}/read-progress/tachiyomi",
+            get(container_routes::get_progress).put(container_routes::put_progress),
+        )
         .route(
             "/api/v1/books/{book_id}/metadata",
             patch(metadata_routes::update_book_metadata),

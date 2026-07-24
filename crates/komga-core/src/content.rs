@@ -403,6 +403,11 @@ pub enum SeriesCondition {
         /// Equality operation.
         operator: EqualityOperator,
     },
+    /// Match membership in a collection.
+    CollectionId {
+        /// Equality operation.
+        operator: EqualityOperator,
+    },
     /// Match soft-deletion state.
     Deleted {
         /// Boolean operation.
@@ -454,6 +459,7 @@ impl<'de> Deserialize<'de> for SeriesCondition {
             "allOf" => from_json(value).map(|conditions| Self::AllOf { conditions }),
             "anyOf" => from_json(value).map(|conditions| Self::AnyOf { conditions }),
             "libraryId" => from_json(value).map(|operator| Self::LibraryId { operator }),
+            "collectionId" => from_json(value).map(|operator| Self::CollectionId { operator }),
             "deleted" => from_json(value).map(|deleted| Self::Deleted { deleted }),
             "oneShot" => from_json(value).map(|operator| Self::OneShot { operator }),
             "title" => from_json(value).map(|title| Self::Title { title }),
@@ -496,6 +502,11 @@ pub enum BookCondition {
     },
     /// Match a parent series identifier.
     SeriesId {
+        /// Equality operation.
+        operator: EqualityOperator,
+    },
+    /// Match membership in a read list.
+    ReadListId {
         /// Equality operation.
         operator: EqualityOperator,
     },
@@ -546,6 +557,7 @@ impl<'de> Deserialize<'de> for BookCondition {
             "anyOf" => from_json(value).map(|conditions| Self::AnyOf { conditions }),
             "libraryId" => from_json(value).map(|operator| Self::LibraryId { operator }),
             "seriesId" => from_json(value).map(|operator| Self::SeriesId { operator }),
+            "readListId" => from_json(value).map(|operator| Self::ReadListId { operator }),
             "deleted" => from_json(value).map(|deleted| Self::Deleted { deleted }),
             "oneShot" => from_json(value).map(|operator| Self::OneShot { operator }),
             "title" => from_json(value).map(|title| Self::Title { title }),
@@ -646,12 +658,7 @@ mod tests {
 
     #[test]
     fn rejects_unsupported_or_ambiguous_search_conditions() {
-        assert!(
-            serde_json::from_str::<SeriesSearch>(
-                r#"{"condition":{"collectionId":{"operator":"is","value":"collection"}}}"#,
-            )
-            .is_err()
-        );
+        assert!(serde_json::from_str::<SeriesSearch>(r#"{"condition":{"poster":{"operator":"isTrue"}}}"#,).is_err());
         assert!(
             serde_json::from_str::<BookSearch>(
                 r#"{"condition":{"seriesId":{"operator":"is","value":"series"},"poster":{"operator":"isTrue"}}}"#,
