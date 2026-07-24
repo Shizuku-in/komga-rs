@@ -99,6 +99,12 @@ struct ScanLibraryPayload {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct LibraryTaskPayload {
+    library_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct BookTaskPayload {
     book_id: String,
     #[serde(default)]
@@ -154,8 +160,9 @@ enum TaskOutcome {
     Retry,
 }
 
-const SUPPORTED_TASK_TYPES: [&str; 7] = [
+const SUPPORTED_TASK_TYPES: [&str; 8] = [
     "ScanLibrary",
+    "EmptyTrash",
     "AnalyzeBook",
     "RefreshBookMetadata",
     "RefreshSeriesMetadata",
@@ -209,6 +216,7 @@ async fn worker_loop(state: AppState, index: usize) {
 async fn process_task(state: &AppState, task: &TaskRecord) -> TaskOutcome {
     match task.simple_type.as_str() {
         "ScanLibrary" => process_scan_task(state, task).await,
+        "EmptyTrash" => process_empty_trash_task(state, task).await,
         "AnalyzeBook" => process_analyze_book_task(state, task).await,
         "RefreshBookMetadata" => process_refresh_book_metadata_task(state, task).await,
         "RefreshSeriesMetadata" => process_refresh_series_metadata_task(state, task).await,
@@ -280,6 +288,7 @@ async fn process_scan_task(state: &AppState, task: &TaskRecord) -> TaskOutcome {
             return TaskOutcome::Retry;
         }
     };
+    let empty_trash_after_scan = library.empty_trash_after_scan;
     let cancellation = state.shutdown.clone();
     let scan = tokio::task::spawn_blocking(move || scan_library_files(&library, || cancellation.is_cancelled())).await;
     let scan = match scan {
@@ -322,6 +331,14 @@ async fn process_scan_task(state: &AppState, task: &TaskRecord) -> TaskOutcome {
             return TaskOutcome::Retry;
         }
     }
+    if empty_trash_after_scan {
+        if perform_empty_trash(state, &payload.library_id).await == TaskOutcome::Retry {
+            return TaskOutcome::Retry;
+        }
+    } else if let Err(error) = state.storage.cleanup_empty_containers().await {
+        tracing::error!(%error, library_id = %payload.library_id, "could not clean empty collections and read lists");
+        return TaskOutcome::Retry;
+    }
     let targets = match state.storage.list_book_analysis_targets(&payload.library_id).await {
         Ok(targets) => targets,
         Err(error) => {
@@ -356,6 +373,46 @@ async fn process_scan_task(state: &AppState, task: &TaskRecord) -> TaskOutcome {
             }
         }
     }
+    TaskOutcome::Completed
+}
+
+async fn process_empty_trash_task(state: &AppState, task: &TaskRecord) -> TaskOutcome {
+    let payload = match serde_json::from_str::<LibraryTaskPayload>(&task.payload) {
+        Ok(payload) => payload,
+        Err(error) => {
+            tracing::error!(%error, task_id = %task.id, "invalid EmptyTrash payload");
+            return TaskOutcome::Completed;
+        }
+    };
+    perform_empty_trash(state, &payload.library_id).await
+}
+
+async fn perform_empty_trash(state: &AppState, library_id: &str) -> TaskOutcome {
+    let result = match state.storage.empty_trash(library_id).await {
+        Ok(Some(result)) => result,
+        Ok(None) => {
+            tracing::warn!(%library_id, "empty-trash task references a missing library");
+            return TaskOutcome::Completed;
+        }
+        Err(error) => {
+            tracing::error!(%error, %library_id, "could not empty library trash");
+            return TaskOutcome::Retry;
+        }
+    };
+    for target in &result.numbering_refreshes {
+        if let Err(error) = state
+            .enqueue_task(&TaskRecord::refresh_book_numbering(
+                &target.book_id,
+                &target.series_id,
+                4,
+            ))
+            .await
+        {
+            tracing::error!(%error, book_id = %target.book_id, "could not enqueue numbering metadata refresh");
+            return TaskOutcome::Retry;
+        }
+    }
+    tracing::info!(%library_id, ?result, "library trash emptied");
     TaskOutcome::Completed
 }
 

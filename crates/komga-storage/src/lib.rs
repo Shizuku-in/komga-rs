@@ -11,6 +11,7 @@ mod containers;
 mod content;
 mod content_queries;
 mod library;
+mod lifecycle;
 mod media;
 mod metadata;
 mod read_progress;
@@ -22,6 +23,7 @@ pub use containers::ContainerThumbnail;
 pub use content::ScanApplyStats;
 pub use content_queries::ReadListFile;
 pub use library::DeleteLibraryResult;
+pub use lifecycle::{EmptyTrashResult, NumberingRefreshTarget};
 pub use settings::ClientSetting;
 pub use tasks::{TaskRecord, TaskStorage};
 
@@ -858,7 +860,7 @@ mod tests {
         assert_eq!(settings["ui.theme"].allow_unauthorized, Some(true));
 
         assert_eq!(
-            storage.delete_library_if_empty(&library.id).await.unwrap(),
+            storage.delete_library(&library.id).await.unwrap(),
             DeleteLibraryResult::Deleted
         );
     }
@@ -893,7 +895,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn supported_task_claims_leave_unported_tasks_untouched() {
+    async fn type_filtered_task_claims_leave_other_task_types_untouched() {
         let tasks = TaskStorage::connect_memory().await.unwrap();
         tasks.save(&TaskRecord::empty_trash("library", 8)).await.unwrap();
         tasks
@@ -940,15 +942,22 @@ mod tests {
             .unwrap();
 
         let claimed = tasks
-            .take_first_of_types("worker", &["ScanLibrary", "AnalyzeBook", "GenerateBookThumbnail"])
+            .take_first_of_types(
+                "worker",
+                &["ScanLibrary", "EmptyTrash", "AnalyzeBook", "GenerateBookThumbnail"],
+            )
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(claimed.simple_type, "GenerateBookThumbnail");
-        assert_eq!(claimed.priority, 7);
+        assert_eq!(claimed.simple_type, "EmptyTrash");
+        assert_eq!(claimed.priority, 8);
         let payload: serde_json::Value = serde_json::from_str(&claimed.payload).unwrap();
-        assert_eq!(payload["bookId"], "book");
+        assert_eq!(payload["libraryId"], "library");
         assert_eq!(tasks.count_by_simple_type().await.unwrap()["EmptyTrash"], 1);
+
+        let numbering = TaskRecord::refresh_book_numbering("book", "series", 4);
+        let payload: serde_json::Value = serde_json::from_str(&numbering.payload).unwrap();
+        assert_eq!(payload["capabilities"], serde_json::json!(["NUMBER", "NUMBER_SORT"]));
 
         let discovery = TaskRecord::find_book_thumbnails_to_regenerate(true, 0);
         assert_eq!(discovery.id, "FIND_BOOK_THUMBNAILS_TO_REGENERATE");
@@ -1225,7 +1234,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn non_empty_library_deletion_is_guarded() {
+    async fn non_empty_library_deletion_cascades() {
         let storage = Storage::connect_memory().await.unwrap();
         let root = tempfile::tempdir().unwrap();
         let library = Library::new("Library".into(), Url::from_file_path(root.path()).unwrap());
@@ -1239,9 +1248,9 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            storage.delete_library_if_empty(&library.id).await.unwrap(),
-            DeleteLibraryResult::NotEmpty
+            storage.delete_library(&library.id).await.unwrap(),
+            DeleteLibraryResult::Deleted
         );
-        assert!(storage.find_library_by_id(&library.id).await.unwrap().is_some());
+        assert!(storage.find_library_by_id(&library.id).await.unwrap().is_none());
     }
 }

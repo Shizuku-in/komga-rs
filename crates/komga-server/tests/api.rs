@@ -33,6 +33,52 @@ async fn app_with_storage(storage: Storage) -> Router {
     build_app(AppState::new(storage, tasks).await.unwrap())
 }
 
+#[tokio::test]
+async fn deleting_a_non_empty_library_cascades_database_content_but_preserves_files() {
+    let storage = Storage::connect_memory().await.unwrap();
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path().join("library");
+    fs::create_dir_all(root.join("Series")).unwrap();
+    let source = root.join("Series/Volume.cbz");
+    fs::write(&source, [1_u8]).unwrap();
+    fs::write(root.join("Series/series.json"), b"{}").unwrap();
+    let library = Library::new("Delete cascade".into(), Url::from_directory_path(&root).unwrap());
+    storage.create_library(&library).await.unwrap();
+    storage
+        .apply_library_scan(&library.id, &scan_library_files(&library, || false).unwrap(), false)
+        .await
+        .unwrap();
+    assert_eq!(storage.list_series_by_library_id(&library.id).await.unwrap().len(), 1);
+
+    let app = app_with_storage(storage.clone()).await;
+    assert_eq!(claim(&app).await.status(), StatusCode::OK);
+    let response = app
+        .clone()
+        .oneshot(
+            Request::delete(format!("/api/v1/libraries/{}", library.id))
+                .header(header::AUTHORIZATION, basic("admin@example.org", "password"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    assert!(storage.find_library_by_id(&library.id).await.unwrap().is_none());
+    assert!(storage.list_series_by_library_id(&library.id).await.unwrap().is_empty());
+    assert!(source.exists());
+
+    let missing = app
+        .oneshot(
+            Request::delete(format!("/api/v1/libraries/{}", library.id))
+                .header(header::AUTHORIZATION, basic("admin@example.org", "password"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+}
+
 fn basic(email: &str, password: &str) -> String {
     format!("Basic {}", STANDARD.encode(format!("{email}:{password}")))
 }

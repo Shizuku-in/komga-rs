@@ -7,6 +7,92 @@ use url::Url;
 use zip::{ZipArchive, ZipWriter, write::SimpleFileOptions};
 
 #[tokio::test]
+async fn empty_trash_tasks_permanently_delete_soft_deleted_content_and_missing_libraries_complete() {
+    let storage = Storage::connect_memory().await.unwrap();
+    let tasks = TaskStorage::connect_memory().await.unwrap();
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path().join("library");
+    fs::create_dir_all(root.join("Series")).unwrap();
+    fs::write(root.join("Series/Book 1.cbz"), [1]).unwrap();
+    fs::write(root.join("Series/Book 2.cbz"), [2]).unwrap();
+    let library = Library::new("Trash".into(), Url::from_directory_path(&root).unwrap());
+    storage.create_library(&library).await.unwrap();
+    storage
+        .apply_library_scan(&library.id, &scan_library_files(&library, || false).unwrap(), false)
+        .await
+        .unwrap();
+    let series = storage.list_series_by_library_id(&library.id).await.unwrap().remove(0);
+    let removed = storage.list_books_by_series_id(&series.id).await.unwrap().remove(0);
+    fs::remove_file(root.join("Series/Book 1.cbz")).unwrap();
+    storage
+        .apply_library_scan(&library.id, &scan_library_files(&library, || false).unwrap(), false)
+        .await
+        .unwrap();
+    tasks.save(&TaskRecord::empty_trash(&library.id, 6)).await.unwrap();
+    tasks
+        .save(&TaskRecord::empty_trash("missing-library", 6))
+        .await
+        .unwrap();
+
+    let state = AppState::new(storage.clone(), tasks.clone()).await.unwrap();
+    let runtime = state.start_runtime().await.unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !tasks.list().await.unwrap().is_empty() {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("empty-trash tasks did not complete");
+    assert!(storage.find_book_by_id(&removed.id).await.unwrap().is_none());
+    assert_eq!(storage.list_books_by_series_id(&series.id).await.unwrap()[0].number, 1);
+    runtime.shutdown().await;
+}
+
+#[tokio::test]
+async fn scan_tasks_honor_empty_trash_after_scan() {
+    let storage = Storage::connect_memory().await.unwrap();
+    let tasks = TaskStorage::connect_memory().await.unwrap();
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path().join("library");
+    fs::create_dir_all(root.join("Series")).unwrap();
+    fs::write(root.join("Series/Keep.cbz"), [1]).unwrap();
+    fs::write(root.join("Series/Remove.cbz"), [2]).unwrap();
+    let mut library = Library::new("Auto trash".into(), Url::from_directory_path(&root).unwrap());
+    library.empty_trash_after_scan = true;
+    storage.create_library(&library).await.unwrap();
+    storage
+        .apply_library_scan(&library.id, &scan_library_files(&library, || false).unwrap(), false)
+        .await
+        .unwrap();
+    let series = storage.list_series_by_library_id(&library.id).await.unwrap().remove(0);
+    let removed = storage
+        .list_books_by_series_id(&series.id)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|book| book.name == "Remove")
+        .unwrap();
+    fs::remove_file(root.join("Series/Remove.cbz")).unwrap();
+    tasks
+        .save(&TaskRecord::scan_library(&library.id, false, 8))
+        .await
+        .unwrap();
+
+    let state = AppState::new(storage.clone(), tasks.clone()).await.unwrap();
+    let runtime = state.start_runtime().await.unwrap();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while !tasks.list().await.unwrap().is_empty() {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("scan-triggered empty trash did not complete");
+    assert!(storage.find_book_by_id(&removed.id).await.unwrap().is_none());
+    assert_eq!(storage.list_books_by_series_id(&series.id).await.unwrap().len(), 1);
+    runtime.shutdown().await;
+}
+
+#[tokio::test]
 async fn scan_imports_comic_info_collections_and_read_lists_idempotently() {
     let storage = Storage::connect_memory().await.unwrap();
     let tasks = TaskStorage::connect_memory().await.unwrap();
@@ -119,7 +205,7 @@ async fn scan_imports_comic_info_collections_and_read_lists_idempotently() {
 }
 
 #[tokio::test]
-async fn startup_scheduler_analyzes_supported_media_generates_thumbnails_and_preserves_unported_tasks() {
+async fn startup_scheduler_analyzes_supported_media_generates_thumbnails_and_executes_empty_trash() {
     let storage = Storage::connect_memory().await.unwrap();
     let tasks = TaskStorage::connect_memory().await.unwrap();
     let temporary = tempfile::tempdir().unwrap();
@@ -215,7 +301,7 @@ async fn startup_scheduler_analyzes_supported_media_generates_thumbnails_and_pre
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             let queued = tasks.list().await.unwrap();
-            if queued.iter().all(|task| task.simple_type == "EmptyTrash") {
+            if queued.is_empty() {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(25)).await;
@@ -224,8 +310,7 @@ async fn startup_scheduler_analyzes_supported_media_generates_thumbnails_and_pre
     .await
     .expect("metadata refresh pipeline did not complete");
     let queued = tasks.list().await.unwrap();
-    assert_eq!(queued.len(), 1);
-    assert_eq!(queued[0].simple_type, "EmptyTrash");
+    assert!(queued.is_empty());
 
     runtime.shutdown().await;
 }

@@ -1,7 +1,7 @@
 use std::{fs, path::PathBuf};
 
 use komga_core::{BookSearch, PageRequest, ScanInterval, SeriesSearch, SeriesStatus, User, scan_library_files};
-use komga_storage::{Storage, TaskStorage};
+use komga_storage::{DeleteLibraryResult, Storage, TaskStorage};
 use url::Url;
 
 fn fixture(name: &str) -> PathBuf {
@@ -75,6 +75,40 @@ async fn opens_kotlin_flyway_databases_and_maps_current_rows() {
             .unwrap()
             .is_some()
     );
+
+    let fixture_pool = sqlx::SqlitePool::connect(&format!("sqlite://{}", main_database.display()))
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO HISTORICAL_EVENT (ID,TYPE,BOOK_ID,SERIES_ID) VALUES ('rust-delete','BookDeleted',?,?)")
+        .bind(&books[0].id)
+        .bind(&series[0].id)
+        .execute(&fixture_pool)
+        .await
+        .unwrap();
+
+    let empty_root = temporary.path().join("empty-root");
+    fs::create_dir_all(&empty_root).unwrap();
+    library.root = Url::from_directory_path(&empty_root).unwrap();
+    storage.update_library(&library).await.unwrap();
+    storage
+        .apply_library_scan(&library.id, &scan_library_files(&library, || false).unwrap(), false)
+        .await
+        .unwrap();
+    let emptied = storage.empty_trash(&library.id).await.unwrap().unwrap();
+    assert_eq!(emptied.series_deleted, 1);
+    assert_eq!(emptied.books_deleted, 1);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM HISTORICAL_EVENT WHERE ID='rust-delete'")
+            .fetch_one(&fixture_pool)
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        storage.delete_library(&library.id).await.unwrap(),
+        DeleteLibraryResult::Deleted
+    );
+    assert!(content_root.join("Kotlin Series/Volume 1.cbz").exists());
 
     let tasks = TaskStorage::connect_path(&tasks_database).await.unwrap();
     let queued = tasks.list().await.unwrap();

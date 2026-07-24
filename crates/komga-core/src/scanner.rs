@@ -1,6 +1,7 @@
 //! Filesystem discovery for configured libraries.
 
 use std::{
+    cmp::Ordering,
     cmp::max,
     collections::BTreeMap,
     fs,
@@ -194,7 +195,7 @@ pub fn scan_library_files(library: &Library, cancelled: impl Fn() -> bool) -> Re
         .map(str::to_lowercase);
     let mut scanned = Vec::new();
     for (directory, mut books) in books_by_directory {
-        books.sort_by(|left, right| natord::compare_ignore_case(&sort_key(&left.name), &sort_key(&right.name)));
+        books.sort_by(|left, right| compare_book_names(&left.name, &right.name));
         for (index, book) in books.iter_mut().enumerate() {
             book.number = i32::try_from(index + 1).unwrap_or(i32::MAX);
         }
@@ -318,6 +319,11 @@ fn sort_key(value: &str) -> String {
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+/// Compares book names using Komga's accent-insensitive natural ordering.
+pub fn compare_book_names(left: &str, right: &str) -> Ordering {
+    natord::compare_ignore_case(&sort_key(left), &sort_key(right))
 }
 
 #[cfg(test)]

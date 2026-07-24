@@ -8,7 +8,7 @@ The reference baseline is Komga commit `4ef86df`. Porting is organized as vertic
 | SQLite | Partial | User, library, settings, task queue, Series/Book, media pages/files, book/series thumbnails, metadata relations, and read-progress schema are compatible with current Flyway databases. The complete schema and all historical migration paths are pending. |
 | Claim and users | Implemented | Claim, current user, CRUD, roles, library sharing fields, age/label restrictions, and password changes. |
 | Authentication | Partial | Basic, in-memory sessions, remember-me cookie, header sessions, logout, and REST API keys are implemented. OAuth2 and authentication activity are pending. |
-| Libraries and scanner | Partial | Library CRUD, filesystem browsing, scan workers, startup/periodic scheduling, Series/Book discovery, change reconciliation, soft deletion, automatic CBZ/CBR/PDF/EPUB analysis, ComicInfo/EPUB metadata import, and Mylar `series.json` sidecars are implemented. Artwork sidecars and trash execution are pending. |
+| Libraries and scanner | Partial | Library CRUD with database cascade deletion, filesystem browsing, scan workers, startup/periodic scheduling, Series/Book discovery, change reconciliation, soft deletion, EmptyTrash/automatic cleanup, automatic CBZ/CBR/PDF/EPUB analysis, ComicInfo/EPUB metadata import, and Mylar `series.json` sidecars are implemented. Artwork sidecars and source-file deletion tasks are pending. |
 | Series/books/read progress | Partial | Skeleton persistence, natural ordering, modern list/detail APIs, Spring pagination, basic recursive filtering, sibling navigation, access restrictions, progress hydration, per-book and series-level writes, REST Readium progression, Mihon/Tachiyomi series synchronization, administrator book/series metadata mutations, book/series thumbnail management and regeneration, CBZ/CBR/PDF and fixed-layout EPUB pages, EPUB resources/positions, WebPub manifests, and streaming original-file downloads are implemented. Deprecated/specialized lists remain pending. |
 | Collections/read lists | Core complete | CRUD, visible membership, reverse lookup, navigation, Mihon progress, ComicRack matching, streamed ZIP downloads, uploads, dynamic collage posters, and scanner-driven ComicInfo relationship import. |
 | Media | Partial | ZIP/CBZ, RAR4/RAR5/CBR (including solid archives), PDF, and EPUB analysis are implemented without external runtime commands. PDF supports rendered and raw pages; EPUB supports OPF/NAV/NCX discovery, resources, Readium positions, native KEPUB detection, fixed-layout pages, and package covers. Divina, PDF, and EPUB WebPub manifests are available. EPUB metadata import, uncommon image codecs, hashing, and duplicate pages are pending. |
@@ -30,14 +30,14 @@ The reference baseline is Komga commit `4ef86df`. Porting is organized as vertic
 
 - Scan workers analyze ZIP/CBZ, RAR/CBR, PDF, and EPUB files and generate book covers. Encrypted and multi-volume RAR archives, password-protected PDFs, and DRM-protected or obfuscated EPUB resources remain unsupported. Page hashes, duplicate detection, EPUB metadata providers, and KEPUB conversion are not implemented.
 - Series/Book queries do not yet support Lucene `fullTextSearch`, poster/media-profile conditions, deprecated GET lists, alphabetical groups, or latest/new/updated feeds. Collection/read-list membership conditions are supported. Unsupported request bodies and sort fields return `400 Bad Request`.
-- `EmptyTrash` and unknown Kotlin tasks remain queued and are not claimed by Rust workers.
+- Unknown Kotlin tasks remain queued and are not claimed by Rust workers.
 - Only empty libraries can be deleted. Non-empty library deletion returns `409 Conflict` until the full series/book cascade is ported.
 - The OAuth provider endpoint intentionally returns an empty list until OAuth authentication is implemented.
 - `SERVER_SETTINGS` is read only for remember-me duration and task-pool size; the server-settings API is not implemented.
 
 ## Next slice
 
-The next dependency-ordered slice is EmptyTrash/deletion cascade or search indexing. Domain-event/SSE integration
+The next dependency-ordered slice is search indexing. Domain-event/SSE integration
 remains later work.
 
 Book and series metadata can be patched through the Kotlin-compatible administrator routes. The HTTP boundary preserves

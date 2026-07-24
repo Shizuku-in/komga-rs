@@ -4,17 +4,15 @@ use komga_core::{Library, ScanInterval, SeriesCover};
 use sqlx::FromRow;
 use url::Url;
 
-use crate::{Result, Storage, StorageError, table_exists};
+use crate::{Result, Storage, StorageError};
 
-/// Outcome of a guarded library deletion.
+/// Outcome of a library deletion.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeleteLibraryResult {
     /// The library and its configuration relations were deleted.
     Deleted,
     /// No library had the supplied identifier.
     NotFound,
-    /// Series, books, or sidecars still reference the library.
-    NotEmpty,
 }
 
 #[derive(Debug, FromRow)]
@@ -244,44 +242,6 @@ impl Storage {
         replace_exclusions(&mut tx, library).await?;
         tx.commit().await?;
         Ok(true)
-    }
-
-    /// Deletes a library only when no media or sidecars remain.
-    ///
-    /// # Errors
-    ///
-    /// Returns a database error while checking dependants or deleting relations.
-    pub async fn delete_library_if_empty(&self, id: &str) -> Result<DeleteLibraryResult> {
-        let mut tx = self.pool.begin().await?;
-        let exists = sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM LIBRARY WHERE ID = ?)")
-            .bind(id)
-            .fetch_one(&mut *tx)
-            .await?;
-        if !exists {
-            return Ok(DeleteLibraryResult::NotFound);
-        }
-        for table in ["SERIES", "BOOK", "SIDECAR"] {
-            if table_exists(&mut tx, table).await?
-                && sqlx::query_scalar::<_, bool>(&format!("SELECT EXISTS(SELECT 1 FROM {table} WHERE LIBRARY_ID = ?)"))
-                    .bind(id)
-                    .fetch_one(&mut *tx)
-                    .await?
-            {
-                return Ok(DeleteLibraryResult::NotEmpty);
-            }
-        }
-        for table in ["LIBRARY_EXCLUSIONS", "USER_LIBRARY_SHARING"] {
-            sqlx::query(&format!("DELETE FROM {table} WHERE LIBRARY_ID = ?"))
-                .bind(id)
-                .execute(&mut *tx)
-                .await?;
-        }
-        sqlx::query("DELETE FROM LIBRARY WHERE ID = ?")
-            .bind(id)
-            .execute(&mut *tx)
-            .await?;
-        tx.commit().await?;
-        Ok(DeleteLibraryResult::Deleted)
     }
 }
 

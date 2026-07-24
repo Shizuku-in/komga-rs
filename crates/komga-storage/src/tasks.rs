@@ -92,6 +92,37 @@ impl TaskRecord {
 
     /// Builds a Kotlin-compatible book metadata refresh task.
     pub fn refresh_book_metadata(book_id: &str, series_id: &str, priority: i32) -> Self {
+        Self::refresh_book_metadata_with_capabilities(
+            book_id,
+            series_id,
+            priority,
+            &[
+                "TITLE",
+                "SUMMARY",
+                "NUMBER",
+                "NUMBER_SORT",
+                "RELEASE_DATE",
+                "AUTHORS",
+                "TAGS",
+                "ISBN",
+                "READ_LISTS",
+                "THUMBNAILS",
+                "LINKS",
+            ],
+        )
+    }
+
+    /// Builds a book metadata refresh limited to natural-sort numbering.
+    pub fn refresh_book_numbering(book_id: &str, series_id: &str, priority: i32) -> Self {
+        Self::refresh_book_metadata_with_capabilities(book_id, series_id, priority, &["NUMBER", "NUMBER_SORT"])
+    }
+
+    fn refresh_book_metadata_with_capabilities(
+        book_id: &str,
+        series_id: &str,
+        priority: i32,
+        capabilities: &[&str],
+    ) -> Self {
         let id = format!("REFRESH_BOOK_METADATA_{book_id}");
         Self {
             id: id.clone(),
@@ -101,10 +132,7 @@ impl TaskRecord {
             simple_type: "RefreshBookMetadata".into(),
             payload: serde_json::json!({
                 "bookId": book_id,
-                "capabilities": [
-                    "TITLE", "SUMMARY", "NUMBER", "NUMBER_SORT", "RELEASE_DATE",
-                    "AUTHORS", "TAGS", "ISBN", "READ_LISTS", "THUMBNAILS", "LINKS"
-                ],
+                "capabilities": capabilities,
                 "priority": priority,
                 "groupId": series_id,
                 "uniqueId": id,

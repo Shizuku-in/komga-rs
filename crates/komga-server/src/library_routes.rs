@@ -268,15 +268,12 @@ pub(crate) async fn delete_library(
     Path(library_id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
     require_admin(&auth)?;
-    match state.storage.delete_library_if_empty(&library_id).await? {
+    match state.storage.delete_library(&library_id).await? {
         DeleteLibraryResult::Deleted => {
             state.library_schedule_changed();
             Ok(StatusCode::NO_CONTENT)
         }
         DeleteLibraryResult::NotFound => Err(ApiError::not_found("Library not found")),
-        DeleteLibraryResult::NotEmpty => Err(ApiError::conflict(
-            "Deleting non-empty libraries is not supported in this migration stage",
-        )),
     }
 }
 
