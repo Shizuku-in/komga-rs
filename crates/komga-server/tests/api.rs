@@ -37,6 +37,8 @@ mod library_content_cases;
 mod lifecycle_cases;
 #[path = "api_cases/media.rs"]
 mod media_cases;
+#[path = "api_cases/page_hashes.rs"]
+mod page_hash_cases;
 #[path = "api_cases/progress.rs"]
 mod progress_cases;
 #[path = "api_cases/referential.rs"]

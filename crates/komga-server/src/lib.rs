@@ -20,6 +20,7 @@ mod legacy_content_query;
 mod library_routes;
 mod media_routes;
 mod metadata_routes;
+mod page_hash_routes;
 mod pagination;
 mod read_list_file_routes;
 mod read_list_match_routes;
@@ -530,6 +531,28 @@ pub fn build_app(state: AppState) -> Router {
         .route("/api/v1/books/latest", get(content_routes::latest_books))
         .route("/api/v1/books/ondeck", get(content_routes::books_on_deck))
         .route("/api/v1/books/duplicates", get(content_routes::duplicate_books))
+        .route(
+            "/api/v1/page-hashes",
+            get(page_hash_routes::known).put(page_hash_routes::create_or_update),
+        )
+        .route("/api/v1/page-hashes/unknown", get(page_hash_routes::unknown))
+        .route(
+            "/api/v1/page-hashes/unknown/{page_hash}/thumbnail",
+            get(page_hash_routes::unknown_thumbnail),
+        )
+        .route(
+            "/api/v1/page-hashes/{page_hash}/thumbnail",
+            get(page_hash_routes::known_thumbnail),
+        )
+        .route("/api/v1/page-hashes/{page_hash}", get(page_hash_routes::matches))
+        .route(
+            "/api/v1/page-hashes/{page_hash}/delete-all",
+            post(page_hash_routes::delete_all),
+        )
+        .route(
+            "/api/v1/page-hashes/{page_hash}/delete-match",
+            post(page_hash_routes::delete_match),
+        )
         .route(
             "/api/v1/books/thumbnails",
             axum::routing::put(thumbnail_routes::regenerate_book_thumbnails),

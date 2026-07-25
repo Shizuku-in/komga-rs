@@ -11,6 +11,7 @@ mod content;
 mod content_query;
 mod media;
 mod metadata;
+mod page_hash;
 mod pagination;
 mod progress;
 mod scanner;
@@ -46,6 +47,7 @@ pub use metadata::{
     AlternateTitle, Author, BookMetadata, BookMetadataAggregation, BookMetadataPatch, MetadataError, MetadataUpdate,
     ReadingDirection, SeriesMetadata, SeriesMetadataPatch, SeriesStatus, WebLink, aggregate_book_metadata,
 };
+pub use page_hash::{HashedPageTarget, PageHashAction, PageHashKnown, PageHashMatch, PageHashUnknown};
 pub use pagination::{ContentPage, PageRequest, SortDirection, SortOrder};
 pub use progress::{
     R2Device, R2Progression, ReadProgress, ReadProgressError, SeriesReadProgressDto, completed_progress, page_progress,

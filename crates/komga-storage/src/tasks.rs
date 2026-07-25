@@ -1,5 +1,6 @@
 use std::{collections::BTreeMap, path::Path, str::FromStr, time::Duration};
 
+use komga_core::HashedPageTarget;
 use serde::{Deserialize, Serialize};
 use sqlx::{
     FromRow, SqlitePool,
@@ -174,6 +175,47 @@ impl TaskRecord {
             simple_type: "HashBookPages".into(),
             payload: serde_json::json!({
                 "bookId": book_id,
+                "priority": priority,
+                "groupId": null,
+                "uniqueId": id,
+            })
+            .to_string(),
+            owner: None,
+        }
+    }
+
+    /// Builds a Kotlin-compatible automatic duplicate-page discovery task.
+    pub fn find_duplicate_pages_to_delete(library_id: &str, priority: i32) -> Self {
+        let id = format!("FIND_DUPLICATE_PAGES_TO_DELETE_{library_id}");
+        Self {
+            id: id.clone(),
+            priority,
+            group_id: None,
+            class: "org.gotson.komga.application.tasks.Task$FindDuplicatePagesToDelete".into(),
+            simple_type: "FindDuplicatePagesToDelete".into(),
+            payload: serde_json::json!({
+                "libraryId": library_id,
+                "priority": priority,
+                "groupId": null,
+                "uniqueId": id,
+            })
+            .to_string(),
+            owner: None,
+        }
+    }
+
+    /// Builds a Kotlin-compatible task that removes snapshot-bound ZIP pages.
+    pub fn remove_hashed_pages(book_id: &str, pages: &[HashedPageTarget], priority: i32) -> Self {
+        let id = format!("REMOVE_HASHED_PAGES_{book_id}");
+        Self {
+            id: id.clone(),
+            priority,
+            group_id: None,
+            class: "org.gotson.komga.application.tasks.Task$RemoveHashedPages".into(),
+            simple_type: "RemoveHashedPages".into(),
+            payload: serde_json::json!({
+                "bookId": book_id,
+                "pages": pages,
                 "priority": priority,
                 "groupId": null,
                 "uniqueId": id,
