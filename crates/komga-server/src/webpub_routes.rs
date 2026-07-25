@@ -376,7 +376,6 @@ pub(crate) async fn get_epub_manifest(
     manifest_response(state, auth, path, headers, uri, RequestedProfile::Epub, false).await
 }
 
-#[allow(dead_code)]
 pub(crate) async fn get_opds_manifest(
     state: State<AppState>,
     auth: Extension<AuthContext>,
@@ -387,7 +386,6 @@ pub(crate) async fn get_opds_manifest(
     manifest_response(state, auth, path, headers, uri, RequestedProfile::Automatic, true).await
 }
 
-#[allow(dead_code)]
 pub(crate) async fn get_opds_divina_manifest(
     state: State<AppState>,
     auth: Extension<AuthContext>,
@@ -398,7 +396,6 @@ pub(crate) async fn get_opds_divina_manifest(
     manifest_response(state, auth, path, headers, uri, RequestedProfile::Divina, true).await
 }
 
-#[allow(dead_code)]
 pub(crate) async fn get_opds_pdf_manifest(
     state: State<AppState>,
     auth: Extension<AuthContext>,
@@ -409,7 +406,6 @@ pub(crate) async fn get_opds_pdf_manifest(
     manifest_response(state, auth, path, headers, uri, RequestedProfile::Pdf, true).await
 }
 
-#[allow(dead_code)]
 pub(crate) async fn get_opds_epub_manifest(
     state: State<AppState>,
     auth: Extension<AuthContext>,
@@ -478,7 +474,6 @@ async fn manifest_response(
     Ok(response)
 }
 
-#[allow(dead_code)]
 pub(crate) fn opds_publication(
     book: &komga_core::BookDto,
     series: &SeriesMetadataDto,

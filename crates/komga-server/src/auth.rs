@@ -115,6 +115,9 @@ enum AuthSource {
 
 /// Authenticates protected requests and attaches [`AuthContext`] for handlers.
 pub(crate) async fn require_auth(State(state): State<AppState>, mut request: Request, next: Next) -> Response {
+    let opds_v2 = request.uri().path().starts_with("/opds/v2/");
+    let request_headers = request.headers().clone();
+    let request_uri = request.uri().clone();
     match authenticate(&state, request.headers(), request.uri().query()).await {
         Ok((user, source)) => {
             let (session_id, issue_session, remember_me) = match source {
@@ -147,7 +150,13 @@ pub(crate) async fn require_auth(State(state): State<AppState>, mut request: Req
             }
             response
         }
-        Err(error) => error.into_response(),
+        Err(error) => {
+            if opds_v2 {
+                crate::opds_v2::unauthorized(&request_headers, &request_uri)
+            } else {
+                error.into_response()
+            }
+        }
     }
 }
 
