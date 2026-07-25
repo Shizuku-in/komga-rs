@@ -35,6 +35,8 @@ mod lifecycle_cases;
 mod media_cases;
 #[path = "api_cases/progress.rs"]
 mod progress_cases;
+#[path = "api_cases/referential.rs"]
+mod referential_cases;
 #[path = "api_cases/sse.rs"]
 mod sse_cases;
 #[path = "api_cases/webpub.rs"]

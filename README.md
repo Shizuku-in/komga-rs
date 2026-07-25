@@ -53,8 +53,11 @@ Do not run the Kotlin and Rust servers against the same SQLite file at the same 
 - `POST /api/v1/libraries/{id}/scan`
 - `POST /api/v1/libraries/{id}/empty-trash`
 - `POST /api/v1/series/list`
+- `POST /api/v1/series/list/alphabetical-groups`
+- `GET /api/v1/series/{latest|new|updated}`
 - `GET /api/v1/series/{id}`
 - `POST /api/v1/books/list`
+- `GET /api/v1/books/{latest|ondeck}`
 - `GET /api/v1/books/{id}`
 - `GET /api/v1/books/{id}/previous`
 - `GET /api/v1/books/{id}/next`
@@ -76,6 +79,9 @@ Do not run the Kotlin and Rust servers against the same SQLite file at the same 
 - `GET /api/v1/client-settings/user/list`
 - `PATCH|DELETE /api/v1/client-settings/user`
 - `GET /api/v1/oauth2/providers`
+- `GET /api/v1|v2/authors` and `GET /api/v1/authors/{names|roles}`
+- `GET /api/v1/{genres|sharing-labels|languages|publishers|age-ratings}`
+- `GET /api/v1/tags`, `/api/v1/tags/{book|series}`, and `/api/v1/series/release-dates`
 - `DELETE /api/v1/tasks`
 - `GET /sse/v1/events`
 
@@ -83,7 +89,7 @@ Authentication is compatible with the current Komga contract: HTTP Basic, `KOMGA
 
 `ScanLibrary` tasks are executed in the background. They discover configured CBX/PDF/EPUB files and persist Kotlin-compatible Series, Book, Media, and initial metadata rows. CBZ, CBR, PDF, and EPUB contents are analyzed and receive generated book thumbnails; fixed-layout EPUB pages, publication resources, navigation, reading positions, and Divina/PDF/EPUB WebPub manifests are available through the REST API. Root-level `ComicInfo.xml`, EPUB OPF, and Mylar `series.json` metadata are imported incrementally after analysis and through the book, series, and library metadata refresh endpoints. Provider updates preserve locked fields, and ComicInfo collection/read-list relationships remain incremental. `EmptyTrash` permanently removes soft-deleted database content, honors automatic cleanup after scans, and never deletes source files. Library deletion cascades through database-owned content and sidecars while also preserving source files. Other unported task types remain queued and unmodified.
 
-The modern Series and Book list endpoints support Spring-style pagination, structured conditions, and ranked multilingual `fullTextSearch`. Collection and read-list `search` uses the same in-process Tantivy index. Library sharing, age, sharing labels, member restrictions, and structured conditions remain enforced by SQLite before pagination. The Rust index uses `<config-dir>/search/v2`, remains independent of Kotlin's Lucene directory, and queues a priority-8 rebuild task at startup when the file index is empty or incompatible. Poster/media-profile conditions remain pending.
+The modern Series and Book list endpoints support Spring-style pagination, the complete structured condition trees, ranked multilingual `fullTextSearch`, alphabetical groups, fixed discovery feeds, and On Deck selection. Referential filter values preserve Kotlin's scope precedence and data-source differences. Collection and read-list `search` uses the same in-process Tantivy index. Library sharing, age, sharing labels, member restrictions, and structured conditions remain enforced by SQLite before pagination. The Rust index uses `<config-dir>/search/v2`, remains independent of Kotlin's Lucene directory, and queues a priority-8 rebuild task at startup when the file index is empty or incompatible.
 
 ## Develop
 

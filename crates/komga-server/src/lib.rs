@@ -23,6 +23,7 @@ mod pagination;
 mod read_list_file_routes;
 mod read_list_match_routes;
 mod read_progress_routes;
+mod referential_routes;
 mod routes;
 mod runtime;
 mod search_query;
@@ -437,6 +438,22 @@ pub fn build_app(state: AppState) -> Router {
         .route("/api/v2/users/{user_id}/password", patch(routes::update_user_password))
         .route("/api/v1/login/set-cookie", get(routes::set_cookie))
         .route("/api/logout", get(routes::logout).post(routes::logout))
+        .route("/api/v1/authors", get(referential_routes::authors_v1))
+        .route("/api/v2/authors", get(referential_routes::authors_v2))
+        .route("/api/v1/authors/names", get(referential_routes::author_names))
+        .route("/api/v1/authors/roles", get(referential_routes::author_roles))
+        .route("/api/v1/genres", get(referential_routes::genres))
+        .route("/api/v1/sharing-labels", get(referential_routes::sharing_labels))
+        .route("/api/v1/tags", get(referential_routes::tags))
+        .route("/api/v1/tags/book", get(referential_routes::book_tags))
+        .route("/api/v1/tags/series", get(referential_routes::series_tags))
+        .route("/api/v1/languages", get(referential_routes::languages))
+        .route("/api/v1/publishers", get(referential_routes::publishers))
+        .route("/api/v1/age-ratings", get(referential_routes::age_ratings))
+        .route(
+            "/api/v1/series/release-dates",
+            get(referential_routes::series_release_dates),
+        )
         .route("/api/v1/series/list", post(content_routes::list_series))
         .route(
             "/api/v1/series/list/alphabetical-groups",

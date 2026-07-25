@@ -17,6 +17,7 @@ mod media;
 mod metadata;
 mod query_support;
 mod read_progress;
+mod referential;
 mod schema;
 mod settings;
 mod tasks;
@@ -26,6 +27,7 @@ pub use content::ScanApplyStats;
 pub use content_queries::ReadListFile;
 pub use library::DeleteLibraryResult;
 pub use lifecycle::{EmptyTrashResult, NumberingRefreshTarget};
+pub use referential::{ReferentialScope, author_page_request};
 pub use settings::ClientSetting;
 pub use tasks::{RebuildIndexEntity, TaskRecord, TaskStorage};
 
