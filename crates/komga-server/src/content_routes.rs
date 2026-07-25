@@ -7,6 +7,7 @@ use komga_core::{
     SeriesDto, SeriesSearch, SortDirection, SortOrder, User,
 };
 use komga_search::EntityKind;
+use komga_storage::LegacySeriesRegex;
 
 use crate::{
     AppState,
@@ -26,7 +27,7 @@ pub(crate) async fn series_alphabetical_groups(
     Extension(auth): Extension<AuthContext>,
     ApiJson(search): ApiJson<SeriesSearch>,
 ) -> Result<Json<Vec<GroupCountDto>>, ApiError> {
-    Ok(Json(execute_series_groups(&state, &auth.user, &search).await?))
+    Ok(Json(execute_series_groups(&state, &auth.user, &search, None).await?))
 }
 
 pub(crate) async fn legacy_series_alphabetical_groups(
@@ -35,21 +36,36 @@ pub(crate) async fn legacy_series_alphabetical_groups(
     RawQuery(raw_query): RawQuery,
 ) -> Result<Json<Vec<GroupCountDto>>, ApiError> {
     let query = parse_legacy_series_query(raw_query.as_deref())?;
-    Ok(Json(execute_series_groups(&state, &auth.user, &query.search).await?))
+    Ok(Json(
+        execute_series_groups(&state, &auth.user, &query.search, query.regex.as_ref()).await?,
+    ))
 }
 
 async fn execute_series_groups(
     state: &AppState,
     user: &User,
     search: &SeriesSearch,
+    regex: Option<&LegacySeriesRegex>,
 ) -> Result<Vec<GroupCountDto>, ApiError> {
     let groups = if let Some(query) = non_empty(search.full_text_search.as_deref()) {
         let hits = search_hits(state, EntityKind::Series, query).await;
         let mut database_search = search.clone();
         database_search.full_text_search = None;
+        if regex.is_some() {
+            state
+                .storage
+                .series_alphabetical_groups_legacy(&database_search, user, Some(&hits), regex)
+                .await?
+        } else {
+            state
+                .storage
+                .series_alphabetical_groups(&database_search, user, Some(&hits))
+                .await?
+        }
+    } else if regex.is_some() {
         state
             .storage
-            .series_alphabetical_groups(&database_search, user, Some(&hits))
+            .series_alphabetical_groups_legacy(search, user, None, regex)
             .await?
     } else {
         state.storage.series_alphabetical_groups(search, user, None).await?
@@ -197,7 +213,7 @@ pub(crate) async fn list_series(
 ) -> Result<Json<SpringPage<SeriesDto>>, ApiError> {
     let page = parse_page_request(raw_query.as_deref())?;
     Ok(Json(SpringPage::from_content(
-        execute_series_query(&state, &auth.user, &search, &page).await?,
+        execute_series_query(&state, &auth.user, &search, &page, None).await?,
     )))
 }
 
@@ -208,7 +224,7 @@ pub(crate) async fn legacy_list_series(
 ) -> Result<Json<SpringPage<SeriesDto>>, ApiError> {
     let query = parse_legacy_series_query(raw_query.as_deref())?;
     Ok(Json(SpringPage::from_content(
-        execute_series_query(&state, &auth.user, &query.search, &query.page).await?,
+        execute_series_query(&state, &auth.user, &query.search, &query.page, query.regex.as_ref()).await?,
     )))
 }
 
@@ -217,14 +233,27 @@ async fn execute_series_query(
     user: &User,
     search: &SeriesSearch,
     page: &PageRequest,
+    regex: Option<&LegacySeriesRegex>,
 ) -> Result<ContentPage<SeriesDto>, ApiError> {
     let mut result = if let Some(query) = non_empty(search.full_text_search.as_deref()) {
         let hits = search_hits(state, EntityKind::Series, query).await;
         let mut database_search = search.clone();
         database_search.full_text_search = None;
+        if regex.is_some() {
+            state
+                .storage
+                .query_series_legacy(&database_search, page, user, Some(&hits), regex)
+                .await?
+        } else {
+            state
+                .storage
+                .query_series(&database_search, page, user, Some(&hits))
+                .await?
+        }
+    } else if regex.is_some() {
         state
             .storage
-            .query_series(&database_search, page, user, Some(&hits))
+            .query_series_legacy(search, page, user, None, regex)
             .await?
     } else {
         state.storage.query_series(search, page, user, None).await?

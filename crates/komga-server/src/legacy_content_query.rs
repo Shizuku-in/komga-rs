@@ -6,6 +6,7 @@ use komga_core::{
     NullableEqualityOperator, NullableNumericOperator, PageRequest, ReadStatus, SeriesCondition, SeriesSearch,
     SeriesStatus, SortDirection, SortOrder,
 };
+use komga_storage::{LegacySeriesRegex, LegacySeriesRegexField};
 
 use crate::error::ApiError;
 
@@ -52,6 +53,7 @@ const BOOK_SORTS: &[&str] = &[
 pub(crate) struct LegacySeriesQuery {
     pub(crate) search: SeriesSearch,
     pub(crate) page: PageRequest,
+    pub(crate) regex: Option<LegacySeriesRegex>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -64,6 +66,7 @@ pub(crate) fn parse_legacy_series_query(raw_query: Option<&str>) -> Result<Legac
     let values = RawValues::parse(raw_query);
     let search_term = values.first("search").map(str::to_owned);
     let page = values.page_request(SERIES_SORTS, search_term.as_deref())?;
+    let regex = values.first("search_regex").and_then(parse_regex);
     let mut conditions = Vec::new();
 
     push_any_series(&mut conditions, values.list("library_id"), |value| {
@@ -163,6 +166,7 @@ pub(crate) fn parse_legacy_series_query(raw_query: Option<&str>) -> Result<Legac
             full_text_search: search_term,
         },
         page,
+        regex,
     })
 }
 
@@ -303,6 +307,19 @@ fn parse_media_status(value: &str) -> Option<MediaStatus> {
     }
 }
 
+fn parse_regex(value: &str) -> Option<LegacySeriesRegex> {
+    let (pattern, field) = value.rsplit_once(',')?;
+    let field = match field.to_ascii_lowercase().as_str() {
+        "title" => LegacySeriesRegexField::Title,
+        "title_sort" => LegacySeriesRegexField::TitleSort,
+        _ => return None,
+    };
+    Some(LegacySeriesRegex {
+        pattern: pattern.to_owned(),
+        field,
+    })
+}
+
 #[derive(Debug)]
 struct RawValues {
     values: HashMap<String, Vec<String>>,
@@ -354,7 +371,8 @@ impl RawValues {
                 continue;
             };
             syntactic_sort = true;
-            if allowed_sorts.contains(&order.property.as_str()) {
+            let relevance = order.property == "relevance" && search.is_some_and(|search| !search.trim().is_empty());
+            if relevance || allowed_sorts.contains(&order.property.as_str()) {
                 sort.push(order);
             }
         }
@@ -457,6 +475,13 @@ mod tests {
 
         let unknown = parse_legacy_book_query(Some("search=alpha&sort=unknown,asc")).unwrap();
         assert!(unknown.page.sort.is_empty());
+
+        let explicit = parse_legacy_series_query(Some("search=alpha&sort=relevance,desc")).unwrap();
+        assert_eq!(explicit.page.sort[0].property, "relevance");
+        assert_eq!(explicit.page.sort[0].direction, SortDirection::Descending);
+
+        let irrelevant = parse_legacy_series_query(Some("sort=relevance,asc")).unwrap();
+        assert!(irrelevant.page.sort.is_empty());
     }
 
     #[test]
@@ -472,5 +497,33 @@ mod tests {
             parsed.search.condition,
             Some(SeriesCondition::AllOf { conditions }) if conditions.is_empty()
         ));
+    }
+
+    #[test]
+    fn regex_uses_the_first_parameter_and_splits_on_the_last_comma() {
+        let parsed = parse_legacy_series_query(Some(
+            "search_regex=alpha%2Cbeta%2CTITLE_SORT&search_regex=ignored%2Ctitle",
+        ))
+        .unwrap();
+        assert_eq!(
+            parsed.regex,
+            Some(LegacySeriesRegex {
+                pattern: "alpha,beta".into(),
+                field: LegacySeriesRegexField::TitleSort,
+            })
+        );
+
+        assert!(
+            parse_legacy_series_query(Some("search_regex=malformed"))
+                .unwrap()
+                .regex
+                .is_none()
+        );
+        assert!(
+            parse_legacy_series_query(Some("search_regex=alpha,unknown"))
+                .unwrap()
+                .regex
+                .is_none()
+        );
     }
 }

@@ -42,7 +42,7 @@ rars = "0.4.7"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sha2 = "0.10"
-sqlx = { version = "0.8", default-features = false, features = ["chrono", "macros", "migrate", "runtime-tokio", "sqlite"] }
+sqlx = { version = "0.8", default-features = false, features = ["chrono", "macros", "migrate", "regexp", "runtime-tokio", "sqlite"] }
 tempfile = "3.20"
 thiserror = "2.0"
 tokio = { version = "1.47", features = ["fs", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }

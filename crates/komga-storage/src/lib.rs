@@ -24,7 +24,7 @@ mod tasks;
 
 pub use containers::{ComicInfoContainerUpdate, ContainerThumbnail};
 pub use content::ScanApplyStats;
-pub use content_queries::ReadListFile;
+pub use content_queries::{LegacySeriesRegex, LegacySeriesRegexField, ReadListFile};
 pub use library::DeleteLibraryResult;
 pub use lifecycle::{EmptyTrashResult, NumberingRefreshTarget};
 pub use referential::{ReferentialScope, author_page_request};
@@ -50,8 +50,10 @@ fn unicode_nocase_compare(left: &str, right: &str) -> Ordering {
     normalize(left).cmp(&normalize(right))
 }
 
-fn with_unicode_nocase(options: SqliteConnectOptions) -> SqliteConnectOptions {
-    options.collation(UNICODE_NOCASE_COLLATION, unicode_nocase_compare)
+fn with_content_extensions(options: SqliteConnectOptions) -> SqliteConnectOptions {
+    options
+        .with_regexp()
+        .collation(UNICODE_NOCASE_COLLATION, unicode_nocase_compare)
 }
 
 /// Errors produced by SQLite access or compatibility migrations.
@@ -111,7 +113,7 @@ impl Storage {
     /// Returns [`StorageError::Database`] when the URL or connection is invalid,
     /// or [`StorageError::Migration`] when the schema cannot be initialized.
     pub async fn connect(database_path: &str) -> Result<Self> {
-        let options = with_unicode_nocase(
+        let options = with_content_extensions(
             SqliteConnectOptions::from_str(database_path)?
                 .create_if_missing(true)
                 .foreign_keys(true)
@@ -137,7 +139,7 @@ impl Storage {
     ///
     /// Returns a storage error if the file cannot be opened or migrated.
     pub async fn connect_path(database_path: &Path) -> Result<Self> {
-        let options = with_unicode_nocase(
+        let options = with_content_extensions(
             SqliteConnectOptions::new()
                 .filename(database_path)
                 .create_if_missing(true)
@@ -164,7 +166,7 @@ impl Storage {
     ///
     /// Returns a storage error if the in-memory schema cannot be initialized.
     pub async fn connect_memory() -> Result<Self> {
-        let options = with_unicode_nocase(
+        let options = with_content_extensions(
             SqliteConnectOptions::from_str("sqlite::memory:")?
                 .foreign_keys(true)
                 .journal_mode(SqliteJournalMode::Memory),
@@ -965,6 +967,129 @@ mod tests {
                 .deleted_date
                 .is_some()
         );
+    }
+
+    #[tokio::test]
+    async fn legacy_series_regex_filters_ranked_queries_groups_and_permissions() {
+        let storage = Storage::connect_memory().await.unwrap();
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("library");
+        for name in ["Alpha", "Beta"] {
+            let directory = root.join(name);
+            fs::create_dir_all(&directory).unwrap();
+            fs::write(directory.join("Volume.cbz"), [1_u8]).unwrap();
+        }
+        let library = Library::new("Library".into(), Url::from_directory_path(&root).unwrap());
+        storage.create_library(&library).await.unwrap();
+        let scan = scan_library_files(&library, || false).unwrap();
+        storage.apply_library_scan(&library.id, &scan, false).await.unwrap();
+
+        let mut series = storage.list_series_by_library_id(&library.id).await.unwrap();
+        series.sort_by(|left, right| left.name.cmp(&right.name));
+        let alpha = &series[0];
+        let beta = &series[1];
+        sqlx::query("UPDATE SERIES_METADATA SET TITLE = 'Café Stories', TITLE_SORT = 'Zulu Alpha' WHERE SERIES_ID = ?")
+            .bind(&alpha.id)
+            .execute(storage.pool())
+            .await
+            .unwrap();
+        sqlx::query("UPDATE SERIES_METADATA SET TITLE = 'Other', TITLE_SORT = 'beta' WHERE SERIES_ID = ?")
+            .bind(&beta.id)
+            .execute(storage.pool())
+            .await
+            .unwrap();
+
+        let user = User::new("reader@example.org".into(), "hash".into());
+        let title = LegacySeriesRegex {
+            pattern: "^CAFÉ".into(),
+            field: LegacySeriesRegexField::Title,
+        };
+        let title_sort = LegacySeriesRegex {
+            pattern: "^zulu".into(),
+            field: LegacySeriesRegexField::TitleSort,
+        };
+        let unpaged = PageRequest {
+            unpaged: true,
+            ..PageRequest::default()
+        };
+
+        let title_page = storage
+            .query_series_legacy(&SeriesSearch::default(), &unpaged, &user, None, Some(&title))
+            .await
+            .unwrap();
+        assert_eq!(
+            title_page.content.iter().map(|series| &series.id).collect::<Vec<_>>(),
+            [&alpha.id]
+        );
+        let sort_page = storage
+            .query_series_legacy(&SeriesSearch::default(), &unpaged, &user, None, Some(&title_sort))
+            .await
+            .unwrap();
+        assert_eq!(sort_page.content[0].id, alpha.id);
+
+        assert_eq!(
+            storage
+                .query_series_legacy(
+                    &SeriesSearch::default(),
+                    &unpaged,
+                    &user,
+                    Some(&[beta.id.clone(), alpha.id.clone()]),
+                    Some(&title),
+                )
+                .await
+                .unwrap()
+                .total_elements,
+            1
+        );
+        assert_eq!(
+            storage
+                .query_series_legacy(&SeriesSearch::default(), &unpaged, &user, Some(&[]), Some(&title))
+                .await
+                .unwrap()
+                .total_elements,
+            0
+        );
+
+        let groups = storage
+            .series_alphabetical_groups_legacy(&SeriesSearch::default(), &user, None, Some(&title))
+            .await
+            .unwrap();
+        assert_eq!(
+            groups,
+            [komga_core::GroupCountDto {
+                group: "z".into(),
+                count: 1
+            }]
+        );
+
+        let mut restricted = user.clone();
+        restricted.shared_all_libraries = false;
+        assert_eq!(
+            storage
+                .query_series_legacy(&SeriesSearch::default(), &unpaged, &restricted, None, Some(&title))
+                .await
+                .unwrap()
+                .total_elements,
+            0
+        );
+        assert!(
+            storage
+                .series_alphabetical_groups_legacy(&SeriesSearch::default(), &restricted, None, Some(&title))
+                .await
+                .unwrap()
+                .is_empty()
+        );
+
+        let invalid = LegacySeriesRegex {
+            pattern: "(?=Stories)".into(),
+            field: LegacySeriesRegexField::Title,
+        };
+        assert!(matches!(
+            storage
+                .query_series_legacy(&SeriesSearch::default(), &unpaged, &user, None, Some(&invalid))
+                .await,
+            Err(StorageError::Database(_))
+        ));
     }
 
     #[tokio::test]

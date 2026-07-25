@@ -28,7 +28,7 @@ async fn deprecated_content_queries_match_modern_search_and_enforce_legacy_contr
     let mut metadata = storage.find_series_metadata(&alpha.id).await.unwrap().unwrap();
     metadata.status = SeriesStatus::Ended;
     metadata.title = "Alpha Adventures".into();
-    metadata.title_sort = "Alpha Adventures".into();
+    metadata.title_sort = "Zulu Adventures".into();
     metadata.publisher = "Publisher".into();
     metadata.language = "en".into();
     metadata.age_rating = Some(18);
@@ -136,7 +136,56 @@ async fn deprecated_content_queries_match_modern_search_and_enforce_legacy_contr
         &admin,
     )
     .await;
-    assert_eq!(groups, serde_json::json!([{"group": "a", "count": 1}]));
+    assert_eq!(groups, serde_json::json!([{"group": "z", "count": 1}]));
+
+    for path in [
+        "/api/v1/series?search_regex=%5EALPHA,title",
+        "/api/v1/series?search_regex=%5Ezulu,title_sort",
+        "/api/v1/series?search=adventures&search_regex=%5Ezulu,title_sort",
+    ] {
+        let regex_page = get_page(&app, path, &admin).await;
+        assert_eq!(regex_page["totalElements"], 1, "{path}");
+        assert_eq!(regex_page["content"][0]["id"], alpha.id, "{path}");
+    }
+    let regex_groups = get_json(
+        &app,
+        "/api/v1/series/alphabetical-groups?search_regex=%5EALPHA,title",
+        &admin,
+    )
+    .await;
+    assert_eq!(regex_groups, serde_json::json!([{"group": "z", "count": 1}]));
+
+    for path in [
+        "/api/v1/series?search_regex=malformed",
+        "/api/v1/series?search_regex=Alpha,unknown",
+    ] {
+        assert_eq!(get_page(&app, path, &admin).await["totalElements"], 2);
+    }
+
+    let invalid_regex = app
+        .clone()
+        .oneshot(
+            Request::get("/api/v1/series?search_regex=%28%3F%3DAlpha%29%2Ctitle")
+                .header(header::AUTHORIZATION, &admin)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(invalid_regex.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+    let modern_regex = app
+        .clone()
+        .oneshot(
+            Request::post("/api/v1/series/list")
+                .header(header::AUTHORIZATION, &admin)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(r#"{"regexSearch":["Alpha","TITLE"]}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(modern_regex.status(), StatusCode::BAD_REQUEST);
 
     let books = get_page(
         &app,

@@ -133,6 +133,24 @@ pub struct ReadListFile {
     pub number: i64,
 }
 
+/// Legacy Series metadata field accepted by the deprecated regex parameter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LegacySeriesRegexField {
+    /// Match `SERIES_METADATA.TITLE`.
+    Title,
+    /// Match `SERIES_METADATA.TITLE_SORT`.
+    TitleSort,
+}
+
+/// Regex filter used only by deprecated Series GET queries.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LegacySeriesRegex {
+    /// Rust-regex pattern, evaluated case-insensitively.
+    pub pattern: String,
+    /// Series metadata field to match.
+    pub field: LegacySeriesRegexField,
+}
+
 #[derive(Debug, Deserialize)]
 struct AuthorJson {
     name: String,
@@ -261,12 +279,42 @@ impl Storage {
         user: &User,
         ranked_ids: Option<&[String]>,
     ) -> Result<ContentPage<SeriesDto>> {
+        self.query_series_with_regex(search, page, user, ranked_ids, None).await
+    }
+
+    /// Lists visible series with the regex filter accepted by deprecated GET APIs.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-query error for unsupported search or paging values,
+    /// or a database error when the query or regex cannot be executed.
+    pub async fn query_series_legacy(
+        &self,
+        search: &SeriesSearch,
+        page: &PageRequest,
+        user: &User,
+        ranked_ids: Option<&[String]>,
+        regex: Option<&LegacySeriesRegex>,
+    ) -> Result<ContentPage<SeriesDto>> {
+        self.query_series_with_regex(search, page, user, ranked_ids, regex)
+            .await
+    }
+
+    async fn query_series_with_regex(
+        &self,
+        search: &SeriesSearch,
+        page: &PageRequest,
+        user: &User,
+        ranked_ids: Option<&[String]>,
+        regex: Option<&LegacySeriesRegex>,
+    ) -> Result<ContentPage<SeriesDto>> {
         validate_page(page)?;
         reject_full_text(search.full_text_search.as_deref())?;
         validate_series_sorts(page, ranked_ids.is_some())?;
 
         let mut count = series_count_builder(user, ranked_ids);
         push_series_visibility(&mut count, user);
+        push_series_regex(&mut count, regex);
         if let Some(condition) = &search.condition {
             count.push(" AND ");
             push_series_condition(&mut count, condition);
@@ -276,6 +324,7 @@ impl Storage {
 
         let mut query = series_query_builder(user, ranked_ids);
         push_series_visibility(&mut query, user);
+        push_series_regex(&mut query, regex);
         if let Some(condition) = &search.condition {
             query.push(" AND ");
             push_series_condition(&mut query, condition);
@@ -300,6 +349,34 @@ impl Storage {
         user: &User,
         ranked_ids: Option<&[String]>,
     ) -> Result<Vec<GroupCountDto>> {
+        self.series_alphabetical_groups_with_regex(search, user, ranked_ids, None)
+            .await
+    }
+
+    /// Counts visible legacy-regex matches by the first character of their sort title.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-query error when full-text search has not been resolved,
+    /// or a database error when grouping or regex evaluation fails.
+    pub async fn series_alphabetical_groups_legacy(
+        &self,
+        search: &SeriesSearch,
+        user: &User,
+        ranked_ids: Option<&[String]>,
+        regex: Option<&LegacySeriesRegex>,
+    ) -> Result<Vec<GroupCountDto>> {
+        self.series_alphabetical_groups_with_regex(search, user, ranked_ids, regex)
+            .await
+    }
+
+    async fn series_alphabetical_groups_with_regex(
+        &self,
+        search: &SeriesSearch,
+        user: &User,
+        ranked_ids: Option<&[String]>,
+        regex: Option<&LegacySeriesRegex>,
+    ) -> Result<Vec<GroupCountDto>> {
         reject_full_text(search.full_text_search.as_deref())?;
         let group = "lower(substr(sm.TITLE_SORT, 1, 1))";
         let mut query = QueryBuilder::new("SELECT ");
@@ -313,6 +390,7 @@ impl Storage {
         push_ranked_join(&mut query, ranked_ids, "s.ID");
         query.push(" WHERE 1 = 1");
         push_series_visibility(&mut query, user);
+        push_series_regex(&mut query, regex);
         if let Some(condition) = &search.condition {
             query.push(" AND ");
             push_series_condition(&mut query, condition);
@@ -623,6 +701,21 @@ fn push_ranked_join(query: &mut QueryBuilder<'static, Sqlite>, ranked_ids: Optio
             .push(") ranked ON ranked.value = ")
             .push(id_column);
     }
+}
+
+fn push_series_regex(query: &mut QueryBuilder<'static, Sqlite>, regex: Option<&LegacySeriesRegex>) {
+    let Some(regex) = regex else {
+        return;
+    };
+    let column = match regex.field {
+        LegacySeriesRegexField::Title => "sm.TITLE",
+        LegacySeriesRegexField::TitleSort => "sm.TITLE_SORT",
+    };
+    query
+        .push(" AND ")
+        .push(column)
+        .push(" REGEXP ")
+        .push_bind(format!("(?i:{})", regex.pattern));
 }
 
 fn push_series_condition(query: &mut QueryBuilder<'static, Sqlite>, condition: &SeriesCondition) {
