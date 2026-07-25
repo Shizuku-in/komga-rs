@@ -10,6 +10,7 @@ use komga_core::{
 use komga_media::{analyze_book, generate_thumbnail, image_dimension};
 use komga_server::{AppState, REMEMBER_ME_COOKIE, SESSION_HEADER, build_app};
 use komga_storage::{Storage, TaskStorage};
+use sha2::{Digest, Sha512};
 use std::{
     fs,
     fs::File,
@@ -31,6 +32,8 @@ mod book_file_cases;
 mod duplicate_cases;
 #[path = "api_cases/history.rs"]
 mod history_cases;
+#[path = "api_cases/kobo.rs"]
+mod kobo_cases;
 #[path = "api_cases/koreader.rs"]
 mod koreader_cases;
 #[path = "api_cases/legacy_content.rs"]
