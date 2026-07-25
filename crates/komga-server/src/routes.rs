@@ -12,7 +12,10 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
-use komga_core::{ALL_ROLES, AgeRestriction, AllowExclude, ApiKey, ContentRestrictions, User, UserRole, new_id};
+use komga_core::{
+    ALL_ROLES, AgeRestriction, AllowExclude, ApiKey, ContentRestrictions, DomainEvent, User, UserEvent, UserRole,
+    new_id,
+};
 use serde::{Serialize, de::DeserializeOwned};
 use uuid::Uuid;
 
@@ -172,6 +175,10 @@ pub(crate) async fn patch_user(
 
     state.storage.update_user(&user).await?;
     state.sessions.remove_user(&user_id);
+    state.publish_domain_event(DomainEvent::UserUpdated(UserEvent {
+        user_id,
+        expire_sessions: true,
+    }));
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -188,6 +195,10 @@ pub(crate) async fn delete_user(
         return Err(ApiError::not_found("User not found"));
     }
     state.sessions.remove_user(&user_id);
+    state.publish_domain_event(DomainEvent::UserDeleted(UserEvent {
+        user_id,
+        expire_sessions: true,
+    }));
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -225,6 +236,10 @@ async fn update_password(
     if expire_sessions {
         state.sessions.remove_user(user_id);
     }
+    state.publish_domain_event(DomainEvent::UserUpdated(UserEvent {
+        user_id: user_id.to_owned(),
+        expire_sessions,
+    }));
     Ok(StatusCode::NO_CONTENT)
 }
 

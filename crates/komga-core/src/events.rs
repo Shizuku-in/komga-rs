@@ -1,10 +1,20 @@
 //! Framework-independent domain change notifications.
 
+use crate::{Book, CollectionDto, Library, ReadListDto, Series};
+
 /// Library identity carried by library events.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LibraryEvent {
     /// Library identifier.
     pub library_id: String,
+}
+
+impl From<&Library> for LibraryEvent {
+    fn from(value: &Library) -> Self {
+        Self {
+            library_id: value.id.clone(),
+        }
+    }
 }
 
 /// Series identity carried by series events.
@@ -14,6 +24,15 @@ pub struct SeriesEvent {
     pub series_id: String,
     /// Owning library identifier.
     pub library_id: String,
+}
+
+impl From<&Series> for SeriesEvent {
+    fn from(value: &Series) -> Self {
+        Self {
+            series_id: value.id.clone(),
+            library_id: value.library_id.clone(),
+        }
+    }
 }
 
 /// Book identity carried by book events.
@@ -27,6 +46,16 @@ pub struct BookEvent {
     pub library_id: String,
 }
 
+impl From<&Book> for BookEvent {
+    fn from(value: &Book) -> Self {
+        Self {
+            book_id: value.id.clone(),
+            series_id: value.series_id.clone(),
+            library_id: value.library_id.clone(),
+        }
+    }
+}
+
 /// Collection or read-list identity and current ordered members.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContainerEvent {
@@ -34,6 +63,24 @@ pub struct ContainerEvent {
     pub container_id: String,
     /// Current series or book identifiers in stored order.
     pub item_ids: Vec<String>,
+}
+
+impl From<&CollectionDto> for ContainerEvent {
+    fn from(value: &CollectionDto) -> Self {
+        Self {
+            container_id: value.id.clone(),
+            item_ids: value.series_ids.clone(),
+        }
+    }
+}
+
+impl From<&ReadListDto> for ContainerEvent {
+    fn from(value: &ReadListDto) -> Self {
+        Self {
+            container_id: value.id.clone(),
+            item_ids: value.book_ids.clone(),
+        }
+    }
 }
 
 /// One user's reading-progress change.

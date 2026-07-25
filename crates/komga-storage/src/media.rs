@@ -643,9 +643,15 @@ impl Storage {
         } else {
             ensure_book_thumbnail_selected(&mut tx, &thumbnail.book_id).await?;
         }
+        let is_selected =
+            sqlx::query_scalar::<_, bool>("SELECT SELECTED FROM THUMBNAIL_BOOK WHERE BOOK_ID = ? AND ID = ?")
+                .bind(&thumbnail.book_id)
+                .bind(&thumbnail.id)
+                .fetch_one(&mut *tx)
+                .await?;
         tx.commit().await?;
         let mut saved = thumbnail.clone();
-        saved.selected = selected;
+        saved.selected = is_selected;
         Ok(saved)
     }
 
@@ -845,7 +851,7 @@ impl Storage {
     /// # Errors
     ///
     /// Returns a database error when the transaction fails.
-    pub async fn replace_generated_thumbnail(&self, thumbnail: &ThumbnailBook) -> Result<()> {
+    pub async fn replace_generated_thumbnail(&self, thumbnail: &ThumbnailBook) -> Result<bool> {
         let mut tx = self.pool.begin().await?;
         let selected_type = sqlx::query_scalar::<_, String>(
             "SELECT TYPE FROM THUMBNAIL_BOOK WHERE BOOK_ID = ? AND SELECTED = 1 LIMIT 1",
@@ -875,7 +881,7 @@ impl Storage {
         .execute(&mut *tx)
         .await?;
         tx.commit().await?;
-        Ok(())
+        Ok(selected)
     }
 
     /// Loads the selected thumbnail for a book.

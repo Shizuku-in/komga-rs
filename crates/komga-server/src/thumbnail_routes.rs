@@ -7,7 +7,10 @@ use axum::{
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
 };
-use komga_core::{Dimension, ThumbnailBook, ThumbnailBookDto, ThumbnailSeries, ThumbnailSeriesDto, new_id};
+use komga_core::{
+    BookThumbnailEvent, Dimension, DomainEvent, SeriesThumbnailEvent, ThumbnailBook, ThumbnailBookDto, ThumbnailSeries,
+    ThumbnailSeriesDto, new_id,
+};
 use komga_media::{detect_image_media_type, image_dimension};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
@@ -107,7 +110,7 @@ pub(crate) async fn upload_book_thumbnail(
     multipart: Multipart,
 ) -> Result<Json<ThumbnailBookDto>, ApiError> {
     require_admin(&auth)?;
-    state
+    let book = state
         .storage
         .find_book_by_id(&book_id)
         .await?
@@ -124,13 +127,13 @@ pub(crate) async fn upload_book_thumbnail(
         dimension: upload.dimension,
         book_id,
     };
-    Ok(Json(
-        state
-            .storage
-            .insert_book_thumbnail(&thumbnail, upload.selected)
-            .await?
-            .to_dto(),
-    ))
+    let saved = state.storage.insert_book_thumbnail(&thumbnail, upload.selected).await?;
+    state.publish_domain_event(DomainEvent::ThumbnailBookAdded(BookThumbnailEvent {
+        book_id: saved.book_id.clone(),
+        series_id: book.series_id,
+        selected: saved.selected,
+    }));
+    Ok(Json(saved.to_dto()))
 }
 
 pub(crate) async fn select_book_thumbnail(
@@ -139,7 +142,7 @@ pub(crate) async fn select_book_thumbnail(
     Path((book_id, thumbnail_id)): Path<(String, String)>,
 ) -> Result<StatusCode, ApiError> {
     require_admin(&auth)?;
-    state
+    let book = state
         .storage
         .find_book_by_id(&book_id)
         .await?
@@ -147,6 +150,11 @@ pub(crate) async fn select_book_thumbnail(
     if !state.storage.select_book_thumbnail(&book_id, &thumbnail_id).await? {
         return Err(ApiError::not_found("Book thumbnail not found"));
     }
+    state.publish_domain_event(DomainEvent::ThumbnailBookAdded(BookThumbnailEvent {
+        book_id,
+        series_id: book.series_id,
+        selected: true,
+    }));
     Ok(StatusCode::ACCEPTED)
 }
 
@@ -156,7 +164,7 @@ pub(crate) async fn delete_book_thumbnail(
     Path((book_id, thumbnail_id)): Path<(String, String)>,
 ) -> Result<StatusCode, ApiError> {
     require_admin(&auth)?;
-    state
+    let book = state
         .storage
         .find_book_by_id(&book_id)
         .await?
@@ -170,6 +178,11 @@ pub(crate) async fn delete_book_thumbnail(
         return Err(ApiError::bad_request("Only uploaded thumbnails can be deleted"));
     }
     state.storage.delete_book_thumbnail(&book_id, &thumbnail_id).await?;
+    state.publish_domain_event(DomainEvent::ThumbnailBookDeleted(BookThumbnailEvent {
+        book_id,
+        series_id: book.series_id,
+        selected: thumbnail.selected,
+    }));
     Ok(StatusCode::ACCEPTED)
 }
 
@@ -268,13 +281,15 @@ pub(crate) async fn upload_series_thumbnail(
         dimension: upload.dimension,
         series_id,
     };
-    Ok(Json(
-        state
-            .storage
-            .insert_series_thumbnail(&thumbnail, upload.selected)
-            .await?
-            .to_dto(),
-    ))
+    let saved = state
+        .storage
+        .insert_series_thumbnail(&thumbnail, upload.selected)
+        .await?;
+    state.publish_domain_event(DomainEvent::ThumbnailSeriesAdded(SeriesThumbnailEvent {
+        series_id: saved.series_id.clone(),
+        selected: saved.selected,
+    }));
+    Ok(Json(saved.to_dto()))
 }
 
 pub(crate) async fn select_series_thumbnail(
@@ -291,6 +306,10 @@ pub(crate) async fn select_series_thumbnail(
     if !state.storage.select_series_thumbnail(&series_id, &thumbnail_id).await? {
         return Err(ApiError::not_found("Series thumbnail not found"));
     }
+    state.publish_domain_event(DomainEvent::ThumbnailSeriesAdded(SeriesThumbnailEvent {
+        series_id,
+        selected: true,
+    }));
     Ok(StatusCode::ACCEPTED)
 }
 
@@ -314,6 +333,10 @@ pub(crate) async fn delete_series_thumbnail(
         return Err(ApiError::bad_request("Only uploaded thumbnails can be deleted"));
     }
     state.storage.delete_series_thumbnail(&series_id, &thumbnail_id).await?;
+    state.publish_domain_event(DomainEvent::ThumbnailSeriesDeleted(SeriesThumbnailEvent {
+        series_id,
+        selected: thumbnail.selected,
+    }));
     Ok(StatusCode::ACCEPTED)
 }
 

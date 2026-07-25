@@ -1,7 +1,7 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use chrono::{Local, NaiveDateTime};
-use komga_core::{Book, ScanResult, Series};
+use komga_core::{Book, BookEvent, ScanResult, Series, SeriesEvent};
 use sqlx::FromRow;
 use url::Url;
 
@@ -28,6 +28,16 @@ pub struct ScanApplyStats {
     pub books_deleted: u64,
     /// Series whose Mylar sidecar was added or modified.
     pub sidecars_changed: Vec<String>,
+    /// Book identities created by this scan.
+    pub book_added_events: Vec<BookEvent>,
+    /// Book identities changed or soft-deleted by this scan.
+    pub book_updated_events: Vec<BookEvent>,
+    /// Series identities created by this scan.
+    pub series_added_events: Vec<SeriesEvent>,
+    /// Series identities changed or soft-deleted by this scan.
+    pub series_updated_events: Vec<SeriesEvent>,
+    /// Whether a previously unavailable library became available again.
+    pub library_became_available: bool,
 }
 
 #[derive(Debug, Clone, FromRow)]
@@ -145,6 +155,21 @@ impl Storage {
         rows.into_iter().map(BookRow::into_domain).collect()
     }
 
+    /// Lists every book in a library, including soft-deleted rows.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when rows contain invalid URLs or cannot be queried.
+    pub async fn list_books_by_library_id(&self, library_id: &str) -> Result<Vec<Book>> {
+        let rows = sqlx::query_as::<_, BookRow>(&format!(
+            "{SELECT_BOOK} WHERE LIBRARY_ID = ? ORDER BY URL, LAST_MODIFIED_DATE"
+        ))
+        .bind(library_id)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter().map(BookRow::into_domain).collect()
+    }
+
     /// Lists active books whose standard source-file hash is missing.
     ///
     /// # Errors
@@ -250,6 +275,7 @@ impl Storage {
             series_with_missing_books.insert(book.series_id.clone());
             stats.books_deleted += 1;
             stats.book_ids.insert(book.id.clone());
+            stats.book_updated_events.push(BookEvent::from(book));
         }
         for series in existing_series
             .iter()
@@ -262,6 +288,7 @@ impl Storage {
                 .await?;
             stats.series_deleted += 1;
             stats.series_ids.insert(series.id.clone());
+            stats.series_updated_events.push(SeriesEvent::from(series));
         }
 
         let mut active_series = HashMap::new();
@@ -303,6 +330,7 @@ impl Storage {
                     .await?;
                     stats.series_updated += 1;
                     stats.series_ids.insert(existing.id.clone());
+                    stats.series_updated_events.push(SeriesEvent::from(existing));
                 }
                 (existing.id.clone(), deep || changed)
             } else {
@@ -334,6 +362,10 @@ impl Storage {
                     .await?;
                 stats.series_added += 1;
                 stats.series_ids.insert(scanned.series.id.clone());
+                stats.series_added_events.push(SeriesEvent {
+                    series_id: scanned.series.id.clone(),
+                    library_id: library_id.to_owned(),
+                });
                 (scanned.series.id.clone(), true)
             };
 
@@ -391,11 +423,17 @@ impl Storage {
                         }
                         stats.books_updated += 1;
                         stats.book_ids.insert(existing.id.clone());
+                        stats.book_updated_events.push(BookEvent::from(existing));
                     }
                 } else {
                     insert_book(&mut tx, scanned_book, &series_id, library_id).await?;
                     stats.books_added += 1;
                     stats.book_ids.insert(scanned_book.id.clone());
+                    stats.book_added_events.push(BookEvent {
+                        book_id: scanned_book.id.clone(),
+                        series_id: series_id.clone(),
+                        library_id: library_id.to_owned(),
+                    });
                 }
             }
         }
@@ -425,12 +463,14 @@ impl Storage {
             }
         }
 
-        sqlx::query(
+        stats.library_became_available = sqlx::query(
             "UPDATE LIBRARY SET UNAVAILABLE_DATE = NULL, LAST_MODIFIED_DATE = CURRENT_TIMESTAMP WHERE ID = ? AND UNAVAILABLE_DATE IS NOT NULL",
         )
         .bind(library_id)
         .execute(&mut *tx)
-        .await?;
+        .await?
+        .rows_affected()
+            == 1;
         tx.commit().await?;
         Ok(stats)
     }
@@ -440,15 +480,21 @@ impl Storage {
     /// # Errors
     ///
     /// Returns a database error when the library cannot be updated.
-    pub async fn set_library_unavailable(&self, library_id: &str, unavailable: bool) -> Result<()> {
+    pub async fn set_library_unavailable(&self, library_id: &str, unavailable: bool) -> Result<bool> {
         let expression = if unavailable { "CURRENT_TIMESTAMP" } else { "NULL" };
-        sqlx::query(&format!(
-            "UPDATE LIBRARY SET UNAVAILABLE_DATE = {expression}, LAST_MODIFIED_DATE = CURRENT_TIMESTAMP WHERE ID = ?"
+        let predicate = if unavailable {
+            "UNAVAILABLE_DATE IS NULL"
+        } else {
+            "UNAVAILABLE_DATE IS NOT NULL"
+        };
+        Ok(sqlx::query(&format!(
+            "UPDATE LIBRARY SET UNAVAILABLE_DATE = {expression}, LAST_MODIFIED_DATE = CURRENT_TIMESTAMP WHERE ID = ? AND {predicate}"
         ))
         .bind(library_id)
         .execute(&self.pool)
-        .await?;
-        Ok(())
+        .await?
+        .rows_affected()
+            == 1)
     }
 }
 

@@ -19,8 +19,8 @@ use axum::{
     response::Response,
 };
 use komga_core::{
-    CollectionCreation, CollectionDto, ReadListCreation, ReadListDto, ReadListProgressUpdate, ReadListReadProgressDto,
-    new_id,
+    CollectionCreation, CollectionDto, ContainerEvent, ContainerThumbnailEvent, DomainEvent, ReadListCreation,
+    ReadListDto, ReadListProgressUpdate, ReadListReadProgressDto, new_id,
 };
 use komga_search::EntityKind;
 use komga_storage::ContainerThumbnail;
@@ -60,12 +60,16 @@ pub(crate) async fn create_collection(
     require_admin(&auth)?;
     let id = new_id();
     state.storage.create_collection(&id, &value).await?;
+    let created = state
+        .storage
+        .find_collection(&id, &auth.user)
+        .await?
+        .ok_or_else(|| ApiError::internal("Created collection could not be loaded"))?;
+    state.publish_domain_event(DomainEvent::CollectionAdded(ContainerEvent::from(&created)));
     if !state.sync_collections(std::slice::from_ref(&id)).await {
         state.recover_search_after_http_failure().await;
     }
-    Ok(Json(state.storage.find_collection(&id, &auth.user).await?.ok_or_else(
-        || ApiError::internal("Created collection could not be loaded"),
-    )?))
+    Ok(Json(created))
 }
 pub(crate) async fn get_collection(
     State(state): State<AppState>,
@@ -94,6 +98,12 @@ pub(crate) async fn patch_collection(
     {
         return Err(ApiError::not_found("Collection not found"));
     }
+    let updated = state
+        .storage
+        .find_collection(&id, &auth.user)
+        .await?
+        .ok_or_else(|| ApiError::internal("Updated collection could not be loaded"))?;
+    state.publish_domain_event(DomainEvent::CollectionUpdated(ContainerEvent::from(&updated)));
     if !state.sync_collections(std::slice::from_ref(&id)).await {
         state.recover_search_after_http_failure().await;
     }
@@ -105,9 +115,15 @@ pub(crate) async fn delete_collection(
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
     require_admin(&auth)?;
+    let deleted = state
+        .storage
+        .find_collection(&id, &auth.user)
+        .await?
+        .ok_or_else(|| ApiError::not_found("Collection not found"))?;
     if !state.storage.delete_collection(&id).await? {
         return Err(ApiError::not_found("Collection not found"));
     }
+    state.publish_domain_event(DomainEvent::CollectionDeleted(ContainerEvent::from(&deleted)));
     if !state.delete_search_entities(vec![(EntityKind::Collection, id)]).await {
         state.recover_search_after_http_failure().await;
     }
@@ -172,12 +188,16 @@ pub(crate) async fn create_read_list(
     require_admin(&auth)?;
     let id = new_id();
     state.storage.create_read_list(&id, &value).await?;
+    let created = state
+        .storage
+        .find_read_list(&id, &auth.user)
+        .await?
+        .ok_or_else(|| ApiError::internal("Created read list could not be loaded"))?;
+    state.publish_domain_event(DomainEvent::ReadListAdded(ContainerEvent::from(&created)));
     if !state.sync_read_lists(std::slice::from_ref(&id)).await {
         state.recover_search_after_http_failure().await;
     }
-    Ok(Json(state.storage.find_read_list(&id, &auth.user).await?.ok_or_else(
-        || ApiError::internal("Created read list could not be loaded"),
-    )?))
+    Ok(Json(created))
 }
 
 pub(crate) async fn get_read_list(
@@ -213,6 +233,12 @@ pub(crate) async fn patch_read_list(
     {
         return Err(ApiError::not_found("Read list not found"));
     }
+    let updated = state
+        .storage
+        .find_read_list(&id, &auth.user)
+        .await?
+        .ok_or_else(|| ApiError::internal("Updated read list could not be loaded"))?;
+    state.publish_domain_event(DomainEvent::ReadListUpdated(ContainerEvent::from(&updated)));
     if !state.sync_read_lists(std::slice::from_ref(&id)).await {
         state.recover_search_after_http_failure().await;
     }
@@ -224,9 +250,15 @@ pub(crate) async fn delete_read_list(
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
     require_admin(&auth)?;
+    let deleted = state
+        .storage
+        .find_read_list(&id, &auth.user)
+        .await?
+        .ok_or_else(|| ApiError::not_found("Read list not found"))?;
     if !state.storage.delete_read_list(&id).await? {
         return Err(ApiError::not_found("Read list not found"));
     }
+    state.publish_domain_event(DomainEvent::ReadListDeleted(ContainerEvent::from(&deleted)));
     if !state.delete_search_entities(vec![(EntityKind::ReadList, id)]).await {
         state.recover_search_after_http_failure().await;
     }
@@ -314,12 +346,18 @@ pub(crate) async fn put_progress(
     Path(id): Path<String>,
     ApiJson(value): ApiJson<ReadListProgressUpdate>,
 ) -> Result<StatusCode, ApiError> {
-    if !state
+    let Some(changed) = state
         .storage
         .complete_read_list(&id, &auth.user, value.last_book_read)
         .await?
-    {
+    else {
         return Err(ApiError::not_found("Read list not found"));
+    };
+    for book_id in changed {
+        state.publish_domain_event(DomainEvent::ReadProgressChanged(komga_core::ReadProgressEvent {
+            book_id,
+            user_id: auth.user.id.clone(),
+        }));
     }
     Ok(StatusCode::NO_CONTENT)
 }
@@ -401,6 +439,7 @@ async fn upload(
         .storage
         .insert_container_thumbnail(read_list, &value, upload.selected)
         .await?;
+    publish_container_thumbnail_event(&state, read_list, &saved.parent_id, saved.selected, true);
     Ok(Json(thumbnail_json(saved, read_list)))
 }
 pub(crate) async fn upload_collection_thumbnail(
@@ -532,6 +571,11 @@ async fn select_or_delete(
 ) -> Result<StatusCode, ApiError> {
     require_admin(auth)?;
     ensure_parent(state, auth, id, read_list).await?;
+    let thumbnail = state
+        .storage
+        .find_container_thumbnail(read_list, id, t)
+        .await?
+        .ok_or_else(|| ApiError::not_found("Thumbnail not found"))?;
     let changed = if delete {
         state.storage.delete_container_thumbnail(read_list, id, t).await?
     } else {
@@ -540,7 +584,34 @@ async fn select_or_delete(
     if !changed {
         return Err(ApiError::not_found("Thumbnail not found"));
     }
+    publish_container_thumbnail_event(
+        state,
+        read_list,
+        id,
+        if delete { thumbnail.selected } else { true },
+        !delete,
+    );
     Ok(StatusCode::ACCEPTED)
+}
+
+fn publish_container_thumbnail_event(
+    state: &AppState,
+    read_list: bool,
+    container_id: &str,
+    selected: bool,
+    added: bool,
+) {
+    let value = ContainerThumbnailEvent {
+        container_id: container_id.to_owned(),
+        selected,
+    };
+    let event = match (read_list, added) {
+        (false, true) => DomainEvent::ThumbnailSeriesCollectionAdded(value),
+        (false, false) => DomainEvent::ThumbnailSeriesCollectionDeleted(value),
+        (true, true) => DomainEvent::ThumbnailReadListAdded(value),
+        (true, false) => DomainEvent::ThumbnailReadListDeleted(value),
+    };
+    state.publish_domain_event(event);
 }
 pub(crate) async fn select_collection_thumbnail(
     State(s): State<AppState>,

@@ -139,6 +139,7 @@ pub(super) async fn process_remove_hashed_pages_task(state: &AppState, task: &Ta
             return TaskOutcome::Retry;
         }
     }
+    state.publish_domain_event(DomainEvent::BookUpdated(BookEvent::from(&removal.book)));
 
     if removal.removed_first_page
         && let Err(error) = state

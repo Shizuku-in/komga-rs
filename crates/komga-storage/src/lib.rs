@@ -1014,6 +1014,8 @@ mod tests {
         let original_book = storage.list_books_by_series_id(&original_series.id).await.unwrap()[0].clone();
         assert_eq!(first_stats.series_ids, BTreeSet::from([original_series.id.clone()]));
         assert_eq!(first_stats.book_ids, BTreeSet::from([original_book.id.clone()]));
+        assert_eq!(first_stats.series_added_events[0].series_id, original_series.id);
+        assert_eq!(first_stats.book_added_events[0].book_id, original_book.id);
 
         let unchanged = scan_library_files(&library, || false).unwrap();
         assert_eq!(
@@ -1029,11 +1031,21 @@ mod tests {
             original_book.id
         );
 
+        assert!(storage.set_library_unavailable(&library.id, true).await.unwrap());
+        assert!(!storage.set_library_unavailable(&library.id, true).await.unwrap());
+        let available_stats = storage
+            .apply_library_scan(&library.id, &unchanged, false)
+            .await
+            .unwrap();
+        assert!(available_stats.library_became_available);
+        assert!(!storage.set_library_unavailable(&library.id, false).await.unwrap());
+
         fs::write(&book_path, [1_u8, 2, 3]).unwrap();
         let changed = scan_library_files(&library, || false).unwrap();
         let changed_stats = storage.apply_library_scan(&library.id, &changed, true).await.unwrap();
         assert_eq!(changed_stats.books_updated, 1);
         assert_eq!(changed_stats.book_ids, BTreeSet::from([original_book.id.clone()]));
+        assert_eq!(changed_stats.book_updated_events[0].book_id, original_book.id);
         assert_eq!(
             sqlx::query_scalar::<_, String>("SELECT STATUS FROM MEDIA WHERE BOOK_ID = ?")
                 .bind(&original_book.id)
@@ -1050,6 +1062,8 @@ mod tests {
         assert_eq!(deleted_stats.series_deleted, 1);
         assert_eq!(deleted_stats.book_ids, BTreeSet::from([original_book.id.clone()]));
         assert_eq!(deleted_stats.series_ids, BTreeSet::from([original_series.id.clone()]));
+        assert_eq!(deleted_stats.book_updated_events[0].book_id, original_book.id);
+        assert_eq!(deleted_stats.series_updated_events[0].series_id, original_series.id);
         assert!(
             storage.list_series_by_library_id(&library.id).await.unwrap()[0]
                 .deleted_date

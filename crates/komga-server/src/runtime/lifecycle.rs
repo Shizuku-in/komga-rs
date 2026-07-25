@@ -1,3 +1,4 @@
+use komga_core::{BookEvent, ContainerEvent, DomainEvent, SeriesEvent};
 use komga_search::EntityKind;
 use komga_storage::TaskRecord;
 
@@ -17,6 +18,20 @@ pub(super) async fn process_empty_trash_task(state: &AppState, task: &TaskRecord
 }
 
 pub(super) async fn perform_empty_trash(state: &AppState, library_id: &str) -> TaskOutcome {
+    let books = match state.storage.list_books_by_library_id(library_id).await {
+        Ok(books) => books,
+        Err(error) => {
+            tracing::error!(%error, %library_id, "could not load books before emptying trash");
+            return TaskOutcome::Retry;
+        }
+    };
+    let series = match state.storage.list_series_by_library_id(library_id).await {
+        Ok(series) => series,
+        Err(error) => {
+            tracing::error!(%error, %library_id, "could not load series before emptying trash");
+            return TaskOutcome::Retry;
+        }
+    };
     let result = match state.storage.empty_trash(library_id).await {
         Ok(Some(result)) => result,
         Ok(None) => {
@@ -28,6 +43,38 @@ pub(super) async fn perform_empty_trash(state: &AppState, library_id: &str) -> T
             return TaskOutcome::Retry;
         }
     };
+    for book in books.iter().filter(|book| result.book_ids.contains(&book.id)) {
+        state.publish_domain_event(DomainEvent::BookDeleted(BookEvent::from(book)));
+    }
+    for series in series.iter().filter(|series| result.series_ids.contains(&series.id)) {
+        state.publish_domain_event(DomainEvent::SeriesDeleted(SeriesEvent::from(series)));
+    }
+    for series in series
+        .iter()
+        .filter(|series| result.affected_series_ids.contains(&series.id))
+    {
+        state.publish_domain_event(DomainEvent::SeriesUpdated(SeriesEvent::from(series)));
+    }
+    for book in books.iter().filter(|book| {
+        result
+            .numbering_refreshes
+            .iter()
+            .any(|target| target.book_id == book.id)
+    }) {
+        state.publish_domain_event(DomainEvent::BookUpdated(BookEvent::from(book)));
+    }
+    for id in &result.collection_ids {
+        state.publish_domain_event(DomainEvent::CollectionDeleted(ContainerEvent {
+            container_id: id.clone(),
+            item_ids: Vec::new(),
+        }));
+    }
+    for id in &result.read_list_ids {
+        state.publish_domain_event(DomainEvent::ReadListDeleted(ContainerEvent {
+            container_id: id.clone(),
+            item_ids: Vec::new(),
+        }));
+    }
     let deleted = result
         .book_ids
         .iter()

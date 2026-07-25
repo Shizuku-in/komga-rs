@@ -27,8 +27,14 @@ pub(super) async fn process_scan_task(state: &AppState, task: &TaskRecord) -> Ta
         Ok(Ok(scan)) => scan,
         Ok(Err(ScanError::Cancelled)) => return TaskOutcome::Cancelled,
         Ok(Err(ScanError::RootUnavailable(path))) => {
-            if let Err(error) = state.storage.set_library_unavailable(&payload.library_id, true).await {
-                tracing::error!(%error, library_id = %payload.library_id, "could not mark library unavailable");
+            match state.storage.set_library_unavailable(&payload.library_id, true).await {
+                Ok(true) => state.publish_domain_event(DomainEvent::LibraryUpdated(LibraryEvent {
+                    library_id: payload.library_id.clone(),
+                })),
+                Ok(false) => {}
+                Err(error) => {
+                    tracing::error!(%error, library_id = %payload.library_id, "could not mark library unavailable");
+                }
             }
             tracing::error!(library_id = %payload.library_id, root = %path.display(), "library scan failed");
             return TaskOutcome::Completed;
@@ -76,6 +82,23 @@ pub(super) async fn process_scan_task(state: &AppState, task: &TaskRecord) -> Ta
     {
         Ok(stats) => {
             tracing::info!(library_id = %payload.library_id, ?stats, "library scan completed");
+            if stats.library_became_available {
+                state.publish_domain_event(DomainEvent::LibraryUpdated(LibraryEvent {
+                    library_id: payload.library_id.clone(),
+                }));
+            }
+            for event in &stats.series_added_events {
+                state.publish_domain_event(DomainEvent::SeriesAdded(event.clone()));
+            }
+            for event in &stats.series_updated_events {
+                state.publish_domain_event(DomainEvent::SeriesUpdated(event.clone()));
+            }
+            for event in &stats.book_added_events {
+                state.publish_domain_event(DomainEvent::BookAdded(event.clone()));
+            }
+            for event in &stats.book_updated_events {
+                state.publish_domain_event(DomainEvent::BookUpdated(event.clone()));
+            }
             let book_ids = stats.book_ids.iter().cloned().collect::<Vec<_>>();
             let series_ids = stats.series_ids.iter().cloned().collect::<Vec<_>>();
             if !state.sync_series(&series_ids).await || !state.sync_books(&book_ids).await {
@@ -104,6 +127,18 @@ pub(super) async fn process_scan_task(state: &AppState, task: &TaskRecord) -> Ta
     } else {
         match state.storage.cleanup_empty_container_ids().await {
             Ok((collections, read_lists)) => {
+                for id in &collections {
+                    state.publish_domain_event(DomainEvent::CollectionDeleted(ContainerEvent {
+                        container_id: id.clone(),
+                        item_ids: Vec::new(),
+                    }));
+                }
+                for id in &read_lists {
+                    state.publish_domain_event(DomainEvent::ReadListDeleted(ContainerEvent {
+                        container_id: id.clone(),
+                        item_ids: Vec::new(),
+                    }));
+                }
                 let deleted = collections
                     .into_iter()
                     .map(|id| (komga_search::EntityKind::Collection, id))
@@ -176,5 +211,8 @@ pub(super) async fn process_scan_task(state: &AppState, task: &TaskRecord) -> Ta
         tracing::error!(%error, library_id = %payload.library_id, "could not enqueue duplicate-page discovery");
         return TaskOutcome::Retry;
     }
+    state.publish_domain_event(DomainEvent::LibraryScanned(LibraryEvent {
+        library_id: payload.library_id,
+    }));
     TaskOutcome::Completed
 }

@@ -41,16 +41,33 @@ impl Storage {
 
     /// Marks incomplete books in a series complete, optionally through a sort number.
     ///
-    /// Returns the number of inserted or updated rows.
+    /// Returns the identifiers of inserted or updated rows.
     pub async fn mark_series_read_completed(
         &self,
         series_id: &str,
         user_id: &str,
         through_number_sort: Option<f64>,
         read_date: NaiveDateTime,
-    ) -> Result<u64> {
+    ) -> Result<Vec<String>> {
         let mut tx = self.pool.begin().await?;
-        let changed = sqlx::query(
+        let changed = sqlx::query_scalar::<_, String>(
+            r#"SELECT b.ID
+                 FROM BOOK b
+                 JOIN BOOK_METADATA bm ON bm.BOOK_ID = b.ID
+                 JOIN MEDIA m ON m.BOOK_ID = b.ID
+                 LEFT JOIN READ_PROGRESS rp ON rp.BOOK_ID = b.ID AND rp.USER_ID = ?
+                WHERE b.SERIES_ID = ?
+                  AND (? IS NULL OR bm.NUMBER_SORT <= ?)
+                  AND (rp.BOOK_ID IS NULL OR rp.COMPLETED = 0)
+                ORDER BY bm.NUMBER_SORT, b.ID"#,
+        )
+        .bind(user_id)
+        .bind(series_id)
+        .bind(through_number_sort)
+        .bind(through_number_sort)
+        .fetch_all(&mut *tx)
+        .await?;
+        sqlx::query(
             r#"INSERT INTO READ_PROGRESS
                  (BOOK_ID, USER_ID, PAGE, COMPLETED, READ_DATE, DEVICE_ID, DEVICE_NAME, LOCATOR)
                SELECT b.ID, ?, m.PAGE_COUNT, 1, ?, '', '', NULL
@@ -77,9 +94,8 @@ impl Storage {
         .bind(through_number_sort)
         .bind(through_number_sort)
         .execute(&mut *tx)
-        .await?
-        .rows_affected();
-        if changed > 0 {
+        .await?;
+        if !changed.is_empty() {
             aggregate_series_progress_by_series(&mut tx, series_id, user_id).await?;
         }
         tx.commit().await?;
@@ -87,17 +103,26 @@ impl Storage {
     }
 
     /// Deletes all of one user's progress rows in a series atomically.
-    pub async fn delete_series_read_progress(&self, series_id: &str, user_id: &str) -> Result<u64> {
+    pub async fn delete_series_read_progress(&self, series_id: &str, user_id: &str) -> Result<Vec<String>> {
         let mut tx = self.pool.begin().await?;
-        let changed = sqlx::query(
+        let changed = sqlx::query_scalar::<_, String>(
+            r#"SELECT rp.BOOK_ID FROM READ_PROGRESS rp
+                JOIN BOOK b ON b.ID = rp.BOOK_ID
+                WHERE rp.USER_ID = ? AND b.SERIES_ID = ?
+                ORDER BY rp.BOOK_ID"#,
+        )
+        .bind(user_id)
+        .bind(series_id)
+        .fetch_all(&mut *tx)
+        .await?;
+        sqlx::query(
             "DELETE FROM READ_PROGRESS WHERE USER_ID = ? AND BOOK_ID IN (SELECT ID FROM BOOK WHERE SERIES_ID = ?)",
         )
         .bind(user_id)
         .bind(series_id)
         .execute(&mut *tx)
-        .await?
-        .rows_affected();
-        if changed > 0 {
+        .await?;
+        if !changed.is_empty() {
             aggregate_series_progress_by_series(&mut tx, series_id, user_id).await?;
         }
         tx.commit().await?;
@@ -439,7 +464,7 @@ mod tests {
             .mark_series_read_completed(&books[0].series_id, &user.id, Some(2.5), Utc::now().naive_utc())
             .await
             .unwrap();
-        assert_eq!(changed, 1);
+        assert_eq!(changed, vec![books[1].id.clone()]);
         assert_eq!(
             storage.find_read_progress(&books[0].id, &user.id).await.unwrap(),
             Some(original)
@@ -458,7 +483,7 @@ mod tests {
                 .mark_series_read_completed(&books[0].series_id, &user.id, None, Utc::now().naive_utc())
                 .await
                 .unwrap(),
-            0
+            Vec::<String>::new()
         );
         let summary = storage
             .find_series_read_progress(&books[0].series_id, &user.id)
@@ -470,14 +495,14 @@ mod tests {
                 .delete_series_read_progress(&books[0].series_id, &user.id)
                 .await
                 .unwrap(),
-            2
+            vec![books[0].id.clone(), books[1].id.clone()]
         );
         assert_eq!(
             storage
                 .delete_series_read_progress(&books[0].series_id, &user.id)
                 .await
                 .unwrap(),
-            0
+            Vec::<String>::new()
         );
         assert_eq!(
             storage

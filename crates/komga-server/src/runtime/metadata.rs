@@ -100,6 +100,20 @@ pub(super) async fn process_refresh_book_metadata_task(state: &AppState, task: &
                 return TaskOutcome::Retry;
             }
         };
+        for event in &container_update.collection_events {
+            state.publish_domain_event(if container_update.collections_added.contains(&event.container_id) {
+                DomainEvent::CollectionAdded(event.clone())
+            } else {
+                DomainEvent::CollectionUpdated(event.clone())
+            });
+        }
+        for event in &container_update.read_list_events {
+            state.publish_domain_event(if container_update.read_lists_added.contains(&event.container_id) {
+                DomainEvent::ReadListAdded(event.clone())
+            } else {
+                DomainEvent::ReadListUpdated(event.clone())
+            });
+        }
         let collection_ids = container_update.collection_ids.into_iter().collect::<Vec<_>>();
         let read_list_ids = container_update.read_list_ids.into_iter().collect::<Vec<_>>();
         if !state.sync_collections(&collection_ids).await || !state.sync_read_lists(&read_list_ids).await {
@@ -139,6 +153,7 @@ pub(super) async fn process_refresh_book_metadata_task(state: &AppState, task: &
         tracing::error!(%error, book_id=%book.id, "could not persist book metadata");
         return TaskOutcome::Retry;
     }
+    state.publish_domain_event(DomainEvent::BookUpdated(BookEvent::from(&book)));
     if !state.sync_books(std::slice::from_ref(&book.id)).await {
         state.recover_search_after_http_failure().await;
         return TaskOutcome::Retry;
@@ -283,6 +298,7 @@ pub(super) async fn process_refresh_series_metadata_task(state: &AppState, task:
         tracing::error!(%error, "could not persist series metadata");
         return TaskOutcome::Retry;
     }
+    state.publish_domain_event(DomainEvent::SeriesUpdated(SeriesEvent::from(&series)));
     if !state.sync_series(std::slice::from_ref(&series.id)).await {
         state.recover_search_after_http_failure().await;
         return TaskOutcome::Retry;

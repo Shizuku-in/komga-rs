@@ -5,7 +5,7 @@ use axum::{
     extract::{Extension, Path, Query, State},
     http::StatusCode,
 };
-use komga_core::{Library, ScanInterval, SeriesCover};
+use komga_core::{BookEvent, DomainEvent, Library, LibraryEvent, ScanInterval, SeriesCover, SeriesEvent};
 use komga_search::EntityKind;
 use komga_storage::{DeleteLibraryResult, TaskRecord};
 use serde::{Deserialize, Serialize};
@@ -168,6 +168,7 @@ pub(crate) async fn create_library(
 
     validate_library(&library, &state.storage.list_libraries().await?)?;
     state.storage.create_library(&library).await?;
+    state.publish_domain_event(DomainEvent::LibraryAdded(LibraryEvent::from(&library)));
     state
         .enqueue_task(&TaskRecord::scan_library(&library.id, false, 4))
         .await?;
@@ -252,6 +253,7 @@ pub(crate) async fn update_library(
         .collect::<Vec<_>>();
     validate_library(&updated, &others)?;
     state.storage.update_library(&updated).await?;
+    state.publish_domain_event(DomainEvent::LibraryUpdated(LibraryEvent::from(&updated)));
     if current.should_rescan(&updated) {
         state
             .enqueue_task(&TaskRecord::scan_library(&library_id, false, 4))
@@ -277,8 +279,19 @@ pub(crate) async fn delete_library(
     Path(library_id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
     require_admin(&auth)?;
+    let books = state.storage.list_books_by_library_id(&library_id).await?;
+    let series = state.storage.list_series_by_library_id(&library_id).await?;
     match state.storage.delete_library(&library_id).await? {
         DeleteLibraryResult::Deleted { book_ids, series_ids } => {
+            for book in &books {
+                state.publish_domain_event(DomainEvent::BookDeleted(BookEvent::from(book)));
+            }
+            for series in &series {
+                state.publish_domain_event(DomainEvent::SeriesDeleted(SeriesEvent::from(series)));
+            }
+            state.publish_domain_event(DomainEvent::LibraryDeleted(LibraryEvent {
+                library_id: library_id.clone(),
+            }));
             let entities = book_ids
                 .into_iter()
                 .map(|id| (EntityKind::Book, id))

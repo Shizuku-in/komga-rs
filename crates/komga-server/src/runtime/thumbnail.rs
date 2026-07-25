@@ -66,9 +66,17 @@ pub(super) async fn process_generate_thumbnail_task(state: &AppState, task: &Tas
         dimension,
         book_id: book.id.clone(),
     };
-    if let Err(error) = state.storage.replace_generated_thumbnail(&thumbnail).await {
-        tracing::error!(%error, book_id = %book.id, "could not persist generated thumbnail");
-        return TaskOutcome::Retry;
-    }
+    let selected = match state.storage.replace_generated_thumbnail(&thumbnail).await {
+        Ok(selected) => selected,
+        Err(error) => {
+            tracing::error!(%error, book_id = %book.id, "could not persist generated thumbnail");
+            return TaskOutcome::Retry;
+        }
+    };
+    state.publish_domain_event(DomainEvent::ThumbnailBookAdded(BookThumbnailEvent {
+        book_id: book.id,
+        series_id: book.series_id,
+        selected,
+    }));
     TaskOutcome::Completed
 }

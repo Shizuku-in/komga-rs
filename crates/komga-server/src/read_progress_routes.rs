@@ -12,7 +12,8 @@ use axum::{
 };
 use chrono::Utc;
 use komga_core::{
-    Media, R2Progression, ReadProgressError, SeriesReadProgressDto, completed_progress, page_progress, progression,
+    DomainEvent, Media, R2Progression, ReadProgressError, ReadProgressEvent, SeriesReadProgressDto,
+    SeriesReadProgressEvent, completed_progress, page_progress, progression,
 };
 use serde::Deserialize;
 
@@ -46,10 +47,15 @@ pub(crate) async fn mark_series_read_completed(
     Path(series_id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
     load_visible_series(&state, &auth.user, &series_id).await?;
-    state
+    let changed = state
         .storage
         .mark_series_read_completed(&series_id, &auth.user.id, None, Utc::now().naive_utc())
         .await?;
+    publish_book_progress_events(&state, &changed, &auth.user.id, true);
+    state.publish_domain_event(DomainEvent::ReadProgressSeriesChanged(SeriesReadProgressEvent {
+        series_id,
+        user_id: auth.user.id.clone(),
+    }));
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -60,10 +66,15 @@ pub(crate) async fn delete_series_read_progress(
     Path(series_id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
     load_visible_series(&state, &auth.user, &series_id).await?;
-    state
+    let deleted = state
         .storage
         .delete_series_read_progress(&series_id, &auth.user.id)
         .await?;
+    publish_book_progress_events(&state, &deleted, &auth.user.id, false);
+    state.publish_domain_event(DomainEvent::ReadProgressSeriesDeleted(SeriesReadProgressEvent {
+        series_id,
+        user_id: auth.user.id.clone(),
+    }));
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -93,7 +104,7 @@ pub(crate) async fn update_tachiyomi_series_read_progress(
         return Err(ApiError::bad_request("lastBookNumberSortRead must be finite"));
     }
     load_visible_series(&state, &auth.user, &series_id).await?;
-    state
+    let changed = state
         .storage
         .mark_series_read_completed(
             &series_id,
@@ -102,6 +113,7 @@ pub(crate) async fn update_tachiyomi_series_read_progress(
             Utc::now().naive_utc(),
         )
         .await?;
+    publish_book_progress_events(&state, &changed, &auth.user.id, true);
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -129,6 +141,10 @@ pub(crate) async fn update_read_progress(
         .map_err(map_progress_error)?
     };
     state.storage.save_read_progress(&progress).await?;
+    state.publish_domain_event(DomainEvent::ReadProgressChanged(ReadProgressEvent {
+        book_id,
+        user_id: auth.user.id.clone(),
+    }));
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -139,7 +155,12 @@ pub(crate) async fn delete_read_progress(
     Path(book_id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
     load_visible_book(&state, &auth.user, &book_id).await?;
-    state.storage.delete_read_progress(&book_id, &auth.user.id).await?;
+    if state.storage.delete_read_progress(&book_id, &auth.user.id).await? {
+        state.publish_domain_event(DomainEvent::ReadProgressDeleted(ReadProgressEvent {
+            book_id,
+            user_id: auth.user.id.clone(),
+        }));
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -172,7 +193,25 @@ pub(crate) async fn update_progression(
     let saved = state.storage.find_read_progress(&book_id, &auth.user.id).await?;
     let progress = progression(&book_id, &auth.user.id, &media, saved.as_ref(), update).map_err(map_progress_error)?;
     state.storage.save_read_progress(&progress).await?;
+    state.publish_domain_event(DomainEvent::ReadProgressChanged(ReadProgressEvent {
+        book_id,
+        user_id: auth.user.id.clone(),
+    }));
     Ok(StatusCode::NO_CONTENT)
+}
+
+fn publish_book_progress_events(state: &AppState, book_ids: &[String], user_id: &str, changed: bool) {
+    for book_id in book_ids {
+        let event = ReadProgressEvent {
+            book_id: book_id.clone(),
+            user_id: user_id.to_owned(),
+        };
+        state.publish_domain_event(if changed {
+            DomainEvent::ReadProgressChanged(event)
+        } else {
+            DomainEvent::ReadProgressDeleted(event)
+        });
+    }
 }
 
 fn validate_page_update(update: &ReadProgressUpdateDto) -> Result<(), ApiError> {

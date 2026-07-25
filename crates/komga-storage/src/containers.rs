@@ -4,9 +4,9 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 
 use chrono::Utc;
 use komga_core::{
-    BookCondition, BookDto, BookSearch, CollectionCreation, CollectionDto, ContentPage, EqualityOperator, PageRequest,
-    ReadListCreation, ReadListDto, ReadListMatchDto, ReadListReadProgressDto, ReadListRequest,
-    ReadListRequestBookMatchBookDto, ReadListRequestBookMatchDto, ReadListRequestBookMatchSeriesDto,
+    BookCondition, BookDto, BookSearch, CollectionCreation, CollectionDto, ContainerEvent, ContentPage,
+    EqualityOperator, PageRequest, ReadListCreation, ReadListDto, ReadListMatchDto, ReadListReadProgressDto,
+    ReadListRequest, ReadListRequestBookMatchBookDto, ReadListRequestBookMatchDto, ReadListRequestBookMatchSeriesDto,
     ReadListRequestBookMatchesDto, ReadListRequestMatchDto, SeriesCondition, SeriesDto, SeriesSearch, SortDirection,
     SortOrder, User,
 };
@@ -79,6 +79,14 @@ pub struct ComicInfoContainerUpdate {
     pub collection_ids: BTreeSet<String>,
     /// Affected read-list identifiers.
     pub read_list_ids: BTreeSet<String>,
+    /// Collection identifiers created by this import.
+    pub collections_added: BTreeSet<String>,
+    /// Read-list identifiers created by this import.
+    pub read_lists_added: BTreeSet<String>,
+    /// Complete collection projections after the import.
+    pub collection_events: Vec<ContainerEvent>,
+    /// Complete read-list projections after the import.
+    pub read_list_events: Vec<ContainerEvent>,
 }
 
 fn normalized_name(name: &str) -> String {
@@ -124,8 +132,8 @@ impl Storage {
                 .iter()
                 .find(|row| normalized_name(row.get::<String, _>("NAME").as_str()) == normalized_name(name))
                 .map(|row| row.get::<String, _>("ID"));
-            let id = match id {
-                Some(id) => id,
+            let (id, created) = match id {
+                Some(id) => (id, false),
                 None => {
                     let id = komga_core::new_id();
                     sqlx::query("INSERT INTO COLLECTION (ID,NAME,ORDERED,SERIES_COUNT) VALUES (?,?,0,0)")
@@ -133,7 +141,7 @@ impl Storage {
                         .bind(name)
                         .execute(&mut *tx)
                         .await?;
-                    id
+                    (id, true)
                 }
             };
             let next: i32 =
@@ -156,7 +164,10 @@ impl Storage {
                 .bind(&id)
                 .execute(&mut *tx)
                 .await?;
-                result.collection_ids.insert(id);
+                result.collection_ids.insert(id.clone());
+                if created {
+                    result.collections_added.insert(id);
+                }
             }
         }
         for (name, requested) in read_lists {
@@ -169,8 +180,8 @@ impl Storage {
                 .iter()
                 .find(|row| normalized_name(row.get::<String, _>("NAME").as_str()) == normalized_name(name))
                 .map(|row| row.get::<String, _>("ID"));
-            let id = match id {
-                Some(id) => id,
+            let (id, created) = match id {
+                Some(id) => (id, false),
                 None => {
                     let id = komga_core::new_id();
                     sqlx::query("INSERT INTO READLIST (ID,NAME,SUMMARY,ORDERED,BOOK_COUNT) VALUES (?,?,'',1,0)")
@@ -178,7 +189,7 @@ impl Storage {
                         .bind(name)
                         .execute(&mut *tx)
                         .await?;
-                    id
+                    (id, true)
                 }
             };
             let exists: bool =
@@ -216,7 +227,22 @@ impl Storage {
                 .bind(&id)
                 .execute(&mut *tx)
                 .await?;
-            result.read_list_ids.insert(id);
+            result.read_list_ids.insert(id.clone());
+            if created {
+                result.read_lists_added.insert(id);
+            }
+        }
+        for id in &result.collection_ids {
+            result.collection_events.push(ContainerEvent {
+                container_id: id.clone(),
+                item_ids: member_ids_tx(&mut tx, "COLLECTION_SERIES", "COLLECTION_ID", "SERIES_ID", id).await?,
+            });
+        }
+        for id in &result.read_list_ids {
+            result.read_list_events.push(ContainerEvent {
+                container_id: id.clone(),
+                item_ids: member_ids_tx(&mut tx, "READLIST_BOOK", "READLIST_ID", "BOOK_ID", id).await?,
+            });
         }
         tx.commit().await?;
         Ok(result)
@@ -936,9 +962,9 @@ impl Storage {
     }
 
     /// Completes the first N visible read-list members in one transaction.
-    pub async fn complete_read_list(&self, id: &str, user: &User, last: u32) -> Result<bool> {
+    pub async fn complete_read_list(&self, id: &str, user: &User, last: u32) -> Result<Option<Vec<String>>> {
         if self.find_read_list(id, user).await?.is_none() {
-            return Ok(false);
+            return Ok(None);
         }
         let books = self
             .read_list_books(
@@ -959,15 +985,19 @@ impl Storage {
         let mut tx = self.pool.begin().await?;
         let now = Utc::now().naive_utc();
         let mut series = BTreeSet::new();
+        let mut changed = Vec::new();
         for b in targets {
-            series.insert(b.series_id);
-            sqlx::query("INSERT INTO READ_PROGRESS (BOOK_ID,USER_ID,PAGE,COMPLETED,READ_DATE,DEVICE_ID,DEVICE_NAME,LOCATOR) SELECT b.ID,?,m.PAGE_COUNT,1,?,'','',NULL FROM BOOK b JOIN MEDIA m ON m.BOOK_ID=b.ID LEFT JOIN READ_PROGRESS rp ON rp.BOOK_ID=b.ID AND rp.USER_ID=? WHERE b.ID=? AND (rp.BOOK_ID IS NULL OR rp.COMPLETED=0) ON CONFLICT(BOOK_ID,USER_ID) DO UPDATE SET PAGE=excluded.PAGE,COMPLETED=1,READ_DATE=excluded.READ_DATE,LAST_MODIFIED_DATE=CURRENT_TIMESTAMP,DEVICE_ID='',DEVICE_NAME='',LOCATOR=NULL").bind(&user.id).bind(now).bind(&user.id).bind(&b.id).execute(&mut *tx).await?;
+            let rows = sqlx::query("INSERT INTO READ_PROGRESS (BOOK_ID,USER_ID,PAGE,COMPLETED,READ_DATE,DEVICE_ID,DEVICE_NAME,LOCATOR) SELECT b.ID,?,m.PAGE_COUNT,1,?,'','',NULL FROM BOOK b JOIN MEDIA m ON m.BOOK_ID=b.ID LEFT JOIN READ_PROGRESS rp ON rp.BOOK_ID=b.ID AND rp.USER_ID=? WHERE b.ID=? AND (rp.BOOK_ID IS NULL OR rp.COMPLETED=0) ON CONFLICT(BOOK_ID,USER_ID) DO UPDATE SET PAGE=excluded.PAGE,COMPLETED=1,READ_DATE=excluded.READ_DATE,LAST_MODIFIED_DATE=CURRENT_TIMESTAMP,DEVICE_ID='',DEVICE_NAME='',LOCATOR=NULL").bind(&user.id).bind(now).bind(&user.id).bind(&b.id).execute(&mut *tx).await?.rows_affected();
+            if rows > 0 {
+                series.insert(b.series_id);
+                changed.push(b.id);
+            }
         }
         for sid in series {
             aggregate_series_progress_by_series(&mut tx, &sid, &user.id).await?
         }
         tx.commit().await?;
-        Ok(true)
+        Ok(Some(changed))
     }
 
     async fn collection_row(&self, id: &str) -> Result<Option<CollectionRow>> {
@@ -1132,6 +1162,20 @@ async fn member_ids(pool: &sqlx::SqlitePool, table: &str, parent: &str, member: 
     ))
     .bind(id)
     .fetch_all(pool)
+    .await?)
+}
+async fn member_ids_tx(
+    tx: &mut Transaction<'_, Sqlite>,
+    table: &str,
+    parent: &str,
+    member: &str,
+    id: &str,
+) -> Result<Vec<String>> {
+    Ok(sqlx::query_scalar(&format!(
+        "SELECT {member} FROM {table} WHERE {parent}=? ORDER BY NUMBER"
+    ))
+    .bind(id)
+    .fetch_all(&mut **tx)
     .await?)
 }
 async fn collection_has_library(pool: &sqlx::SqlitePool, id: &str, library: &str) -> Result<bool> {

@@ -59,6 +59,9 @@ pub(super) async fn process_aggregate_series_metadata_task(state: &AppState, tas
         .await
     {
         Ok(true) => {
+            if let Ok(Some(series)) = state.storage.find_series_by_id(&payload.series_id).await {
+                state.publish_domain_event(DomainEvent::SeriesUpdated(SeriesEvent::from(&series)));
+            }
             if state.sync_series(std::slice::from_ref(&payload.series_id)).await {
                 TaskOutcome::Completed
             } else {
