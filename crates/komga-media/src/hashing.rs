@@ -1,17 +1,33 @@
 use std::{
     collections::HashMap,
     fs::File,
-    io::{self, BufReader, Read},
+    io::{self, BufReader, Read, Seek, SeekFrom},
     path::Path,
 };
 
 use image::{ImageFormat, ImageReader};
+use md5::{Digest, Md5};
 use thiserror::Error;
 use xxhash_rust::xxh3::Xxh3;
 
 use komga_core::{Book, ScanResult};
 
 const BUFFER_SIZE: usize = 8_192;
+const KOREADER_SAMPLE_SIZE: usize = 1_024;
+const KOREADER_SAMPLE_OFFSETS: [u64; 12] = [
+    0,
+    1_024,
+    4_096,
+    16_384,
+    65_536,
+    262_144,
+    1_048_576,
+    4_194_304,
+    16_777_216,
+    67_108_864,
+    268_435_456,
+    1_073_741_824,
+];
 const RGB_PAGE_HASH_HEADER: &[u8] = b"KOMGA_PAGE_RGB24_V1\0";
 
 /// Algorithm marker persisted beside raw page-content hashes.
@@ -81,6 +97,36 @@ pub fn hash_file(path: &Path, cancelled: impl Fn() -> bool) -> Result<String, Fi
         hasher.update(&buffer[..count]);
     }
     Ok(format!("{:032x}", hasher.digest128()))
+}
+
+/// Computes KOReader's partial-MD5 document identifier.
+///
+/// At most 1 KiB is read at the beginning of the file and at eleven
+/// exponentially increasing offsets through 1 GiB. Samples beyond EOF are
+/// ignored, matching KOReader and Kotlin Komga.
+///
+/// # Errors
+///
+/// Returns [`FileHashError::Cancelled`] when `cancelled` requests a stop, or
+/// [`FileHashError::Io`] when the file cannot be opened, sought, or read.
+pub fn hash_file_koreader(path: &Path, cancelled: impl Fn() -> bool) -> Result<String, FileHashError> {
+    if cancelled() {
+        return Err(FileHashError::Cancelled);
+    }
+    let mut file = File::open(path)?;
+    let mut digest = Md5::new();
+    let mut buffer = [0_u8; KOREADER_SAMPLE_SIZE];
+    for offset in KOREADER_SAMPLE_OFFSETS {
+        if cancelled() {
+            return Err(FileHashError::Cancelled);
+        }
+        file.seek(SeekFrom::Start(offset))?;
+        let count = file.read(&mut buffer)?;
+        if count > 0 {
+            digest.update(&buffer[..count]);
+        }
+    }
+    Ok(format!("{:x}", digest.finalize()))
 }
 
 /// Computes a deterministic page-content hash.
@@ -183,6 +229,60 @@ mod tests {
 
         fs::write(&path, b"hello").unwrap();
         assert_eq!(hash_file(&path, || false).unwrap(), "b5e9c1ad071b3e7fc779cfaa5e523818");
+    }
+
+    #[test]
+    fn koreader_hashes_match_partial_md5_vectors() {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("book.epub");
+
+        fs::write(&path, []).unwrap();
+        assert_eq!(
+            hash_file_koreader(&path, || false).unwrap(),
+            "d41d8cd98f00b204e9800998ecf8427e"
+        );
+
+        fs::write(&path, b"hello").unwrap();
+        assert_eq!(
+            hash_file_koreader(&path, || false).unwrap(),
+            "5d41402abc4b2a76b9719d911017c592"
+        );
+    }
+
+    #[test]
+    fn koreader_hash_reads_only_the_defined_samples() {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("book.cbz");
+        let content = (0..5_000).map(|index| (index % 251) as u8).collect::<Vec<_>>();
+        fs::write(&path, &content).unwrap();
+
+        let mut expected = Md5::new();
+        expected.update(&content[0..1_024]);
+        expected.update(&content[1_024..2_048]);
+        expected.update(&content[4_096..]);
+        assert_eq!(
+            hash_file_koreader(&path, || false).unwrap(),
+            format!("{:x}", expected.finalize())
+        );
+    }
+
+    #[test]
+    fn koreader_hash_honors_cancellation_and_reports_io_errors() {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("book.pdf");
+        fs::write(&path, vec![1_u8; KOREADER_SAMPLE_SIZE * 2]).unwrap();
+        let checks = Cell::new(0);
+
+        let error = hash_file_koreader(&path, || {
+            checks.set(checks.get() + 1);
+            checks.get() > 2
+        })
+        .unwrap_err();
+        assert!(matches!(error, FileHashError::Cancelled));
+        assert!(matches!(
+            hash_file_koreader(&temporary.path().join("missing.epub"), || false),
+            Err(FileHashError::Io(_))
+        ));
     }
 
     #[test]

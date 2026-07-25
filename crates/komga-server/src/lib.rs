@@ -18,6 +18,7 @@ mod dto;
 mod error;
 mod filesystem_routes;
 mod history_routes;
+mod koreader_routes;
 mod legacy_content_query;
 mod library_routes;
 mod media_routes;
@@ -141,6 +142,13 @@ impl AppState {
     pub(crate) async fn enqueue_missing_book_hashes(&self, library_id: &str) -> Result<(), StorageError> {
         for book_id in self.storage.list_books_without_file_hash(library_id).await? {
             self.enqueue_task(&TaskRecord::hash_book(&book_id, 0)).await?;
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn enqueue_missing_koreader_hashes(&self, library_id: &str) -> Result<(), StorageError> {
+        for book_id in self.storage.list_books_without_koreader_hash(library_id).await? {
+            self.enqueue_task(&TaskRecord::hash_book_koreader(&book_id, 0)).await?;
         }
         Ok(())
     }

@@ -490,12 +490,14 @@ mod tests {
             .await
             .unwrap();
         assert_eq!((summary.books_count, summary.books_read_count), (2, 2));
+        let mut expected_deleted = vec![books[0].id.clone(), books[1].id.clone()];
+        expected_deleted.sort();
         assert_eq!(
             storage
                 .delete_series_read_progress(&books[0].series_id, &user.id)
                 .await
                 .unwrap(),
-            vec![books[0].id.clone(), books[1].id.clone()]
+            expected_deleted
         );
         assert_eq!(
             storage

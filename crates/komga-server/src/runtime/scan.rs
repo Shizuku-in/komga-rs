@@ -21,6 +21,7 @@ pub(super) async fn process_scan_task(state: &AppState, task: &TaskRecord) -> Ta
     };
     let empty_trash_after_scan = library.empty_trash_after_scan;
     let hash_files = library.hash_files;
+    let hash_koreader = library.hash_koreader;
     let cancellation = state.shutdown.clone();
     let scan = tokio::task::spawn_blocking(move || scan_library_files(&library, || cancellation.is_cancelled())).await;
     let mut scan = match scan {
@@ -195,6 +196,10 @@ pub(super) async fn process_scan_task(state: &AppState, task: &TaskRecord) -> Ta
     }
     if hash_files && let Err(error) = state.enqueue_missing_book_hashes(&payload.library_id).await {
         tracing::error!(%error, library_id = %payload.library_id, "could not enqueue missing book hashes");
+        return TaskOutcome::Retry;
+    }
+    if hash_koreader && let Err(error) = state.enqueue_missing_koreader_hashes(&payload.library_id).await {
+        tracing::error!(%error, library_id = %payload.library_id, "could not enqueue missing KOReader hashes");
         return TaskOutcome::Retry;
     }
     if let Err(error) = state

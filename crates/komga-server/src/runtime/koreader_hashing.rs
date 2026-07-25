@@ -1,0 +1,81 @@
+use chrono::{DateTime, Local};
+use komga_media::{FileHashError, hash_file_koreader};
+
+use super::*;
+
+pub(super) async fn process_hash_book_koreader_task(state: &AppState, task: &TaskRecord) -> TaskOutcome {
+    let payload = match serde_json::from_str::<BookTaskPayload>(&task.payload) {
+        Ok(payload) => payload,
+        Err(error) => {
+            tracing::error!(%error, task_id = %task.id, "invalid HashBookKoreader payload");
+            return TaskOutcome::Completed;
+        }
+    };
+    let book = match state.storage.find_book_by_id(&payload.book_id).await {
+        Ok(Some(book)) if book.deleted_date.is_none() => book,
+        Ok(_) => return TaskOutcome::Completed,
+        Err(error) => {
+            tracing::error!(%error, book_id = %payload.book_id, "could not load book for KOReader hashing");
+            return TaskOutcome::Retry;
+        }
+    };
+    let library = match state.storage.find_library_by_id(&book.library_id).await {
+        Ok(Some(library)) => library,
+        Ok(None) => return TaskOutcome::Completed,
+        Err(error) => {
+            tracing::error!(%error, library_id = %book.library_id, "could not load KOReader hashing settings");
+            return TaskOutcome::Retry;
+        }
+    };
+    if !library.hash_koreader || !book.file_hash_koreader.is_empty() {
+        return TaskOutcome::Completed;
+    }
+    let path = match book.url.to_file_path() {
+        Ok(path) => path,
+        Err(()) => {
+            tracing::error!(book_id = %book.id, url = %book.url, "KOReader hash source is not a local file");
+            return TaskOutcome::Completed;
+        }
+    };
+    let cancellation = state.shutdown.clone();
+    let expected_size = book.file_size;
+    let expected_modified = book.file_last_modified;
+    let result = tokio::task::spawn_blocking(move || {
+        let hash = hash_file_koreader(&path, || cancellation.is_cancelled())?;
+        let metadata = path.metadata()?;
+        let size = i64::try_from(metadata.len()).unwrap_or(i64::MAX);
+        let modified = DateTime::<Local>::from(metadata.modified()?).naive_local();
+        if size != expected_size || modified != expected_modified {
+            return Err(FileHashError::SourceChanged(path.display().to_string()));
+        }
+        Ok(hash)
+    })
+    .await;
+    let hash = match result {
+        Ok(Ok(hash)) => hash,
+        Ok(Err(FileHashError::Cancelled)) => return TaskOutcome::Cancelled,
+        Ok(Err(FileHashError::SourceChanged(error))) => {
+            tracing::warn!(book_id = %book.id, source = %error, "book changed during KOReader hashing");
+            return TaskOutcome::Retry;
+        }
+        Ok(Err(error)) => {
+            tracing::error!(%error, book_id = %book.id, "could not hash book for KOReader");
+            return TaskOutcome::Completed;
+        }
+        Err(error) => {
+            tracing::error!(%error, book_id = %book.id, "KOReader file hasher panicked");
+            return TaskOutcome::Retry;
+        }
+    };
+    if state.shutdown.is_cancelled() {
+        return TaskOutcome::Cancelled;
+    }
+    match state.storage.update_book_koreader_hash_if_current(&book, &hash).await {
+        Ok(true) => TaskOutcome::Completed,
+        Ok(false) => TaskOutcome::Retry,
+        Err(error) => {
+            tracing::error!(%error, book_id = %book.id, "could not persist KOReader file hash");
+            TaskOutcome::Retry
+        }
+    }
+}

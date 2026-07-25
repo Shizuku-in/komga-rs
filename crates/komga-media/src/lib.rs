@@ -22,7 +22,7 @@ mod zip_edit;
 pub use comicrack::{ComicRackListError, parse_read_list};
 pub use hashing::{
     ComputedPageHash, FileHashError, PageHashError, RAW_PAGE_HASH_ALGORITHM, RGB_PAGE_HASH_ALGORITHM, hash_file,
-    hash_page, reconcile_scan_hashes,
+    hash_file_koreader, hash_page, reconcile_scan_hashes,
 };
 pub use metadata::{
     ComicInfoContainers, ComicInfoReadList, EmbeddedMetadata, extract_comic_info_containers,

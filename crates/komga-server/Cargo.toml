@@ -27,6 +27,7 @@ komga-storage = { path = "../komga-storage" }
 mediatype.workspace = true
 rand.workspace = true
 quick-xml.workspace = true
+regex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

@@ -249,6 +249,29 @@ SELECT b.ID AS id, b.SERIES_ID AS series_id, sm.TITLE AS series_title,
   LEFT JOIN READ_PROGRESS rp ON rp.BOOK_ID = b.ID AND rp.USER_ID = "#;
 
 impl Storage {
+    /// Finds active books with a KOReader hash that are visible to `user`.
+    ///
+    /// Library sharing, age, and sharing-label restrictions are applied before
+    /// hash collisions are reported to the protocol layer.
+    ///
+    /// # Errors
+    ///
+    /// Returns a database error when the query cannot be executed.
+    pub async fn find_visible_book_ids_by_koreader_hash(&self, hash: &str, user: &User) -> Result<Vec<String>> {
+        let mut query = QueryBuilder::new(
+            r#"SELECT b.ID
+                 FROM BOOK b
+                 JOIN SERIES s ON s.ID = b.SERIES_ID
+                 JOIN SERIES_METADATA sm ON sm.SERIES_ID = s.ID
+                WHERE b.FILE_HASH_KOREADER = "#,
+        );
+        query.push_bind(hash.to_owned());
+        query.push(" AND b.DELETED_DATE IS NULL AND s.DELETED_DATE IS NULL");
+        push_book_visibility(&mut query, user);
+        query.push(" ORDER BY b.ID");
+        Ok(query.build_query_scalar().fetch_all(&self.pool).await?)
+    }
+
     /// Returns visible read-list source files in stored member order.
     pub async fn read_list_files(&self, read_list_id: &str, user: &User) -> Result<Vec<ReadListFile>> {
         let mut query = QueryBuilder::new(

@@ -22,6 +22,7 @@ use crate::AppState;
 mod analysis;
 mod duplicate_pages;
 mod hashing;
+mod koreader_hashing;
 mod lifecycle;
 mod maintenance;
 mod metadata;
@@ -33,6 +34,7 @@ mod thumbnail;
 use analysis::process_analyze_book_task;
 use duplicate_pages::{process_find_duplicate_pages_task, process_remove_hashed_pages_task};
 use hashing::process_hash_book_task;
+use koreader_hashing::process_hash_book_koreader_task;
 use lifecycle::{perform_empty_trash, process_empty_trash_task};
 use maintenance::{process_aggregate_series_metadata_task, process_find_thumbnails_task};
 use metadata::{process_refresh_book_metadata_task, process_refresh_series_metadata_task};
@@ -197,11 +199,12 @@ pub(super) enum TaskOutcome {
     Retry,
 }
 
-const SUPPORTED_TASK_TYPES: [&str; 15] = [
+const SUPPORTED_TASK_TYPES: [&str; 16] = [
     "ScanLibrary",
     "EmptyTrash",
     "AnalyzeBook",
     "HashBook",
+    "HashBookKoreader",
     "FindBooksWithMissingPageHash",
     "HashBookPages",
     "FindDuplicatePagesToDelete",
@@ -263,6 +266,7 @@ async fn process_task(state: &AppState, task: &TaskRecord) -> TaskOutcome {
         "EmptyTrash" => process_empty_trash_task(state, task).await,
         "AnalyzeBook" => process_analyze_book_task(state, task).await,
         "HashBook" => process_hash_book_task(state, task).await,
+        "HashBookKoreader" => process_hash_book_koreader_task(state, task).await,
         "FindBooksWithMissingPageHash" => process_find_missing_page_hashes_task(state, task).await,
         "HashBookPages" => process_hash_book_pages_task(state, task).await,
         "FindDuplicatePagesToDelete" => process_find_duplicate_pages_task(state, task).await,

@@ -642,6 +642,194 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn koreader_hash_updates_require_a_current_snapshot_and_enabled_library() {
+        let storage = Storage::connect_memory().await.unwrap();
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("library");
+        fs::create_dir_all(root.join("Series")).unwrap();
+        fs::write(root.join("Series/Book.epub"), b"hello").unwrap();
+        let mut library = Library::new("KOReader".into(), Url::from_directory_path(&root).unwrap());
+        library.hash_koreader = true;
+        storage.create_library(&library).await.unwrap();
+        storage
+            .apply_library_scan(&library.id, &scan_library_files(&library, || false).unwrap(), false)
+            .await
+            .unwrap();
+        let book = storage
+            .list_active_books_by_library_id(&library.id)
+            .await
+            .unwrap()
+            .remove(0);
+
+        let missing = storage.list_books_without_koreader_hash(&library.id).await.unwrap();
+        assert_eq!(missing.as_slice(), std::slice::from_ref(&book.id));
+        let mut stale = book.clone();
+        stale.file_size += 1;
+        assert!(
+            !storage
+                .update_book_koreader_hash_if_current(&stale, "stale")
+                .await
+                .unwrap()
+        );
+        assert!(
+            storage
+                .update_book_koreader_hash_if_current(&book, "partial-md5")
+                .await
+                .unwrap()
+        );
+        assert!(
+            storage
+                .list_books_without_koreader_hash(&library.id)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+
+        sqlx::query("UPDATE BOOK SET FILE_HASH_KOREADER='' WHERE ID=?")
+            .bind(&book.id)
+            .execute(&storage.pool)
+            .await
+            .unwrap();
+        library.hash_koreader = false;
+        storage.update_library(&library).await.unwrap();
+        assert!(
+            !storage
+                .update_book_koreader_hash_if_current(&book, "disabled")
+                .await
+                .unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn koreader_hash_visibility_applies_age_and_sharing_labels() {
+        let storage = Storage::connect_memory().await.unwrap();
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("library");
+        fs::create_dir_all(root.join("Series")).unwrap();
+        fs::write(root.join("Series/Book.cbz"), b"content").unwrap();
+        let library = Library::new("Restricted".into(), Url::from_directory_path(&root).unwrap());
+        storage.create_library(&library).await.unwrap();
+        storage
+            .apply_library_scan(&library.id, &scan_library_files(&library, || false).unwrap(), false)
+            .await
+            .unwrap();
+        let book = storage
+            .list_active_books_by_library_id(&library.id)
+            .await
+            .unwrap()
+            .remove(0);
+        sqlx::query("UPDATE BOOK SET FILE_HASH_KOREADER='restricted-hash' WHERE ID=?")
+            .bind(&book.id)
+            .execute(&storage.pool)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE SERIES_METADATA SET AGE_RATING=18 WHERE SERIES_ID=?")
+            .bind(&book.series_id)
+            .execute(&storage.pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO SERIES_METADATA_SHARING (SERIES_ID,LABEL) VALUES (?,'adult')")
+            .bind(&book.series_id)
+            .execute(&storage.pool)
+            .await
+            .unwrap();
+
+        let mut user = User::new("reader@example.org".into(), "hash".into());
+        user.restrictions = ContentRestrictions::new(
+            Some(AgeRestriction {
+                age: 12,
+                restriction: AllowExclude::AllowOnly,
+            }),
+            Vec::<String>::new(),
+            Vec::<String>::new(),
+        );
+        assert!(
+            storage
+                .find_visible_book_ids_by_koreader_hash("restricted-hash", &user)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+
+        user.restrictions = ContentRestrictions::new(
+            Some(AgeRestriction {
+                age: 12,
+                restriction: AllowExclude::AllowOnly,
+            }),
+            ["adult".into()],
+            Vec::<String>::new(),
+        );
+        let visible = storage
+            .find_visible_book_ids_by_koreader_hash("restricted-hash", &user)
+            .await
+            .unwrap();
+        assert_eq!(visible.as_slice(), std::slice::from_ref(&book.id));
+
+        user.restrictions = ContentRestrictions::new(None, Vec::<String>::new(), ["adult".into()]);
+        assert!(
+            storage
+                .find_visible_book_ids_by_koreader_hash("restricted-hash", &user)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn scans_preserve_koreader_hash_for_identical_content_and_clear_it_when_changed() {
+        let storage = Storage::connect_memory().await.unwrap();
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("library");
+        fs::create_dir_all(root.join("Series")).unwrap();
+        fs::write(root.join("Series/Book.cbz"), b"content").unwrap();
+        let library = Library::new("Scans".into(), Url::from_directory_path(&root).unwrap());
+        storage.create_library(&library).await.unwrap();
+        let initial = scan_library_files(&library, || false).unwrap();
+        storage.apply_library_scan(&library.id, &initial, false).await.unwrap();
+        let book = storage
+            .list_active_books_by_library_id(&library.id)
+            .await
+            .unwrap()
+            .remove(0);
+        sqlx::query("UPDATE BOOK SET FILE_HASH='same',FILE_HASH_KOREADER='koreader' WHERE ID=?")
+            .bind(&book.id)
+            .execute(&storage.pool)
+            .await
+            .unwrap();
+
+        let mut timestamp_only = scan_library_files(&library, || false).unwrap();
+        timestamp_only.series[0].books[0].file_last_modified += chrono::Duration::seconds(1);
+        timestamp_only.series[0].books[0].file_hash = "same".into();
+        storage
+            .apply_library_scan(&library.id, &timestamp_only, true)
+            .await
+            .unwrap();
+        assert_eq!(
+            storage
+                .find_book_by_id(&book.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .file_hash_koreader,
+            "koreader"
+        );
+
+        let mut changed = timestamp_only;
+        changed.series[0].books[0].file_size += 1;
+        changed.series[0].books[0].file_hash.clear();
+        storage.apply_library_scan(&library.id, &changed, true).await.unwrap();
+        assert!(
+            storage
+                .find_book_by_id(&book.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .file_hash_koreader
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
     async fn opens_an_existing_kotlin_schema_without_recreating_it() {
         let directory = tempfile::tempdir().unwrap();
         let database = directory.path().join("database.sqlite");
@@ -874,6 +1062,25 @@ mod tests {
                 "priority": 0,
                 "groupId": null,
                 "uniqueId": "HASH_BOOK_book",
+            })
+        );
+
+        let koreader = TaskRecord::hash_book_koreader("book", 2);
+        assert_eq!(koreader.id, "HASH_BOOK_KOREADER_book");
+        assert_eq!(koreader.priority, 2);
+        assert_eq!(koreader.group_id, None);
+        assert_eq!(
+            koreader.class,
+            "org.gotson.komga.application.tasks.Task$HashBookKoreader"
+        );
+        assert_eq!(koreader.simple_type, "HashBookKoreader");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&koreader.payload).unwrap(),
+            serde_json::json!({
+                "bookId": "book",
+                "priority": 2,
+                "groupId": null,
+                "uniqueId": "HASH_BOOK_KOREADER_book",
             })
         );
 

@@ -56,6 +56,11 @@ impl ApiError {
         Self::new(StatusCode::UNSUPPORTED_MEDIA_TYPE, "Unsupported Media Type")
     }
 
+    /// Creates a response-content negotiation failure.
+    pub(crate) fn not_acceptable() -> Self {
+        Self::new(StatusCode::NOT_ACCEPTABLE, "Not Acceptable")
+    }
+
     /// Creates a request-body size failure.
     pub(crate) fn payload_too_large() -> Self {
         Self::new(StatusCode::PAYLOAD_TOO_LARGE, "Payload Too Large")

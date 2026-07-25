@@ -6,15 +6,15 @@ An incremental Rust port of the [Komga](https://github.com/gotson/komga) backend
 
 ## Port status
 
-The migration matrix currently tracks 13 functional areas: 3 are implemented or core-complete, 8 are partially implemented, and 2 are pending.
+The migration matrix currently tracks 13 functional areas: 3 are implemented or core-complete, 9 are partially implemented, and 1 is pending.
 
 | Status | Areas |
 | --- | --- |
 | Implemented / core-complete | Claim and users; collections and read lists; OPDS |
-| Partial | Process and configuration; SQLite; authentication; libraries and scanner; Series, Books, and progress; media; search; operations |
-| Pending | Device sync; Web UI packaging |
+| Partial | Process and configuration; SQLite; authentication; libraries and scanner; Series, Books, and progress; media; search; device sync; operations |
+| Pending | Web UI packaging |
 
-Recent content work added modern and deprecated Series/Book queries, legacy regex search, duplicate-book discovery, book-file hashing, configurable ZIP edge-page hashing, PageHash administration, safe duplicate-page removal from CBZ files with historical auditing, authenticated OPDS 1.2 and OPDS 2 catalogs, and Kotlin-compatible content-domain SSE. Device synchronization remains later work.
+Recent content work added modern and deprecated Series/Book queries, legacy regex search, duplicate-book discovery, book-file hashing, configurable ZIP edge-page hashing, PageHash administration, safe duplicate-page removal from CBZ files with historical auditing, authenticated OPDS 1.2 and OPDS 2 catalogs, Kotlin-compatible content-domain SSE, and KOReader progress synchronization. Kobo device synchronization remains later work.
 
 ## Run
 
@@ -95,6 +95,10 @@ Migration `0011_page_hashing` deliberately clears existing `PAGE_HASH` rules and
 - `GET /api/v1/page-hashes/unknown/{hash}/thumbnail`
 - `POST /api/v1/page-hashes/{hash}/{delete-all|delete-match}`
 - `GET /api/v1/history`
+- `POST /koreader/users/create`
+- `GET /koreader/users/auth`
+- `GET /koreader/syncs/progress/{bookHash}`
+- `PUT /koreader/syncs/progress`
 - `POST /api/v1/readlists/match/comicrack`
 - `GET /api/v1/readlists/{id}/file`
 - `POST /api/v1/filesystem`
@@ -115,9 +119,11 @@ Migration `0011_page_hashing` deliberately clears existing `PAGE_HASH` rules and
 - `DELETE /api/v1/tasks`
 - `GET /sse/v1/events`
 
-Authentication is compatible with the current Komga contract: HTTP Basic, `KOMGA-SESSION`, `X-Auth-Token`, and SHA-512-backed `X-API-Key`. Existing Spring BCrypt `$2a$` password hashes are accepted. OPDS 2 also exposes the public authentication document and returns its media type, Basic challenge, and discovery link on authentication failures.
+Authentication is compatible with the current Komga contract: HTTP Basic, `KOMGA-SESSION`, `X-Auth-Token`, and SHA-512-backed `X-API-Key`. Existing Spring BCrypt `$2a$` password hashes are accepted. KOReader routes exclusively accept a plaintext API key in `X-Auth-User` and require the `KOREADER_SYNC` role. OPDS 2 also exposes the public authentication document and returns its media type, Basic challenge, and discovery link on authentication failures.
 
 `ScanLibrary` tasks are executed in the background. They discover configured CBX/PDF/EPUB files and persist Kotlin-compatible Series, Book, Media, and initial metadata rows. CBZ, CBR, PDF, and EPUB contents are analyzed and receive generated book thumbnails; fixed-layout EPUB pages, publication resources, navigation, reading positions, and Divina/PDF/EPUB WebPub manifests are available through the REST API. Root-level `ComicInfo.xml`, EPUB OPF, and Mylar `series.json` metadata are imported incrementally after analysis and through the book, series, and library metadata refresh endpoints. Provider updates preserve locked fields, and ComicInfo collection/read-list relationships remain incremental. `EmptyTrash` permanently removes soft-deleted database content, honors automatic cleanup after scans, and never deletes source files. Library deletion cascades through database-owned content and sidecars while also preserving source files. Other unported task types remain queued and unmodified.
+
+Libraries with `hashKoreader` enabled enqueue Kotlin-compatible `HashBookKoreader` tasks after scans, when the setting is enabled, and after ZIP page removal. The worker computes KOReader's partial MD5 against a source snapshot and conditionally persists it to `FILE_HASH_KOREADER`. KOReader clients can then authenticate, pull, and push Divina/PDF page progress or EPUB resource progress. Hash resolution applies the user's library, age, and sharing-label restrictions before reporting collisions.
 
 Libraries with `hashPages` enabled enqueue Kotlin-compatible discovery and page-hashing tasks at startup, after scans, and when the setting is enabled. Only READY ZIP/CBZ media participates. The first and last configured number of pages are hashed; JPEG pages use a deterministic dimensions-plus-RGB24 representation, while other page types retain raw-byte XXH3-128 hashing. Administrators can classify hashes as `DELETE_AUTO`, `DELETE_MANUAL`, or `IGNORE`, inspect matching pages and previews, and queue all or individual matches for deletion. ZIP removal raw-copies surviving entries in archive order, validates the complete temporary archive and current source snapshot, and then performs a same-directory atomic replacement. Each removed page creates a `DuplicatePageDeleted` historical event in the same database transaction. It does not create a source backup, so back up real libraries before enabling deletion rules.
 

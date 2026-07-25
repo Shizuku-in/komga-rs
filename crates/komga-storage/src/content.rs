@@ -184,6 +184,20 @@ impl Storage {
         .await?)
     }
 
+    /// Lists active books whose KOReader partial-MD5 hash is missing.
+    ///
+    /// # Errors
+    ///
+    /// Returns a database error when the rows cannot be queried.
+    pub async fn list_books_without_koreader_hash(&self, library_id: &str) -> Result<Vec<String>> {
+        Ok(sqlx::query_scalar(
+            "SELECT ID FROM BOOK WHERE LIBRARY_ID = ? AND DELETED_DATE IS NULL AND FILE_HASH_KOREADER = '' ORDER BY URL",
+        )
+        .bind(library_id)
+        .fetch_all(&self.pool)
+        .await?)
+    }
+
     /// Stores a file hash only while the persisted source snapshot still
     /// matches `book` and no other worker has supplied a hash.
     ///
@@ -197,6 +211,33 @@ impl Storage {
             r#"UPDATE BOOK SET FILE_HASH = ?, LAST_MODIFIED_DATE = CURRENT_TIMESTAMP
                 WHERE ID = ? AND URL = ? AND FILE_SIZE = ? AND FILE_LAST_MODIFIED = ?
                   AND DELETED_DATE IS NULL AND FILE_HASH = ''"#,
+        )
+        .bind(file_hash)
+        .bind(&book.id)
+        .bind(book.url.as_str())
+        .bind(book.file_size)
+        .bind(book.file_last_modified)
+        .execute(&self.pool)
+        .await?
+        .rows_affected()
+            == 1)
+    }
+
+    /// Stores a KOReader hash only while the source snapshot and library
+    /// setting still match the submitted task.
+    ///
+    /// Returns `false` when the book was deleted, changed, already hashed, or
+    /// KOReader hashing was disabled while the task was running.
+    ///
+    /// # Errors
+    ///
+    /// Returns a database error when the conditional update cannot be executed.
+    pub async fn update_book_koreader_hash_if_current(&self, book: &Book, file_hash: &str) -> Result<bool> {
+        Ok(sqlx::query(
+            r#"UPDATE BOOK SET FILE_HASH_KOREADER = ?, LAST_MODIFIED_DATE = CURRENT_TIMESTAMP
+                WHERE ID = ? AND URL = ? AND FILE_SIZE = ? AND FILE_LAST_MODIFIED = ?
+                  AND DELETED_DATE IS NULL AND FILE_HASH_KOREADER = ''
+                  AND EXISTS (SELECT 1 FROM LIBRARY l WHERE l.ID = BOOK.LIBRARY_ID AND l.HASH_KOREADER = 1)"#,
         )
         .bind(file_hash)
         .bind(&book.id)
@@ -377,6 +418,8 @@ impl Storage {
                 if let Some(existing) = books_for_series.and_then(|books| books.get(scanned_book.url.as_str())) {
                     let file_changed = existing.file_last_modified != scanned_book.file_last_modified
                         || existing.file_size != scanned_book.file_size;
+                    let content_unchanged =
+                        !existing.file_hash.is_empty() && existing.file_hash == scanned_book.file_hash;
                     let changed = file_changed
                         || existing.name != scanned_book.name
                         || existing.number != scanned_book.number
@@ -385,6 +428,7 @@ impl Storage {
                         sqlx::query(
                             r#"UPDATE BOOK SET NAME = ?, URL = ?, FILE_LAST_MODIFIED = ?,
                                       FILE_SIZE = ?, FILE_HASH = CASE WHEN ? THEN ? ELSE FILE_HASH END,
+                                      FILE_HASH_KOREADER = CASE WHEN ? THEN '' ELSE FILE_HASH_KOREADER END,
                                       NUMBER = ?, ONESHOT = ?, DELETED_DATE = NULL,
                                       LAST_MODIFIED_DATE = CURRENT_TIMESTAMP WHERE ID = ?"#,
                         )
@@ -394,6 +438,7 @@ impl Storage {
                         .bind(scanned_book.file_size)
                         .bind(file_changed)
                         .bind(&scanned_book.file_hash)
+                        .bind(file_changed && !content_unchanged)
                         .bind(scanned_book.number)
                         .bind(scanned_book.oneshot)
                         .bind(&existing.id)
@@ -411,8 +456,6 @@ impl Storage {
                         .bind(&existing.id)
                         .execute(&mut *tx)
                         .await?;
-                        let content_unchanged =
-                            !existing.file_hash.is_empty() && existing.file_hash == scanned_book.file_hash;
                         if file_changed && !content_unchanged {
                             sqlx::query(
                                 "UPDATE MEDIA SET STATUS = 'OUTDATED', LAST_MODIFIED_DATE = CURRENT_TIMESTAMP WHERE BOOK_ID = ?",

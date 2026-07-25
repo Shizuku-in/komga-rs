@@ -171,6 +171,43 @@ async fn scan_tasks_hash_missing_book_files_with_kotlin_xxh3() {
 }
 
 #[tokio::test]
+async fn scan_tasks_hash_missing_books_with_koreader_partial_md5() {
+    let storage = Storage::connect_memory().await.unwrap();
+    let tasks = TaskStorage::connect_memory().await.unwrap();
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path().join("library");
+    fs::create_dir_all(root.join("Series")).unwrap();
+    fs::write(root.join("Series/Book.epub"), b"hello").unwrap();
+    let mut library = Library::new("KOReader hashes".into(), Url::from_directory_path(&root).unwrap());
+    library.scan_interval = ScanInterval::Disabled;
+    library.hash_koreader = true;
+    storage.create_library(&library).await.unwrap();
+    tasks
+        .save(&TaskRecord::scan_library(&library.id, false, 8))
+        .await
+        .unwrap();
+
+    let state = AppState::new(storage.clone(), tasks.clone()).await.unwrap();
+    let runtime = state.start_runtime().await.unwrap();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let books = storage.list_active_books_by_library_id(&library.id).await.unwrap();
+            if books
+                .first()
+                .is_some_and(|book| book.file_hash_koreader == "5d41402abc4b2a76b9719d911017c592")
+                && tasks.list().await.unwrap().is_empty()
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("scan-triggered KOReader hashing did not complete");
+    runtime.shutdown().await;
+}
+
+#[tokio::test]
 async fn hash_tasks_skip_books_when_library_hashing_is_disabled() {
     let storage = Storage::connect_memory().await.unwrap();
     let tasks = TaskStorage::connect_memory().await.unwrap();

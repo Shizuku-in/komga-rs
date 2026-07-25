@@ -14,9 +14,9 @@ use tower_http::{
 
 use crate::{
     AppState, auth, book_file_routes, container_routes, content_routes, filesystem_routes, history_routes,
-    library_routes, media_routes, metadata_routes, opds_router, page_hash_routes, read_list_file_routes,
-    read_list_match_routes, read_progress_routes, referential_routes, routes, settings_routes, sse_routes,
-    thumbnail_routes, webpub_routes,
+    koreader_routes, library_routes, media_routes, metadata_routes, opds_router, page_hash_routes,
+    read_list_file_routes, read_list_match_routes, read_progress_routes, referential_routes, routes, settings_routes,
+    sse_routes, thumbnail_routes, webpub_routes,
 };
 
 pub(crate) fn build(state: AppState) -> Router {
@@ -26,6 +26,7 @@ pub(crate) fn build(state: AppState) -> Router {
 
     public_api()
         .merge(opds_router::public())
+        .merge(koreader_routes::router(&state))
         .merge(protected)
         .layer(DefaultBodyLimit::max(2 * 1024 * 1024))
         .layer(CorsLayer::permissive())

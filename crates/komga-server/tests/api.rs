@@ -31,6 +31,8 @@ mod book_file_cases;
 mod duplicate_cases;
 #[path = "api_cases/history.rs"]
 mod history_cases;
+#[path = "api_cases/koreader.rs"]
+mod koreader_cases;
 #[path = "api_cases/legacy_content.rs"]
 mod legacy_content_cases;
 #[path = "api_cases/library_content.rs"]

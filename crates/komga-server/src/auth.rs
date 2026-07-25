@@ -20,7 +20,7 @@ use axum::{
 };
 use base64::{Engine, engine::general_purpose::STANDARD};
 use dashmap::DashMap;
-use komga_core::User;
+use komga_core::{User, UserRole};
 use rand::RngCore;
 use sha2::{Digest, Sha512};
 
@@ -158,6 +158,27 @@ pub(crate) async fn require_auth(State(state): State<AppState>, mut request: Req
             }
         }
     }
+}
+
+/// Authenticates KOReader protocol requests exclusively through `X-Auth-User`.
+pub(crate) async fn require_koreader_auth(State(state): State<AppState>, mut request: Request, next: Next) -> Response {
+    let Some(key) = request
+        .headers()
+        .get("X-Auth-User")
+        .and_then(|value| value.to_str().ok())
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+    else {
+        return ApiError::forbidden().into_response();
+    };
+    let digest = hex::encode(Sha512::digest(key.as_bytes()));
+    let user = match state.storage.find_user_by_api_key_hash(&digest).await {
+        Ok(Some(user)) if user.roles.contains(&UserRole::KoreaderSync) => user,
+        Ok(_) => return ApiError::forbidden().into_response(),
+        Err(error) => return ApiError::from(error).into_response(),
+    };
+    request.extensions_mut().insert(AuthContext { user, session_id: None });
+    next.run(request).await
 }
 
 async fn authenticate(

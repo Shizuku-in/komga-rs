@@ -144,6 +144,26 @@ impl TaskRecord {
         }
     }
 
+    /// Builds a Kotlin-compatible KOReader partial-MD5 hashing task.
+    pub fn hash_book_koreader(book_id: &str, priority: i32) -> Self {
+        let id = format!("HASH_BOOK_KOREADER_{book_id}");
+        Self {
+            id: id.clone(),
+            priority,
+            group_id: None,
+            class: "org.gotson.komga.application.tasks.Task$HashBookKoreader".into(),
+            simple_type: "HashBookKoreader".into(),
+            payload: serde_json::json!({
+                "bookId": book_id,
+                "priority": priority,
+                "groupId": null,
+                "uniqueId": id,
+            })
+            .to_string(),
+            owner: None,
+        }
+    }
+
     /// Builds a Kotlin-compatible missing-page-hash discovery task.
     pub fn find_books_with_missing_page_hash(library_id: &str, priority: i32) -> Self {
         let id = format!("FIND_BOOKS_WITH_MISSING_PAGE_HASH_{library_id}");

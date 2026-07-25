@@ -265,6 +265,9 @@ pub(crate) async fn update_library(
     if !current.hash_files && updated.hash_files {
         state.enqueue_missing_book_hashes(&library_id).await?;
     }
+    if !current.hash_koreader && updated.hash_koreader {
+        state.enqueue_missing_koreader_hashes(&library_id).await?;
+    }
     if !current.hash_pages && updated.hash_pages {
         state
             .enqueue_task(&TaskRecord::find_books_with_missing_page_hash(&library_id, 0))

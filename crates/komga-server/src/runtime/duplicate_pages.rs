@@ -171,6 +171,18 @@ pub(super) async fn process_remove_hashed_pages_task(state: &AppState, task: &Ta
         enqueue_recovery_scan(state, &book.library_id).await;
         return TaskOutcome::Retry;
     }
+    if library.hash_koreader
+        && let Err(error) = state
+            .enqueue_task(&TaskRecord::hash_book_koreader(
+                &book.id,
+                task.priority.saturating_add(1),
+            ))
+            .await
+    {
+        tracing::error!(%error, book_id = %book.id, "could not enqueue KOReader hashing after page removal");
+        enqueue_recovery_scan(state, &book.library_id).await;
+        return TaskOutcome::Retry;
+    }
     if !state.sync_books(std::slice::from_ref(&book.id)).await {
         state.recover_search_after_http_failure().await;
     }
@@ -224,6 +236,7 @@ mod tests {
         let mut library = Library::new("Library".into(), Url::from_directory_path(&root).unwrap());
         library.hash_files = true;
         library.hash_pages = true;
+        library.hash_koreader = true;
         storage.create_library(&library).await.unwrap();
         storage
             .apply_library_scan(&library.id, &scan_library_files(&library, || false).unwrap(), false)
@@ -346,6 +359,7 @@ mod tests {
         assert!(queued.iter().any(|value| value == "GenerateBookThumbnail"));
         assert!(queued.iter().any(|value| value == "HashBookPages"));
         assert!(queued.iter().any(|value| value == "HashBook"));
+        assert!(queued.iter().any(|value| value == "HashBookKoreader"));
         assert_eq!(state.search.search(EntityKind::Book, "volume")[0].id, book.id);
 
         let after = fs::read(&path).unwrap();
