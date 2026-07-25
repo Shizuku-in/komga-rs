@@ -275,7 +275,7 @@ async fn scan_imports_comic_info_collections_and_read_lists_idempotently() {
             .all(|value| !value.ordered && value.series_ids.len() == 1)
     );
     let read_lists = storage
-        .list_read_lists(None, None, &PageRequest::default(), &user)
+        .list_read_lists(None, None, None, &PageRequest::default(), &user)
         .await
         .unwrap();
     assert_eq!(
@@ -317,7 +317,7 @@ async fn scan_imports_comic_info_collections_and_read_lists_idempotently() {
     );
     assert_eq!(
         storage
-            .list_read_lists(None, None, &PageRequest::default(), &user)
+            .list_read_lists(None, None, None, &PageRequest::default(), &user)
             .await
             .unwrap()
             .total_elements,

@@ -731,6 +731,7 @@ impl Storage {
     pub async fn list_read_lists(
         &self,
         search: Option<&str>,
+        library_id: Option<&str>,
         ranked_ids: Option<&[String]>,
         page: &PageRequest,
         user: &User,
@@ -754,7 +755,13 @@ impl Storage {
                 continue;
             }
             if let Some(dto) = self.project_read_list(row, user).await? {
-                out.push(dto)
+                let matches_library = match library_id {
+                    Some(library) => read_list_has_library(&self.pool, &dto.id, library).await?,
+                    None => true,
+                };
+                if matches_library {
+                    out.push(dto)
+                }
             }
         }
         for sort in &page.sort {
@@ -1129,6 +1136,9 @@ async fn member_ids(pool: &sqlx::SqlitePool, table: &str, parent: &str, member: 
 }
 async fn collection_has_library(pool: &sqlx::SqlitePool, id: &str, library: &str) -> Result<bool> {
     Ok(sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM COLLECTION_SERIES cs JOIN SERIES s ON s.ID=cs.SERIES_ID WHERE cs.COLLECTION_ID=? AND s.LIBRARY_ID=?)").bind(id).bind(library).fetch_one(pool).await?)
+}
+async fn read_list_has_library(pool: &sqlx::SqlitePool, id: &str, library: &str) -> Result<bool> {
+    Ok(sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM READLIST_BOOK rb JOIN BOOK b ON b.ID=rb.BOOK_ID WHERE rb.READLIST_ID=? AND b.LIBRARY_ID=?)").bind(id).bind(library).fetch_one(pool).await?)
 }
 fn page_vec<T>(mut rows: Vec<T>, page: &PageRequest) -> ContentPage<T> {
     let total = rows.len() as u64;

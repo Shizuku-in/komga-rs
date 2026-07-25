@@ -154,10 +154,13 @@ pub(crate) async fn list_read_lists(
         let hits = search_hits(&state, EntityKind::ReadList, query).await;
         state
             .storage
-            .list_read_lists(None, Some(&hits), &page, &auth.user)
+            .list_read_lists(None, None, Some(&hits), &page, &auth.user)
             .await?
     } else {
-        state.storage.list_read_lists(None, None, &page, &auth.user).await?
+        state
+            .storage
+            .list_read_lists(None, None, None, &page, &auth.user)
+            .await?
     };
     Ok(Json(SpringPage::from_content(result)))
 }

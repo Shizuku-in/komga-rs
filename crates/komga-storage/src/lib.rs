@@ -1650,6 +1650,7 @@ mod tests {
         let read_list_page = storage
             .list_read_lists(
                 None,
+                None,
                 Some(&read_list_rank),
                 &PageRequest {
                     page: 0,
@@ -1664,7 +1665,21 @@ mod tests {
         assert_eq!(read_list_page.content[0].id, "readlist-z");
         assert_eq!(
             storage
-                .list_read_lists(None, Some(&[]), &PageRequest::default(), &user)
+                .list_read_lists(
+                    None,
+                    Some("missing"),
+                    Some(&read_list_rank),
+                    &PageRequest::default(),
+                    &user
+                )
+                .await
+                .unwrap()
+                .total_elements,
+            0
+        );
+        assert_eq!(
+            storage
+                .list_read_lists(None, None, Some(&[]), &PageRequest::default(), &user)
                 .await
                 .unwrap()
                 .total_elements,

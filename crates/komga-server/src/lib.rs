@@ -212,7 +212,7 @@ impl AppState {
                             }
                         }
                     }
-                    EntityKind::ReadList => match self.storage.list_read_lists(None, None, &page, &admin).await {
+                    EntityKind::ReadList => match self.storage.list_read_lists(None, None, None, &page, &admin).await {
                         Ok(values) => values.content.iter().map(read_list_document).collect(),
                         Err(error) => {
                             source_error = Some(error.to_string());

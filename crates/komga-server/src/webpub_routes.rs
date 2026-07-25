@@ -32,44 +32,45 @@ use url::Url;
 
 use crate::{AppState, auth::AuthContext, content_access::load_visible_book_context, error::ApiError};
 
-const DIVINA_MEDIA_TYPE: &str = "application/divina+json";
-const WEBPUB_MEDIA_TYPE: &str = "application/webpub+json";
+pub(crate) const DIVINA_MEDIA_TYPE: &str = "application/divina+json";
+pub(crate) const WEBPUB_MEDIA_TYPE: &str = "application/webpub+json";
+pub(crate) const OPDS_PUBLICATION_MEDIA_TYPE: &str = "application/opds-publication+json";
 const DIVINA_PROFILE: &str = "https://readium.org/webpub-manifest/profiles/divina";
 const EPUB_PROFILE: &str = "https://readium.org/webpub-manifest/profiles/epub";
 const PDF_PROFILE: &str = "https://readium.org/webpub-manifest/profiles/pdf";
 const CONTEXT: &str = "https://readium.org/webpub-manifest/context.jsonld";
 const ACQUISITION_REL: &str = "http://opds-spec.org/acquisition";
 
-type LinkProperties = BTreeMap<String, BTreeMap<String, Value>>;
+pub(crate) type LinkProperties = BTreeMap<String, BTreeMap<String, Value>>;
 
 /// A WebPub link with Kotlin's nested empty-value omission behavior.
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct WpLinkDto {
+pub(crate) struct WpLinkDto {
     #[serde(skip_serializing_if = "Option::is_none")]
-    title: Option<String>,
+    pub(crate) title: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    rel: Option<String>,
+    pub(crate) rel: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    href: Option<String>,
+    pub(crate) href: Option<String>,
     #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
-    media_type: Option<String>,
+    pub(crate) media_type: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    templated: Option<bool>,
+    pub(crate) templated: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    width: Option<i32>,
+    pub(crate) width: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    height: Option<i32>,
+    pub(crate) height: Option<i32>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    alternate: Vec<WpLinkDto>,
+    pub(crate) alternate: Vec<WpLinkDto>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    children: Vec<WpLinkDto>,
+    pub(crate) children: Vec<WpLinkDto>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
-    properties: LinkProperties,
+    pub(crate) properties: LinkProperties,
 }
 
 impl WpLinkDto {
-    fn resource(href: String, media_type: Option<String>) -> Self {
+    pub(crate) fn resource(href: String, media_type: Option<String>) -> Self {
         Self {
             href: Some(href),
             media_type,
@@ -81,22 +82,22 @@ impl WpLinkDto {
 /// Complete publication payload; all collection fields serialize even when empty.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct WpPublicationDto {
-    context: String,
-    metadata: WpMetadataDto,
-    links: Vec<WpLinkDto>,
-    images: Vec<WpLinkDto>,
-    reading_order: Vec<WpLinkDto>,
-    resources: Vec<WpLinkDto>,
-    toc: Vec<WpLinkDto>,
-    landmarks: Vec<WpLinkDto>,
-    page_list: Vec<WpLinkDto>,
+pub(crate) struct WpPublicationDto {
+    pub(crate) context: String,
+    pub(crate) metadata: WpMetadataDto,
+    pub(crate) links: Vec<WpLinkDto>,
+    pub(crate) images: Vec<WpLinkDto>,
+    pub(crate) reading_order: Vec<WpLinkDto>,
+    pub(crate) resources: Vec<WpLinkDto>,
+    pub(crate) toc: Vec<WpLinkDto>,
+    pub(crate) landmarks: Vec<WpLinkDto>,
+    pub(crate) page_list: Vec<WpLinkDto>,
 }
 
 /// Metadata shared by the Divina, PDF, and EPUB publication profiles.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct WpMetadataDto {
+pub(crate) struct WpMetadataDto {
     #[serde(skip_serializing_if = "String::is_empty")]
     title: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -154,7 +155,7 @@ struct WpMetadataDto {
 /// Series and collection membership exposed through WebPub metadata.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct WpBelongsToDto {
+pub(crate) struct WpBelongsToDto {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     series: Vec<WpContributorDto>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -164,7 +165,7 @@ struct WpBelongsToDto {
 /// Named member of a containing series or collection.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct WpContributorDto {
+pub(crate) struct WpContributorDto {
     #[serde(skip_serializing_if = "String::is_empty")]
     name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -198,7 +199,7 @@ enum WpReadingProgressionDto {
 
 /// Profile selected by the requested manifest route.
 #[derive(Debug, Clone, Copy)]
-enum RequestedProfile {
+pub(crate) enum RequestedProfile {
     Automatic,
     Divina,
     Pdf,
@@ -207,13 +208,22 @@ enum RequestedProfile {
 
 /// Proxy-aware base URL used to build every absolute publication link.
 #[derive(Debug, Clone)]
-struct ManifestUrls {
+pub(crate) struct ManifestUrls {
     base: Url,
+    path_prefix: Vec<String>,
 }
 
 impl ManifestUrls {
     /// Resolves the client-visible origin using Spring's forwarded-header precedence.
-    fn from_request(headers: &HeaderMap, uri: &Uri) -> Result<Self, ApiError> {
+    pub(crate) fn from_request(headers: &HeaderMap, uri: &Uri) -> Result<Self, ApiError> {
+        Self::from_request_with_prefix(headers, uri, &["api", "v1"])
+    }
+
+    pub(crate) fn from_request_with_prefix(
+        headers: &HeaderMap,
+        uri: &Uri,
+        path_prefix: &[&str],
+    ) -> Result<Self, ApiError> {
         let forwarded_proto = forwarded_parameter(headers, "proto");
         let forwarded_host = forwarded_parameter(headers, "host");
         let scheme = forwarded_proto
@@ -238,14 +248,19 @@ impl ManifestUrls {
                 base.set_path(&normalized);
             }
         }
-        Ok(Self { base })
+        Ok(Self {
+            base,
+            path_prefix: path_prefix.iter().map(|value| (*value).to_owned()).collect(),
+        })
     }
 
     fn api_path(&self, segments: &[&str]) -> Url {
         let mut url = self.base.clone();
         let mut path = url.path_segments_mut().expect("HTTP URLs support path segments");
         path.pop_if_empty();
-        path.push("api").push("v1");
+        for segment in &self.path_prefix {
+            path.push(segment);
+        }
         for segment in segments {
             path.push(segment);
         }
@@ -253,23 +268,35 @@ impl ManifestUrls {
         url
     }
 
-    fn manifest(&self, book_id: &str) -> String {
+    pub(crate) fn absolute_path(&self, segments: &[&str]) -> String {
+        self.api_path(segments).into()
+    }
+
+    pub(crate) fn manifest(&self, book_id: &str) -> String {
         self.api_path(&["books", book_id, "manifest"]).into()
     }
 
-    fn profile_manifest(&self, book_id: &str, profile: &str) -> String {
+    pub(crate) fn profile_manifest(&self, book_id: &str, profile: &str) -> String {
         self.api_path(&["books", book_id, "manifest", profile]).into()
     }
 
-    fn book_file(&self, book_id: &str) -> String {
+    pub(crate) fn book_file(&self, book_id: &str) -> String {
         self.api_path(&["books", book_id, "file"]).into()
     }
 
-    fn thumbnail(&self, book_id: &str) -> String {
+    pub(crate) fn thumbnail(&self, book_id: &str) -> String {
         self.api_path(&["books", book_id, "thumbnail"]).into()
     }
 
-    fn page(&self, book_id: &str, page_number: usize, convert: Option<&str>) -> String {
+    pub(crate) fn progression(&self, book_id: &str) -> String {
+        self.api_path(&["books", book_id, "progression"]).into()
+    }
+
+    pub(crate) fn series(&self, series_id: &str) -> String {
+        self.api_path(&["series", series_id]).into()
+    }
+
+    pub(crate) fn page(&self, book_id: &str, page_number: usize, convert: Option<&str>) -> String {
         let page_number = page_number.to_string();
         let mut url = self.api_path(&["books", book_id, "pages", &page_number]);
         url.query_pairs_mut().append_pair("contentNegotiation", "false");
@@ -279,12 +306,12 @@ impl ManifestUrls {
         url.into()
     }
 
-    fn raw_page(&self, book_id: &str, page_number: i32) -> String {
+    pub(crate) fn raw_page(&self, book_id: &str, page_number: i32) -> String {
         let page_number = page_number.to_string();
         self.api_path(&["books", book_id, "pages", &page_number, "raw"]).into()
     }
 
-    fn resource(&self, book_id: &str, resource: &str) -> String {
+    pub(crate) fn resource(&self, book_id: &str, resource: &str) -> String {
         let mut url = self.api_path(&["books", book_id, "resource"]);
         {
             let mut path = url.path_segments_mut().expect("HTTP URLs support path segments");
@@ -313,7 +340,7 @@ pub(crate) async fn get_manifest(
     headers: HeaderMap,
     uri: Uri,
 ) -> Result<Response, ApiError> {
-    manifest_response(state, auth, path, headers, uri, RequestedProfile::Automatic).await
+    manifest_response(state, auth, path, headers, uri, RequestedProfile::Automatic, false).await
 }
 
 /// Returns the image-oriented Divina representation.
@@ -324,7 +351,7 @@ pub(crate) async fn get_divina_manifest(
     headers: HeaderMap,
     uri: Uri,
 ) -> Result<Response, ApiError> {
-    manifest_response(state, auth, path, headers, uri, RequestedProfile::Divina).await
+    manifest_response(state, auth, path, headers, uri, RequestedProfile::Divina, false).await
 }
 
 /// Returns the PDF profile or `400` when the book is not a PDF.
@@ -335,7 +362,7 @@ pub(crate) async fn get_pdf_manifest(
     headers: HeaderMap,
     uri: Uri,
 ) -> Result<Response, ApiError> {
-    manifest_response(state, auth, path, headers, uri, RequestedProfile::Pdf).await
+    manifest_response(state, auth, path, headers, uri, RequestedProfile::Pdf, false).await
 }
 
 /// Returns the EPUB profile or `400` when the book is not an EPUB.
@@ -346,7 +373,51 @@ pub(crate) async fn get_epub_manifest(
     headers: HeaderMap,
     uri: Uri,
 ) -> Result<Response, ApiError> {
-    manifest_response(state, auth, path, headers, uri, RequestedProfile::Epub).await
+    manifest_response(state, auth, path, headers, uri, RequestedProfile::Epub, false).await
+}
+
+#[allow(dead_code)]
+pub(crate) async fn get_opds_manifest(
+    state: State<AppState>,
+    auth: Extension<AuthContext>,
+    path: Path<String>,
+    headers: HeaderMap,
+    uri: Uri,
+) -> Result<Response, ApiError> {
+    manifest_response(state, auth, path, headers, uri, RequestedProfile::Automatic, true).await
+}
+
+#[allow(dead_code)]
+pub(crate) async fn get_opds_divina_manifest(
+    state: State<AppState>,
+    auth: Extension<AuthContext>,
+    path: Path<String>,
+    headers: HeaderMap,
+    uri: Uri,
+) -> Result<Response, ApiError> {
+    manifest_response(state, auth, path, headers, uri, RequestedProfile::Divina, true).await
+}
+
+#[allow(dead_code)]
+pub(crate) async fn get_opds_pdf_manifest(
+    state: State<AppState>,
+    auth: Extension<AuthContext>,
+    path: Path<String>,
+    headers: HeaderMap,
+    uri: Uri,
+) -> Result<Response, ApiError> {
+    manifest_response(state, auth, path, headers, uri, RequestedProfile::Pdf, true).await
+}
+
+#[allow(dead_code)]
+pub(crate) async fn get_opds_epub_manifest(
+    state: State<AppState>,
+    auth: Extension<AuthContext>,
+    path: Path<String>,
+    headers: HeaderMap,
+    uri: Uri,
+) -> Result<Response, ApiError> {
+    manifest_response(state, auth, path, headers, uri, RequestedProfile::Epub, true).await
 }
 
 /// Loads visible content, resolves the requested profile, and serializes its payload.
@@ -357,6 +428,7 @@ async fn manifest_response(
     headers: HeaderMap,
     uri: Uri,
     requested: RequestedProfile,
+    opds: bool,
 ) -> Result<Response, ApiError> {
     let (book, series) = load_visible_book_context(&state, &auth.user, &book_id).await?;
     let media = state
@@ -378,8 +450,12 @@ async fn manifest_response(
             )));
         }
     };
-    let urls = ManifestUrls::from_request(&headers, &uri)?;
-    let (publication, content_type) = match profile {
+    let urls = if opds {
+        ManifestUrls::from_request_with_prefix(&headers, &uri, &["opds", "v2"])?
+    } else {
+        ManifestUrls::from_request(&headers, &uri)?
+    };
+    let (mut publication, content_type) = match profile {
         MediaProfile::Divina => (
             divina_manifest(&book, &series.metadata, &media, &urls),
             DIVINA_MEDIA_TYPE,
@@ -387,11 +463,69 @@ async fn manifest_response(
         MediaProfile::Pdf => (pdf_manifest(&book, &series.metadata, &media, &urls), WEBPUB_MEDIA_TYPE),
         MediaProfile::Epub => (epub_manifest(&book, &series.metadata, &media, &urls), WEBPUB_MEDIA_TYPE),
     };
+    if opds {
+        decorate_opds_publication(&mut publication, &book, &urls);
+    }
     let mut response = Json(publication).into_response();
-    response
-        .headers_mut()
-        .insert(header::CONTENT_TYPE, HeaderValue::from_static(content_type));
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static(if opds {
+            OPDS_PUBLICATION_MEDIA_TYPE
+        } else {
+            content_type
+        }),
+    );
     Ok(response)
+}
+
+#[allow(dead_code)]
+pub(crate) fn opds_publication(
+    book: &komga_core::BookDto,
+    series: &SeriesMetadataDto,
+    media: &Media,
+    urls: &ManifestUrls,
+) -> WpPublicationDto {
+    let mut publication = base_publication(book, series, media, urls);
+    decorate_opds_publication(&mut publication, book, urls);
+    publication
+}
+
+fn decorate_opds_publication(publication: &mut WpPublicationDto, book: &komga_core::BookDto, urls: &ManifestUrls) {
+    for link in &mut publication.links {
+        if link.href.as_deref().is_some_and(|href| href.contains("/manifest")) {
+            link.media_type = Some(OPDS_PUBLICATION_MEDIA_TYPE.to_owned());
+        }
+    }
+    let authentication = BTreeMap::from([(
+        "authenticate".to_owned(),
+        BTreeMap::from([
+            ("href".to_owned(), Value::String(urls.absolute_path(&["auth"]))),
+            (
+                "type".to_owned(),
+                Value::String("application/opds-authentication+json".to_owned()),
+            ),
+        ]),
+    )]);
+    publication.links.push(WpLinkDto {
+        rel: Some("http://readium.org/webpub-manifest/relations/progression".to_owned()),
+        href: Some(urls.progression(&book.id)),
+        media_type: Some("application/vnd.readium.progression+json".to_owned()),
+        properties: authentication,
+        ..WpLinkDto::default()
+    });
+    if let Some(belongs_to) = publication.metadata.belongs_to.as_mut()
+        && let Some(series) = belongs_to.series.first_mut()
+    {
+        series.links.push(WpLinkDto {
+            href: Some(urls.series(&book.series_id)),
+            media_type: Some("application/opds+json".to_owned()),
+            ..WpLinkDto::default()
+        });
+    }
+    publication.images = vec![WpLinkDto::resource(
+        urls.thumbnail(&book.id),
+        Some("image/jpeg".to_owned()),
+    )];
 }
 
 /// Builds image reading-order links and JPEG alternates for the Divina profile.
