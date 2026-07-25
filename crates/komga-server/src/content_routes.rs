@@ -3,8 +3,8 @@ use axum::{
     extract::{Extension, Path, RawQuery, State},
 };
 use komga_core::{
-    BookDto, BookSearch, BooleanOperator, EqualityOperator, GroupCountDto, PageRequest, SeriesCondition, SeriesDto,
-    SeriesSearch, SortDirection, SortOrder, User,
+    BookDto, BookSearch, BooleanOperator, ContentPage, EqualityOperator, GroupCountDto, PageRequest, SeriesCondition,
+    SeriesDto, SeriesSearch, SortDirection, SortOrder, User,
 };
 use komga_search::EntityKind;
 
@@ -15,6 +15,7 @@ use crate::{
         load_visible_book, load_visible_series, redact_book_source_for_user, redact_series_source_for_user,
     },
     error::ApiError,
+    legacy_content_query::{parse_legacy_book_query, parse_legacy_series_query},
     pagination::{ContentQueryParams, SpringPage, parse_content_query, parse_page_request},
     routes::ApiJson,
     search_query::{non_empty, search_hits},
@@ -25,21 +26,35 @@ pub(crate) async fn series_alphabetical_groups(
     Extension(auth): Extension<AuthContext>,
     ApiJson(search): ApiJson<SeriesSearch>,
 ) -> Result<Json<Vec<GroupCountDto>>, ApiError> {
+    Ok(Json(execute_series_groups(&state, &auth.user, &search).await?))
+}
+
+pub(crate) async fn legacy_series_alphabetical_groups(
+    State(state): State<AppState>,
+    Extension(auth): Extension<AuthContext>,
+    RawQuery(raw_query): RawQuery,
+) -> Result<Json<Vec<GroupCountDto>>, ApiError> {
+    let query = parse_legacy_series_query(raw_query.as_deref())?;
+    Ok(Json(execute_series_groups(&state, &auth.user, &query.search).await?))
+}
+
+async fn execute_series_groups(
+    state: &AppState,
+    user: &User,
+    search: &SeriesSearch,
+) -> Result<Vec<GroupCountDto>, ApiError> {
     let groups = if let Some(query) = non_empty(search.full_text_search.as_deref()) {
-        let hits = search_hits(&state, EntityKind::Series, query).await;
-        let mut database_search = search;
+        let hits = search_hits(state, EntityKind::Series, query).await;
+        let mut database_search = search.clone();
         database_search.full_text_search = None;
         state
             .storage
-            .series_alphabetical_groups(&database_search, &auth.user, Some(&hits))
+            .series_alphabetical_groups(&database_search, user, Some(&hits))
             .await?
     } else {
-        state
-            .storage
-            .series_alphabetical_groups(&search, &auth.user, None)
-            .await?
+        state.storage.series_alphabetical_groups(search, user, None).await?
     };
-    Ok(Json(groups))
+    Ok(groups)
 }
 
 pub(crate) async fn latest_series(
@@ -181,22 +196,44 @@ pub(crate) async fn list_series(
     ApiJson(search): ApiJson<SeriesSearch>,
 ) -> Result<Json<SpringPage<SeriesDto>>, ApiError> {
     let page = parse_page_request(raw_query.as_deref())?;
+    Ok(Json(SpringPage::from_content(
+        execute_series_query(&state, &auth.user, &search, &page).await?,
+    )))
+}
+
+pub(crate) async fn legacy_list_series(
+    State(state): State<AppState>,
+    Extension(auth): Extension<AuthContext>,
+    RawQuery(raw_query): RawQuery,
+) -> Result<Json<SpringPage<SeriesDto>>, ApiError> {
+    let query = parse_legacy_series_query(raw_query.as_deref())?;
+    Ok(Json(SpringPage::from_content(
+        execute_series_query(&state, &auth.user, &query.search, &query.page).await?,
+    )))
+}
+
+async fn execute_series_query(
+    state: &AppState,
+    user: &User,
+    search: &SeriesSearch,
+    page: &PageRequest,
+) -> Result<ContentPage<SeriesDto>, ApiError> {
     let mut result = if let Some(query) = non_empty(search.full_text_search.as_deref()) {
-        let hits = search_hits(&state, EntityKind::Series, query).await;
+        let hits = search_hits(state, EntityKind::Series, query).await;
         let mut database_search = search.clone();
         database_search.full_text_search = None;
         state
             .storage
-            .query_series(&database_search, &page, &auth.user, Some(&hits))
+            .query_series(&database_search, page, user, Some(&hits))
             .await?
     } else {
-        state.storage.query_series(&search, &page, &auth.user, None).await?
+        state.storage.query_series(search, page, user, None).await?
     };
     result
         .content
         .iter_mut()
-        .for_each(|series| redact_series_source_for_user(series, &auth.user));
-    Ok(Json(SpringPage::from_content(result)))
+        .for_each(|series| redact_series_source_for_user(series, user));
+    Ok(result)
 }
 
 pub(crate) async fn get_series(
@@ -216,22 +253,44 @@ pub(crate) async fn list_books(
     ApiJson(search): ApiJson<BookSearch>,
 ) -> Result<Json<SpringPage<BookDto>>, ApiError> {
     let page = parse_page_request(raw_query.as_deref())?;
+    Ok(Json(SpringPage::from_content(
+        execute_book_query(&state, &auth.user, &search, &page).await?,
+    )))
+}
+
+pub(crate) async fn legacy_list_books(
+    State(state): State<AppState>,
+    Extension(auth): Extension<AuthContext>,
+    RawQuery(raw_query): RawQuery,
+) -> Result<Json<SpringPage<BookDto>>, ApiError> {
+    let query = parse_legacy_book_query(raw_query.as_deref())?;
+    Ok(Json(SpringPage::from_content(
+        execute_book_query(&state, &auth.user, &query.search, &query.page).await?,
+    )))
+}
+
+async fn execute_book_query(
+    state: &AppState,
+    user: &User,
+    search: &BookSearch,
+    page: &PageRequest,
+) -> Result<ContentPage<BookDto>, ApiError> {
     let mut result = if let Some(query) = non_empty(search.full_text_search.as_deref()) {
-        let hits = search_hits(&state, EntityKind::Book, query).await;
+        let hits = search_hits(state, EntityKind::Book, query).await;
         let mut database_search = search.clone();
         database_search.full_text_search = None;
         state
             .storage
-            .query_books(&database_search, &page, &auth.user, Some(&hits))
+            .query_books(&database_search, page, user, Some(&hits))
             .await?
     } else {
-        state.storage.query_books(&search, &page, &auth.user, None).await?
+        state.storage.query_books(search, page, user, None).await?
     };
     result
         .content
         .iter_mut()
-        .for_each(|book| redact_book_source_for_user(book, &auth.user));
-    Ok(Json(SpringPage::from_content(result)))
+        .for_each(|book| redact_book_source_for_user(book, user));
+    Ok(result)
 }
 
 pub(crate) async fn get_book(

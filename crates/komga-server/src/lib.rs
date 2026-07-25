@@ -16,6 +16,7 @@ mod content_routes;
 mod dto;
 mod error;
 mod filesystem_routes;
+mod legacy_content_query;
 mod library_routes;
 mod media_routes;
 mod metadata_routes;
@@ -459,6 +460,11 @@ pub fn build_app(state: AppState) -> Router {
             "/api/v1/series/list/alphabetical-groups",
             post(content_routes::series_alphabetical_groups),
         )
+        .route("/api/v1/series", get(content_routes::legacy_list_series))
+        .route(
+            "/api/v1/series/alphabetical-groups",
+            get(content_routes::legacy_series_alphabetical_groups),
+        )
         .route("/api/v1/series/latest", get(content_routes::latest_series))
         .route("/api/v1/series/new", get(content_routes::new_series))
         .route("/api/v1/series/updated", get(content_routes::updated_series))
@@ -504,6 +510,7 @@ pub fn build_app(state: AppState) -> Router {
             post(metadata_routes::refresh_series_metadata),
         )
         .route("/api/v1/books/list", post(content_routes::list_books))
+        .route("/api/v1/books", get(content_routes::legacy_list_books))
         .route("/api/v1/books/latest", get(content_routes::latest_books))
         .route("/api/v1/books/ondeck", get(content_routes::books_on_deck))
         .route(

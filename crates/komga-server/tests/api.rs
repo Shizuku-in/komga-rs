@@ -27,6 +27,8 @@ mod support;
 mod auth_cases;
 #[path = "api_cases/book_files.rs"]
 mod book_file_cases;
+#[path = "api_cases/legacy_content.rs"]
+mod legacy_content_cases;
 #[path = "api_cases/library_content.rs"]
 mod library_content_cases;
 #[path = "api_cases/lifecycle.rs"]

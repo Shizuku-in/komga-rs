@@ -1157,6 +1157,7 @@ fn series_sort_column(property: &str) -> Option<&'static str> {
         "name" => Some("s.NAME COLLATE NOCASE"),
         "booksCount" => Some("s.BOOK_COUNT"),
         "collection.number" => Some("(SELECT cs.NUMBER FROM COLLECTION_SERIES cs WHERE cs.SERIES_ID = s.ID)"),
+        "random" => Some("random()"),
         _ => None,
     }
 }
