@@ -30,7 +30,7 @@ use serde::Serialize;
 use serde_json::Value;
 use url::Url;
 
-use crate::{AppState, auth::AuthContext, content_routes::load_visible_book_context, error::ApiError};
+use crate::{AppState, auth::AuthContext, content_access::load_visible_book_context, error::ApiError};
 
 const DIVINA_MEDIA_TYPE: &str = "application/divina+json";
 const WEBPUB_MEDIA_TYPE: &str = "application/webpub+json";

@@ -15,6 +15,7 @@ mod library;
 mod lifecycle;
 mod media;
 mod metadata;
+mod query_support;
 mod read_progress;
 mod schema;
 mod settings;

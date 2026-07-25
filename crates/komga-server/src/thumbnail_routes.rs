@@ -16,7 +16,7 @@ use url::Url;
 use crate::{
     AppState,
     auth::AuthContext,
-    content_routes::{load_visible_book, load_visible_series},
+    content_access::{load_visible_book, load_visible_series},
     error::ApiError,
     routes::require_admin,
 };

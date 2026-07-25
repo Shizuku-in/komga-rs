@@ -17,7 +17,7 @@ use komga_core::UserRole;
 use tokio::fs::File;
 use tokio_util::io::ReaderStream;
 
-use crate::{AppState, auth::AuthContext, content_routes::load_visible_book, error::ApiError};
+use crate::{AppState, auth::AuthContext, content_access::load_visible_book, error::ApiError};
 
 const STREAM_BUFFER_CAPACITY: usize = 8 * 1024;
 const MOVED_FILE_MESSAGE: &str = "File not found, it may have moved";

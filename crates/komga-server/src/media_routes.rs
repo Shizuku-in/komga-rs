@@ -25,7 +25,7 @@ use serde::Deserialize;
 use crate::{
     AppState,
     auth::{self, AuthContext},
-    content_routes::load_visible_book,
+    content_access::load_visible_book,
     dto::{PageDto, PositionsDto},
     error::ApiError,
     routes::require_admin,

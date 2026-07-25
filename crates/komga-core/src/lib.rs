@@ -8,8 +8,10 @@
 
 mod containers;
 mod content;
+mod content_query;
 mod media;
 mod metadata;
+mod pagination;
 mod progress;
 mod scanner;
 
@@ -26,10 +28,12 @@ pub use containers::{
     ReadListRequestMatchDto,
 };
 pub use content::{
-    AlternateTitleDto, AuthorDto, BookCondition, BookDto, BookMetadataAggregationDto, BookMetadataDto, BookSearch,
-    BooleanOperator, ContentPage, EqualityOperator, MediaDto, PageRequest, ReadProgressDto, ReadStatus,
-    ReadStatusOperator, SeriesCondition, SeriesDto, SeriesMetadataDto, SeriesSearch, SortDirection, SortOrder,
-    StringOperator, WebLinkDto,
+    AlternateTitleDto, AuthorDto, BookDto, BookMetadataAggregationDto, BookMetadataDto, MediaDto, ReadProgressDto,
+    SeriesDto, SeriesMetadataDto, WebLinkDto,
+};
+pub use content_query::{
+    BookCondition, BookSearch, BooleanOperator, EqualityOperator, ReadStatus, ReadStatusOperator, SeriesCondition,
+    SeriesSearch, StringOperator,
 };
 pub use media::{
     BookPage, Dimension, EPUB_ASSET_SUBTYPE, EPUB_EXTENSION_CLASS, EPUB_MEDIA_TYPE, EPUB_PAGE_SUBTYPE, EpubTocEntry,
@@ -41,6 +45,7 @@ pub use metadata::{
     AlternateTitle, Author, BookMetadata, BookMetadataAggregation, BookMetadataPatch, MetadataError, MetadataUpdate,
     ReadingDirection, SeriesMetadata, SeriesMetadataPatch, SeriesStatus, WebLink, aggregate_book_metadata,
 };
+pub use pagination::{ContentPage, PageRequest, SortDirection, SortOrder};
 pub use progress::{
     R2Device, R2Progression, ReadProgress, ReadProgressError, SeriesReadProgressDto, completed_progress, page_progress,
     progression, series_read_progress,

@@ -3,10 +3,12 @@
 use crate::{
     AppState,
     auth::AuthContext,
-    content_routes::{SpringPage, non_empty, parse_page_request, restrict_book_url, search_hits},
+    content_access::{load_visible_book, load_visible_series, restrict_book_url},
     dto::{CollectionPatchDto, ReadListPatchDto, preserving},
     error::ApiError,
+    pagination::{SpringPage, parse_page_request},
     routes::{ApiJson, require_admin},
+    search_query::{non_empty, search_hits},
 };
 use axum::{
     Json,
@@ -134,7 +136,7 @@ pub(crate) async fn series_collections(
     Extension(auth): Extension<AuthContext>,
     Path(id): Path<String>,
 ) -> Result<Json<Vec<CollectionDto>>, ApiError> {
-    crate::content_routes::load_visible_series(&state, &auth.user, &id).await?;
+    load_visible_series(&state, &auth.user, &id).await?;
     Ok(Json(state.storage.collections_for_series(&id, &auth.user).await?))
 }
 
@@ -249,7 +251,7 @@ pub(crate) async fn book_read_lists(
     Extension(auth): Extension<AuthContext>,
     Path(id): Path<String>,
 ) -> Result<Json<Vec<ReadListDto>>, ApiError> {
-    crate::content_routes::load_visible_book(&state, &auth.user, &id).await?;
+    load_visible_book(&state, &auth.user, &id).await?;
     Ok(Json(state.storage.read_lists_for_book(&id, &auth.user).await?))
 }
 async fn sibling(
