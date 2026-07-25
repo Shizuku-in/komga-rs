@@ -2,7 +2,19 @@
 
 An incremental Rust port of the [Komga](https://github.com/gotson/komga) backend. The Kotlin source checked out in `komga/` is the behavioral reference; the Rust implementation is a separate workspace at the repository root.
 
-> This is not yet a drop-in replacement for a complete Komga server. The implemented slices cover startup, SQLite, server claiming, sessions, API keys, users, library configuration, client settings, persistent task processing, basic filesystem scanning, and read-only Series/Book queries. See [the migration matrix](docs/MIGRATION.md) for exact coverage.
+> The core headless backend is usable, but this is not yet a drop-in replacement for a complete Komga server. Users and permissions, library scanning, content browsing and reading, progress, collections and read lists, search, media delivery, metadata, and persistent background tasks are implemented. See [the migration matrix](docs/MIGRATION.md) for exact coverage.
+
+## Port status
+
+The migration matrix currently tracks 13 functional areas: 2 are implemented or core-complete, 8 are partially implemented, and 3 are pending.
+
+| Status | Areas |
+| --- | --- |
+| Implemented / core-complete | Claim and users; collections and read lists |
+| Partial | Process and configuration; SQLite; authentication; libraries and scanner; Series, Books, and progress; media; search; operations |
+| Pending | OPDS; device sync; Web UI packaging |
+
+Recent content work added modern and deprecated Series/Book queries, legacy regex search, duplicate-book discovery, book-file hashing, and configurable ZIP edge-page hashing. The next content slice is PageHash administration, duplicate-page discovery, and safe page removal; OPDS and device synchronization remain later work.
 
 ## Run
 
