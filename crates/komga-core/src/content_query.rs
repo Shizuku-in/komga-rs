@@ -1,7 +1,10 @@
 //! Framework-independent query contracts for library content.
 
+use chrono::{DateTime, FixedOffset};
 use serde::{Deserialize, Deserializer, de::Error as _};
 use serde_json::Value;
+
+use crate::{MediaProfile, MediaStatus, SeriesStatus};
 
 /// Read states supported by Komga search conditions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -15,39 +18,176 @@ pub enum ReadStatus {
     InProgress,
 }
 
-/// Equality operator used by identifier and status conditions.
+/// Equality operator used by scalar search conditions.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(tag = "operator", rename_all = "camelCase", deny_unknown_fields)]
-pub enum EqualityOperator {
+pub enum EqualityOperator<T = String> {
     /// Match the supplied value.
     Is {
         /// Value to match.
-        value: String,
+        value: T,
     },
     /// Exclude the supplied value.
     IsNot {
         /// Value to exclude.
-        value: String,
+        value: T,
     },
 }
 
-/// Equality operator for read-status conditions.
+/// Equality operator for nullable fields or related-value collections.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(tag = "operator", rename_all = "camelCase", deny_unknown_fields)]
-pub enum ReadStatusOperator {
-    /// Match the supplied status.
+pub enum NullableEqualityOperator<T> {
+    /// Match the supplied value.
     Is {
-        /// Status to match.
-        value: ReadStatus,
+        /// Value to match.
+        value: T,
     },
-    /// Exclude the supplied status.
+    /// Exclude the supplied value.
     IsNot {
-        /// Status to exclude.
-        value: ReadStatus,
+        /// Value to exclude.
+        value: T,
+    },
+    /// Match missing values.
+    IsNull,
+    /// Match present values.
+    IsNotNull,
+}
+
+/// Numeric comparison operator.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(tag = "operator", rename_all = "camelCase", deny_unknown_fields)]
+pub enum NumericOperator<T> {
+    /// Match the supplied value.
+    Is {
+        /// Value to match.
+        value: T,
+    },
+    /// Exclude the supplied value.
+    IsNot {
+        /// Value to exclude.
+        value: T,
+    },
+    /// Match values greater than the supplied value.
+    GreaterThan {
+        /// Exclusive lower bound.
+        value: T,
+    },
+    /// Match values less than the supplied value.
+    LessThan {
+        /// Exclusive upper bound.
+        value: T,
     },
 }
 
-/// Boolean operator used by deleted and one-shot conditions.
+/// Numeric comparison operator for nullable fields.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(tag = "operator", rename_all = "camelCase", deny_unknown_fields)]
+pub enum NullableNumericOperator<T> {
+    /// Match the supplied value.
+    Is {
+        /// Value to match.
+        value: T,
+    },
+    /// Exclude the supplied value, including null fields.
+    IsNot {
+        /// Value to exclude.
+        value: T,
+    },
+    /// Match values greater than the supplied value.
+    GreaterThan {
+        /// Exclusive lower bound.
+        value: T,
+    },
+    /// Match values less than the supplied value.
+    LessThan {
+        /// Exclusive upper bound.
+        value: T,
+    },
+    /// Match null fields.
+    IsNull,
+    /// Match non-null fields.
+    IsNotNull,
+}
+
+/// Date comparison operator.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(missing_docs)]
+pub enum DateOperator {
+    /// Match dates strictly before the supplied instant's UTC date.
+    Before { date_time: DateTime<FixedOffset> },
+    /// Match dates strictly after the supplied instant's UTC date.
+    After { date_time: DateTime<FixedOffset> },
+    /// Match dates strictly newer than the current UTC date minus this many days.
+    IsInTheLast { days: i64 },
+    /// Match dates strictly older than the current UTC date minus this many days.
+    IsNotInTheLast { days: i64 },
+    /// Match null dates.
+    IsNull,
+    /// Match non-null dates.
+    IsNotNull,
+}
+
+impl<'de> Deserialize<'de> for DateOperator {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(tag = "operator", rename_all = "camelCase", deny_unknown_fields)]
+        enum RawDateOperator {
+            Before {
+                #[serde(rename = "dateTime")]
+                date_time: DateTime<FixedOffset>,
+            },
+            After {
+                #[serde(rename = "dateTime")]
+                date_time: DateTime<FixedOffset>,
+            },
+            IsInTheLast {
+                duration: String,
+            },
+            IsNotInTheLast {
+                duration: String,
+            },
+            IsNull,
+            IsNotNull,
+        }
+
+        match RawDateOperator::deserialize(deserializer)? {
+            RawDateOperator::Before { date_time } => Ok(Self::Before { date_time }),
+            RawDateOperator::After { date_time } => Ok(Self::After { date_time }),
+            RawDateOperator::IsInTheLast { duration } => parse_duration_days(&duration)
+                .map(|days| Self::IsInTheLast { days })
+                .map_err(D::Error::custom),
+            RawDateOperator::IsNotInTheLast { duration } => parse_duration_days(&duration)
+                .map(|days| Self::IsNotInTheLast { days })
+                .map_err(D::Error::custom),
+            RawDateOperator::IsNull => Ok(Self::IsNull),
+            RawDateOperator::IsNotNull => Ok(Self::IsNotNull),
+        }
+    }
+}
+
+fn parse_duration_days(value: &str) -> Result<i64, String> {
+    let duration = value
+        .parse::<iso8601_duration::Duration>()
+        .map_err(|error| format!("invalid ISO 8601 duration: {error:?}"))?;
+    if duration.year != 0.0 || duration.month != 0.0 {
+        return Err("relative date durations cannot contain years or months".into());
+    }
+    let seconds = duration
+        .num_seconds()
+        .filter(|seconds| seconds.is_finite() && *seconds >= 0.0)
+        .ok_or_else(|| "relative date duration is out of range".to_owned())?;
+    let days = f64::from(seconds) / 86_400.0;
+    if days > i64::MAX as f64 {
+        return Err("relative date duration is out of range".into());
+    }
+    Ok(days.trunc() as i64)
+}
+
+/// Boolean operator used by deleted, complete, and one-shot conditions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(tag = "operator", rename_all = "camelCase", deny_unknown_fields)]
 pub enum BooleanOperator {
@@ -60,102 +200,112 @@ pub enum BooleanOperator {
 /// String operator supported by title conditions.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(tag = "operator", rename_all = "camelCase", deny_unknown_fields)]
+#[allow(missing_docs)]
 pub enum StringOperator {
     /// Match the complete string case-insensitively.
-    Is {
-        /// Value to match.
-        value: String,
-    },
+    Is { value: String },
     /// Exclude the complete string case-insensitively.
-    IsNot {
-        /// Value to exclude.
-        value: String,
-    },
+    IsNot { value: String },
     /// Match strings containing the value case-insensitively.
-    Contains {
-        /// Value that must occur in the field.
-        value: String,
-    },
+    Contains { value: String },
     /// Exclude strings containing the value case-insensitively.
-    DoesNotContain {
-        /// Value that must not occur in the field.
-        value: String,
-    },
+    DoesNotContain { value: String },
     /// Match strings beginning with the value case-insensitively.
-    BeginsWith {
-        /// Required field prefix.
-        value: String,
-    },
+    BeginsWith { value: String },
     /// Exclude strings beginning with the value case-insensitively.
-    DoesNotBeginWith {
-        /// Forbidden field prefix.
-        value: String,
-    },
+    DoesNotBeginWith { value: String },
     /// Match strings ending with the value case-insensitively.
-    EndsWith {
-        /// Required field suffix.
-        value: String,
-    },
+    EndsWith { value: String },
     /// Exclude strings ending with the value case-insensitively.
-    DoesNotEndWith {
-        /// Forbidden field suffix.
-        value: String,
-    },
+    DoesNotEndWith { value: String },
+}
+
+/// Author fields matched together against one author relation.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AuthorMatch {
+    /// Exact author name, or any name when omitted.
+    pub name: Option<String>,
+    /// Exact author role, or any role when omitted.
+    pub role: Option<String>,
+}
+
+/// Persisted book poster origin.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum PosterType {
+    /// Generated from book content.
+    Generated,
+    /// Loaded from a sidecar image.
+    Sidecar,
+    /// Uploaded by a user.
+    UserUploaded,
+}
+
+impl PosterType {
+    /// Returns the value stored in `THUMBNAIL_BOOK.TYPE`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Generated => "GENERATED",
+            Self::Sidecar => "SIDECAR",
+            Self::UserUploaded => "USER_UPLOADED",
+        }
+    }
+}
+
+/// Poster fields matched together against one thumbnail relation.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PosterMatch {
+    /// Poster origin, or any origin when omitted.
+    #[serde(rename = "type")]
+    pub poster_type: Option<PosterType>,
+    /// Selection state, or either state when omitted.
+    pub selected: Option<bool>,
 }
 
 /// Supported Series search-condition tree.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
+#[allow(missing_docs)]
 pub enum SeriesCondition {
     /// Every nested condition must match.
-    AllOf {
-        /// Nested conditions.
-        conditions: Vec<SeriesCondition>,
-    },
+    AllOf { conditions: Vec<SeriesCondition> },
     /// At least one nested condition must match.
-    AnyOf {
-        /// Nested conditions.
-        conditions: Vec<SeriesCondition>,
-    },
+    AnyOf { conditions: Vec<SeriesCondition> },
     /// Match an owning library identifier.
-    LibraryId {
-        /// Equality operation.
-        operator: EqualityOperator,
-    },
+    LibraryId { operator: EqualityOperator },
     /// Match membership in a collection.
-    CollectionId {
-        /// Equality operation.
-        operator: EqualityOperator,
-    },
+    CollectionId { operator: EqualityOperator },
     /// Match soft-deletion state.
-    Deleted {
-        /// Boolean operation.
-        deleted: BooleanOperator,
-    },
+    Deleted { operator: BooleanOperator },
+    /// Match metadata completeness.
+    Complete { operator: BooleanOperator },
     /// Match one-shot state.
-    OneShot {
-        /// Boolean operation.
-        operator: BooleanOperator,
-    },
+    OneShot { operator: BooleanOperator },
     /// Match the display title.
-    Title {
-        /// String operation.
-        title: StringOperator,
-    },
+    Title { operator: StringOperator },
     /// Match the sort title.
-    TitleSort {
-        /// String operation.
-        operator: StringOperator,
-    },
+    TitleSort { operator: StringOperator },
+    /// Match the aggregated book release date.
+    ReleaseDate { operator: DateOperator },
+    /// Match series or aggregated book tags.
+    Tag { operator: NullableEqualityOperator<String> },
+    /// Match sharing labels.
+    SharingLabel { operator: NullableEqualityOperator<String> },
+    /// Match the publisher.
+    Publisher { operator: EqualityOperator },
+    /// Match the language.
+    Language { operator: EqualityOperator },
+    /// Match genres.
+    Genre { operator: NullableEqualityOperator<String> },
+    /// Match the nullable age rating.
+    AgeRating { operator: NullableNumericOperator<i32> },
     /// Match publication status.
-    SeriesStatus {
-        /// Equality operation.
-        operator: EqualityOperator,
-    },
+    SeriesStatus { operator: EqualityOperator<SeriesStatus> },
     /// Match the requesting user's read status.
-    ReadStatus {
-        /// Read-status operation.
-        operator: ReadStatusOperator,
-    },
+    ReadStatus { operator: EqualityOperator<ReadStatus> },
+    /// Match aggregated authors.
+    Author { operator: EqualityOperator<AuthorMatch> },
 }
 
 impl<'de> Deserialize<'de> for SeriesCondition {
@@ -163,35 +313,33 @@ impl<'de> Deserialize<'de> for SeriesCondition {
     where
         D: Deserializer<'de>,
     {
-        let value = Value::deserialize(deserializer)?;
-        let Value::Object(object) = value else {
-            return Err(D::Error::custom("series condition must be an object"));
-        };
-        if object.len() != 1 {
-            return Err(D::Error::custom(
-                "series condition must contain exactly one supported field",
-            ));
-        }
-        let (field, value) = object.into_iter().next().expect("object contains one entry");
-        let parsed = match field.as_str() {
+        deserialize_condition(deserializer, |field, value| match field {
             "allOf" => from_json(value).map(|conditions| Self::AllOf { conditions }),
             "anyOf" => from_json(value).map(|conditions| Self::AnyOf { conditions }),
             "libraryId" => from_json(value).map(|operator| Self::LibraryId { operator }),
             "collectionId" => from_json(value).map(|operator| Self::CollectionId { operator }),
-            "deleted" => from_json(value).map(|deleted| Self::Deleted { deleted }),
+            "deleted" => from_json(value).map(|operator| Self::Deleted { operator }),
+            "complete" => from_json(value).map(|operator| Self::Complete { operator }),
             "oneShot" => from_json(value).map(|operator| Self::OneShot { operator }),
-            "title" => from_json(value).map(|title| Self::Title { title }),
+            "title" => from_json(value).map(|operator| Self::Title { operator }),
             "titleSort" => from_json(value).map(|operator| Self::TitleSort { operator }),
+            "releaseDate" => from_json(value).map(|operator| Self::ReleaseDate { operator }),
+            "tag" => from_json(value).map(|operator| Self::Tag { operator }),
+            "sharingLabel" => from_json(value).map(|operator| Self::SharingLabel { operator }),
+            "publisher" => from_json(value).map(|operator| Self::Publisher { operator }),
+            "language" => from_json(value).map(|operator| Self::Language { operator }),
+            "genre" => from_json(value).map(|operator| Self::Genre { operator }),
+            "ageRating" => from_json(value).map(|operator| Self::AgeRating { operator }),
             "seriesStatus" => from_json(value).map(|operator| Self::SeriesStatus { operator }),
             "readStatus" => from_json(value).map(|operator| Self::ReadStatus { operator }),
-            _ => return Err(D::Error::custom(format!("unsupported series condition: {field}"))),
-        };
-        parsed.map_err(D::Error::custom)
+            "author" => from_json(value).map(|operator| Self::Author { operator }),
+            _ => Err(format!("unsupported series condition: {field}")),
+        })
     }
 }
 
 /// Request body accepted by the modern Series list endpoint.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SeriesSearch {
     /// Optional condition tree.
@@ -201,58 +349,41 @@ pub struct SeriesSearch {
 }
 
 /// Supported Book search-condition tree.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
+#[allow(missing_docs)]
 pub enum BookCondition {
     /// Every nested condition must match.
-    AllOf {
-        /// Nested conditions.
-        conditions: Vec<BookCondition>,
-    },
+    AllOf { conditions: Vec<BookCondition> },
     /// At least one nested condition must match.
-    AnyOf {
-        /// Nested conditions.
-        conditions: Vec<BookCondition>,
-    },
+    AnyOf { conditions: Vec<BookCondition> },
     /// Match an owning library identifier.
-    LibraryId {
-        /// Equality operation.
-        operator: EqualityOperator,
-    },
+    LibraryId { operator: EqualityOperator },
     /// Match a parent series identifier.
-    SeriesId {
-        /// Equality operation.
-        operator: EqualityOperator,
-    },
+    SeriesId { operator: EqualityOperator },
     /// Match membership in a read list.
-    ReadListId {
-        /// Equality operation.
-        operator: EqualityOperator,
-    },
+    ReadListId { operator: EqualityOperator },
     /// Match soft-deletion state.
-    Deleted {
-        /// Boolean operation.
-        deleted: BooleanOperator,
-    },
+    Deleted { operator: BooleanOperator },
     /// Match one-shot state.
-    OneShot {
-        /// Boolean operation.
-        operator: BooleanOperator,
-    },
+    OneShot { operator: BooleanOperator },
     /// Match the metadata title.
-    Title {
-        /// String operation.
-        title: StringOperator,
-    },
+    Title { operator: StringOperator },
+    /// Match the metadata release date.
+    ReleaseDate { operator: DateOperator },
+    /// Match metadata tags.
+    Tag { operator: NullableEqualityOperator<String> },
+    /// Match metadata number sort.
+    NumberSort { operator: NumericOperator<f64> },
     /// Match media-analysis status.
-    MediaStatus {
-        /// Equality operation.
-        operator: EqualityOperator,
-    },
+    MediaStatus { operator: EqualityOperator<MediaStatus> },
+    /// Match media rendering profile.
+    MediaProfile { operator: EqualityOperator<MediaProfile> },
     /// Match the requesting user's read status.
-    ReadStatus {
-        /// Read-status operation.
-        operator: ReadStatusOperator,
-    },
+    ReadStatus { operator: EqualityOperator<ReadStatus> },
+    /// Match metadata authors.
+    Author { operator: EqualityOperator<AuthorMatch> },
+    /// Match book posters.
+    Poster { operator: EqualityOperator<PosterMatch> },
 }
 
 impl<'de> Deserialize<'de> for BookCondition {
@@ -260,42 +391,55 @@ impl<'de> Deserialize<'de> for BookCondition {
     where
         D: Deserializer<'de>,
     {
-        let value = Value::deserialize(deserializer)?;
-        let Value::Object(object) = value else {
-            return Err(D::Error::custom("book condition must be an object"));
-        };
-        if object.len() != 1 {
-            return Err(D::Error::custom(
-                "book condition must contain exactly one supported field",
-            ));
-        }
-        let (field, value) = object.into_iter().next().expect("object contains one entry");
-        let parsed = match field.as_str() {
+        deserialize_condition(deserializer, |field, value| match field {
             "allOf" => from_json(value).map(|conditions| Self::AllOf { conditions }),
             "anyOf" => from_json(value).map(|conditions| Self::AnyOf { conditions }),
             "libraryId" => from_json(value).map(|operator| Self::LibraryId { operator }),
             "seriesId" => from_json(value).map(|operator| Self::SeriesId { operator }),
             "readListId" => from_json(value).map(|operator| Self::ReadListId { operator }),
-            "deleted" => from_json(value).map(|deleted| Self::Deleted { deleted }),
+            "deleted" => from_json(value).map(|operator| Self::Deleted { operator }),
             "oneShot" => from_json(value).map(|operator| Self::OneShot { operator }),
-            "title" => from_json(value).map(|title| Self::Title { title }),
+            "title" => from_json(value).map(|operator| Self::Title { operator }),
+            "releaseDate" => from_json(value).map(|operator| Self::ReleaseDate { operator }),
+            "tag" => from_json(value).map(|operator| Self::Tag { operator }),
+            "numberSort" => from_json(value).map(|operator| Self::NumberSort { operator }),
             "mediaStatus" => from_json(value).map(|operator| Self::MediaStatus { operator }),
+            "mediaProfile" => from_json(value).map(|operator| Self::MediaProfile { operator }),
             "readStatus" => from_json(value).map(|operator| Self::ReadStatus { operator }),
-            _ => return Err(D::Error::custom(format!("unsupported book condition: {field}"))),
-        };
-        parsed.map_err(D::Error::custom)
+            "author" => from_json(value).map(|operator| Self::Author { operator }),
+            "poster" => from_json(value).map(|operator| Self::Poster { operator }),
+            _ => Err(format!("unsupported book condition: {field}")),
+        })
     }
 }
 
-fn from_json<T>(value: Value) -> std::result::Result<T, serde_json::Error>
+fn deserialize_condition<'de, D, T, F>(deserializer: D, parse: F) -> Result<T, D::Error>
+where
+    D: Deserializer<'de>,
+    F: FnOnce(&str, Value) -> Result<T, String>,
+{
+    let value = Value::deserialize(deserializer)?;
+    let Value::Object(object) = value else {
+        return Err(D::Error::custom("search condition must be an object"));
+    };
+    if object.len() != 1 {
+        return Err(D::Error::custom(
+            "search condition must contain exactly one supported field",
+        ));
+    }
+    let (field, value) = object.into_iter().next().expect("object contains one entry");
+    parse(&field, value).map_err(D::Error::custom)
+}
+
+fn from_json<T>(value: Value) -> Result<T, String>
 where
     T: serde::de::DeserializeOwned,
 {
-    serde_json::from_value(value)
+    serde_json::from_value(value).map_err(|error| error.to_string())
 }
 
 /// Request body accepted by the modern Book list endpoint.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BookSearch {
     /// Optional condition tree.
@@ -309,17 +453,50 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_nested_supported_search_conditions() {
-        let search: BookSearch = serde_json::from_str(
-            r#"{"condition":{"allOf":[{"seriesId":{"operator":"is","value":"series"}},{"deleted":{"operator":"isFalse"}}]}}"#,
+    fn parses_complete_condition_contract() {
+        let series: SeriesSearch = serde_json::from_str(
+            r#"{"condition":{"allOf":[{"complete":{"operator":"isFalse"}},{"releaseDate":{"operator":"isInTheLast","duration":"P10DT23H"}},{"author":{"operator":"is","value":{}}},{"seriesStatus":{"operator":"is","value":"ONGOING"}}]}}"#,
         )
         .unwrap();
-        assert!(matches!(search.condition, Some(BookCondition::AllOf { conditions }) if conditions.len() == 2));
+        assert!(matches!(series.condition, Some(SeriesCondition::AllOf { conditions }) if conditions.len() == 4));
+
+        let book: BookSearch = serde_json::from_str(
+            r#"{"condition":{"allOf":[{"numberSort":{"operator":"greaterThan","value":1.5}},{"mediaStatus":{"operator":"is","value":"READY"}},{"mediaProfile":{"operator":"isNot","value":"EPUB"}},{"poster":{"operator":"is","value":{"type":"SIDECAR","selected":true}}}]}}"#,
+        )
+        .unwrap();
+        assert!(matches!(book.condition, Some(BookCondition::AllOf { conditions }) if conditions.len() == 4));
+    }
+
+    #[test]
+    fn relative_duration_uses_whole_utc_days() {
+        let search: BookSearch = serde_json::from_str(
+            r#"{"condition":{"releaseDate":{"operator":"isInTheLast","duration":"P1DT23H59M59S"}}}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            search.condition,
+            Some(BookCondition::ReleaseDate {
+                operator: DateOperator::IsInTheLast { days: 1 }
+            })
+        ));
+    }
+
+    #[test]
+    fn rejects_calendar_or_invalid_durations_and_wrong_enum_case() {
+        for duration in ["P1Y", "P1M", "nope", "P"] {
+            let json =
+                format!(r#"{{"condition":{{"releaseDate":{{"operator":"isInTheLast","duration":"{duration}"}}}}}}"#,);
+            assert!(serde_json::from_str::<BookSearch>(&json).is_err());
+        }
+        assert!(
+            serde_json::from_str::<BookSearch>(r#"{"condition":{"mediaStatus":{"operator":"is","value":"ready"}}}"#,)
+                .is_err()
+        );
     }
 
     #[test]
     fn rejects_unsupported_or_ambiguous_search_conditions() {
-        assert!(serde_json::from_str::<SeriesSearch>(r#"{"condition":{"poster":{"operator":"isTrue"}}}"#,).is_err());
+        assert!(serde_json::from_str::<SeriesSearch>(r#"{"condition":{"poster":{"operator":"isTrue"}}}"#).is_err());
         assert!(
             serde_json::from_str::<BookSearch>(
                 r#"{"condition":{"seriesId":{"operator":"is","value":"series"},"poster":{"operator":"isTrue"}}}"#,

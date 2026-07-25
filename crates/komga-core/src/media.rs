@@ -25,7 +25,8 @@ pub const EPUB_PAGE_SUBTYPE: &str = "EPUB_PAGE";
 pub const EPUB_ASSET_SUBTYPE: &str = "EPUB_ASSET";
 
 /// Rendering profile selected from a detected media type.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum MediaProfile {
     /// Image pages stored in ZIP or RAR containers.
     Divina,
@@ -96,7 +97,8 @@ pub struct MediaFile {
 }
 
 /// Lifecycle state of analyzed media.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum MediaStatus {
     /// The book has never been analyzed.
     Unknown,

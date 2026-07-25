@@ -31,7 +31,7 @@ pub use tasks::{RebuildIndexEntity, TaskRecord, TaskStorage};
 
 pub(crate) use auth::sqlite_datetime_to_utc;
 
-use std::{collections::BTreeSet, path::Path, str::FromStr, time::Duration};
+use std::{cmp::Ordering, collections::BTreeSet, path::Path, str::FromStr, time::Duration};
 
 use komga_core::{AgeRestriction, AllowExclude, ContentRestrictions, User, UserRole};
 use sqlx::{
@@ -39,6 +39,18 @@ use sqlx::{
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions},
 };
 use thiserror::Error;
+use unicode_normalization::UnicodeNormalization;
+
+const UNICODE_NOCASE_COLLATION: &str = "KOMGA_UNICODE_NOCASE";
+
+fn unicode_nocase_compare(left: &str, right: &str) -> Ordering {
+    let normalize = |value: &str| value.nfkc().flat_map(char::to_lowercase).collect::<String>();
+    normalize(left).cmp(&normalize(right))
+}
+
+fn with_unicode_nocase(options: SqliteConnectOptions) -> SqliteConnectOptions {
+    options.collation(UNICODE_NOCASE_COLLATION, unicode_nocase_compare)
+}
 
 /// Errors produced by SQLite access or compatibility migrations.
 #[derive(Debug, Error)]
@@ -97,11 +109,13 @@ impl Storage {
     /// Returns [`StorageError::Database`] when the URL or connection is invalid,
     /// or [`StorageError::Migration`] when the schema cannot be initialized.
     pub async fn connect(database_path: &str) -> Result<Self> {
-        let options = SqliteConnectOptions::from_str(database_path)?
-            .create_if_missing(true)
-            .foreign_keys(true)
-            .busy_timeout(Duration::from_secs(30))
-            .journal_mode(SqliteJournalMode::Wal);
+        let options = with_unicode_nocase(
+            SqliteConnectOptions::from_str(database_path)?
+                .create_if_missing(true)
+                .foreign_keys(true)
+                .busy_timeout(Duration::from_secs(30))
+                .journal_mode(SqliteJournalMode::Wal),
+        );
         let pool = SqlitePoolOptions::new()
             .max_connections(8)
             .connect_with(options)
@@ -121,12 +135,14 @@ impl Storage {
     ///
     /// Returns a storage error if the file cannot be opened or migrated.
     pub async fn connect_path(database_path: &Path) -> Result<Self> {
-        let options = SqliteConnectOptions::new()
-            .filename(database_path)
-            .create_if_missing(true)
-            .foreign_keys(true)
-            .busy_timeout(Duration::from_secs(30))
-            .journal_mode(SqliteJournalMode::Wal);
+        let options = with_unicode_nocase(
+            SqliteConnectOptions::new()
+                .filename(database_path)
+                .create_if_missing(true)
+                .foreign_keys(true)
+                .busy_timeout(Duration::from_secs(30))
+                .journal_mode(SqliteJournalMode::Wal),
+        );
         let pool = SqlitePoolOptions::new()
             .max_connections(8)
             .connect_with(options)
@@ -146,9 +162,11 @@ impl Storage {
     ///
     /// Returns a storage error if the in-memory schema cannot be initialized.
     pub async fn connect_memory() -> Result<Self> {
-        let options = SqliteConnectOptions::from_str("sqlite::memory:")?
-            .foreign_keys(true)
-            .journal_mode(SqliteJournalMode::Memory);
+        let options = with_unicode_nocase(
+            SqliteConnectOptions::from_str("sqlite::memory:")?
+                .foreign_keys(true)
+                .journal_mode(SqliteJournalMode::Memory),
+        );
         let pool = SqlitePoolOptions::new()
             .max_connections(1)
             .connect_with(options)
@@ -562,8 +580,8 @@ mod tests {
     use super::*;
     use komga_core::{
         ALL_ROLES, AgeRestriction, AllowExclude, BookCondition, BookSearch, CollectionCreation, ContentRestrictions,
-        EqualityOperator, Library, PageRequest, ReadListCreation, ReadStatus, ReadStatusOperator, ScanInterval,
-        SeriesSearch, SortDirection, SortOrder, new_id, scan_library_files,
+        EqualityOperator, Library, MediaStatus, PageRequest, ReadListCreation, ReadStatus, ScanInterval, SeriesSearch,
+        SortDirection, SortOrder, new_id, scan_library_files,
     };
     use url::Url;
 
@@ -1013,6 +1031,19 @@ mod tests {
             .await
             .unwrap();
 
+        sqlx::query(
+            "UPDATE SERIES_METADATA SET TOTAL_BOOK_COUNT = 2, PUBLISHER = 'ＭＡＲＶＥＬ', LANGUAGE = 'EN' WHERE SERIES_ID = ?",
+        )
+        .bind(&series.id)
+        .execute(storage.pool())
+        .await
+        .unwrap();
+        sqlx::query("UPDATE BOOK_METADATA_AGGREGATION SET RELEASE_DATE = '2024-01-15' WHERE SERIES_ID = ?")
+            .bind(&series.id)
+            .execute(storage.pool())
+            .await
+            .unwrap();
+
         for book in &books {
             sqlx::query(
                 "UPDATE MEDIA SET STATUS = 'READY', MEDIA_TYPE = 'application/pdf', PAGE_COUNT = 4 WHERE BOOK_ID = ?",
@@ -1032,6 +1063,18 @@ mod tests {
             .execute(storage.pool())
             .await
             .unwrap();
+        sqlx::query("UPDATE BOOK_METADATA SET RELEASE_DATE = '2024-01-10', NUMBER_SORT = 1.5 WHERE BOOK_ID = ?")
+            .bind(&books[0].id)
+            .execute(storage.pool())
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO THUMBNAIL_BOOK (ID, SELECTED, TYPE, BOOK_ID) VALUES ('query-poster', 1, 'SIDECAR', ?)",
+        )
+        .bind(&books[0].id)
+        .execute(storage.pool())
+        .await
+        .unwrap();
         sqlx::query(
             "INSERT INTO BOOK_METADATA_LINK (BOOK_ID, LABEL, URL) VALUES (?, 'Info', 'https://example.org/book')",
         )
@@ -1068,9 +1111,104 @@ mod tests {
         assert_eq!(dto.metadata.links[0].label, "Source");
         assert_eq!(dto.books_metadata.authors[0].name, "Author");
 
+        let structured_series: SeriesSearch = serde_json::from_value(serde_json::json!({
+            "condition": {
+                "allOf": [
+                    {"complete": {"operator": "isTrue"}},
+                    {"releaseDate": {"operator": "after", "dateTime": "2024-01-01T23:00:00-05:00"}},
+                    {"tag": {"operator": "is", "value": "collected"}},
+                    {"sharingLabel": {"operator": "isNotNull"}},
+                    {"publisher": {"operator": "is", "value": "marvel"}},
+                    {"language": {"operator": "is", "value": "en"}},
+                    {"genre": {"operator": "is", "value": "fantasy"}},
+                    {"ageRating": {"operator": "greaterThan", "value": 12}},
+                    {"author": {"operator": "is", "value": {"name": "author", "role": "WRITER"}}}
+                ]
+            }
+        }))
+        .unwrap();
+        assert_eq!(
+            storage
+                .query_series(
+                    &structured_series,
+                    &PageRequest::default(),
+                    &user,
+                    Some(std::slice::from_ref(&series.id))
+                )
+                .await
+                .unwrap()
+                .total_elements,
+            1
+        );
+        let empty_author: SeriesSearch = serde_json::from_value(serde_json::json!({
+            "condition": {"author": {"operator": "isNot", "value": {}}}
+        }))
+        .unwrap();
+        assert_eq!(
+            storage
+                .query_series(&empty_author, &PageRequest::default(), &user, None)
+                .await
+                .unwrap()
+                .total_elements,
+            1
+        );
+
+        let structured_book: BookSearch = serde_json::from_value(serde_json::json!({
+            "condition": {
+                "allOf": [
+                    {"releaseDate": {"operator": "before", "dateTime": "2024-02-01T00:00:00Z"}},
+                    {"tag": {"operator": "is", "value": "booktag"}},
+                    {"numberSort": {"operator": "greaterThan", "value": 1}},
+                    {"mediaProfile": {"operator": "is", "value": "PDF"}},
+                    {"author": {"operator": "is", "value": {"name": "AUTHOR"}}},
+                    {"poster": {"operator": "is", "value": {"type": "SIDECAR", "selected": true}}}
+                ]
+            }
+        }))
+        .unwrap();
+        assert_eq!(
+            storage
+                .query_books(
+                    &structured_book,
+                    &PageRequest::default(),
+                    &user,
+                    Some(&[books[0].id.clone(), books[1].id.clone()])
+                )
+                .await
+                .unwrap()
+                .content[0]
+                .id,
+            books[0].id
+        );
+        let absent_tag: BookSearch = serde_json::from_value(serde_json::json!({
+            "condition": {"tag": {"operator": "isNull"}}
+        }))
+        .unwrap();
+        assert_eq!(
+            storage
+                .query_books(&absent_tag, &PageRequest::default(), &user, None)
+                .await
+                .unwrap()
+                .content[0]
+                .id,
+            books[1].id
+        );
+        let empty_poster: BookSearch = serde_json::from_value(serde_json::json!({
+            "condition": {"poster": {"operator": "is", "value": {}}}
+        }))
+        .unwrap();
+        assert_eq!(
+            storage
+                .query_books(&empty_poster, &PageRequest::default(), &user, None)
+                .await
+                .unwrap()
+                .total_elements,
+            2
+        );
+
         let read_search = BookSearch {
             condition: Some(BookCondition::ReadStatus {
-                operator: ReadStatusOperator::Is {
+                operator: EqualityOperator::Is {
                     value: ReadStatus::Read,
                 },
             }),
@@ -1301,7 +1439,9 @@ mod tests {
 
         let media_search = BookSearch {
             condition: Some(BookCondition::MediaStatus {
-                operator: EqualityOperator::Is { value: "READY".into() },
+                operator: EqualityOperator::Is {
+                    value: MediaStatus::Ready,
+                },
             }),
             full_text_search: None,
         };

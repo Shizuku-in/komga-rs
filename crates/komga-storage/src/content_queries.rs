@@ -1,10 +1,12 @@
 use std::collections::BTreeSet;
 
 use komga_core::{
-    AlternateTitleDto, AuthorDto, BookCondition, BookDto, BookMetadataAggregationDto, BookMetadataDto, BookSearch,
-    BooleanOperator, ContentPage, EqualityOperator, MediaDto, MediaProfile, PageRequest, ReadProgressDto, ReadStatus,
-    ReadStatusOperator, SeriesCondition, SeriesDto, SeriesMetadataDto, SeriesSearch, SortDirection, StringOperator,
-    User, WebLinkDto,
+    AlternateTitleDto, AuthorDto, AuthorMatch, BookCondition, BookDto, BookMetadataAggregationDto, BookMetadataDto,
+    BookSearch, BooleanOperator, ContentPage, DateOperator, EPUB_MEDIA_TYPE, EqualityOperator, MediaDto, MediaProfile,
+    MediaStatus, NullableEqualityOperator, NullableNumericOperator, NumericOperator, PDF_MEDIA_TYPE, PageRequest,
+    PosterMatch, RAR_MEDIA_TYPE, RAR4_MEDIA_TYPE, RAR5_MEDIA_TYPE, ReadProgressDto, ReadStatus, SeriesCondition,
+    SeriesDto, SeriesMetadataDto, SeriesSearch, SeriesStatus, SortDirection, StringOperator, User, WebLinkDto,
+    ZIP_MEDIA_TYPE,
 };
 use serde::Deserialize;
 use sqlx::{FromRow, QueryBuilder, Sqlite};
@@ -466,18 +468,42 @@ fn push_series_condition(query: &mut QueryBuilder<'static, Sqlite>, condition: &
         SeriesCondition::AnyOf { conditions } => {
             push_condition_group(query, conditions, " OR ", push_series_condition);
         }
-        SeriesCondition::LibraryId { operator } => push_equality(query, "s.LIBRARY_ID", operator),
-        SeriesCondition::CollectionId { operator } => {
-            query.push("EXISTS(SELECT 1 FROM COLLECTION_SERIES cs WHERE cs.SERIES_ID = s.ID AND ");
-            push_equality(query, "cs.COLLECTION_ID", operator);
-            query.push(")");
+        SeriesCondition::LibraryId { operator } => push_string_equality(query, "s.LIBRARY_ID", operator, false),
+        SeriesCondition::CollectionId { operator } => push_relation_equality(
+            query,
+            "COLLECTION_SERIES",
+            "SERIES_ID",
+            "s.ID",
+            "COLLECTION_ID",
+            operator,
+        ),
+        SeriesCondition::Deleted { operator } => push_optional_boolean(query, "s.DELETED_DATE", operator),
+        SeriesCondition::Complete { operator } => {
+            query.push("(sm.TOTAL_BOOK_COUNT IS NOT NULL AND sm.TOTAL_BOOK_COUNT");
+            query.push(match operator {
+                BooleanOperator::IsTrue => " = s.BOOK_COUNT)",
+                BooleanOperator::IsFalse => " <> s.BOOK_COUNT)",
+            });
         }
-        SeriesCondition::Deleted { deleted } => push_optional_boolean(query, "s.DELETED_DATE", deleted),
         SeriesCondition::OneShot { operator } => push_boolean(query, "s.ONESHOT", operator),
-        SeriesCondition::Title { title } => push_string_operator(query, "sm.TITLE", title),
+        SeriesCondition::Title { operator } => push_string_operator(query, "sm.TITLE", operator),
         SeriesCondition::TitleSort { operator } => push_string_operator(query, "sm.TITLE_SORT", operator),
-        SeriesCondition::SeriesStatus { operator } => push_equality(query, "sm.STATUS", operator),
+        SeriesCondition::ReleaseDate { operator } => push_date_operator(query, "bma.RELEASE_DATE", operator),
+        SeriesCondition::Tag { operator } => push_series_tag(query, operator),
+        SeriesCondition::SharingLabel { operator } => {
+            push_nullable_relation(query, "SERIES_METADATA_SHARING", "SERIES_ID", "s.ID", "LABEL", operator)
+        }
+        SeriesCondition::Publisher { operator } => push_string_equality(query, "sm.PUBLISHER", operator, true),
+        SeriesCondition::Language { operator } => push_string_equality(query, "sm.LANGUAGE", operator, true),
+        SeriesCondition::Genre { operator } => {
+            push_nullable_relation(query, "SERIES_METADATA_GENRE", "SERIES_ID", "s.ID", "GENRE", operator)
+        }
+        SeriesCondition::AgeRating { operator } => push_nullable_numeric(query, "sm.AGE_RATING", operator),
+        SeriesCondition::SeriesStatus { operator } => push_series_status(query, operator),
         SeriesCondition::ReadStatus { operator } => push_series_read_status(query, operator),
+        SeriesCondition::Author { operator } => {
+            push_author(query, "BOOK_METADATA_AGGREGATION_AUTHOR", "SERIES_ID", "s.ID", operator);
+        }
     }
 }
 
@@ -489,18 +515,26 @@ fn push_book_condition(query: &mut QueryBuilder<'static, Sqlite>, condition: &Bo
         BookCondition::AnyOf { conditions } => {
             push_condition_group(query, conditions, " OR ", push_book_condition);
         }
-        BookCondition::LibraryId { operator } => push_equality(query, "b.LIBRARY_ID", operator),
-        BookCondition::SeriesId { operator } => push_equality(query, "b.SERIES_ID", operator),
+        BookCondition::LibraryId { operator } => push_string_equality(query, "b.LIBRARY_ID", operator, false),
+        BookCondition::SeriesId { operator } => push_string_equality(query, "b.SERIES_ID", operator, false),
         BookCondition::ReadListId { operator } => {
-            query.push("EXISTS(SELECT 1 FROM READLIST_BOOK rb WHERE rb.BOOK_ID = b.ID AND ");
-            push_equality(query, "rb.READLIST_ID", operator);
-            query.push(")");
+            push_relation_equality(query, "READLIST_BOOK", "BOOK_ID", "b.ID", "READLIST_ID", operator)
         }
-        BookCondition::Deleted { deleted } => push_optional_boolean(query, "b.DELETED_DATE", deleted),
+        BookCondition::Deleted { operator } => push_optional_boolean(query, "b.DELETED_DATE", operator),
         BookCondition::OneShot { operator } => push_boolean(query, "b.ONESHOT", operator),
-        BookCondition::Title { title } => push_string_operator(query, "bm.TITLE", title),
-        BookCondition::MediaStatus { operator } => push_equality(query, "m.STATUS", operator),
+        BookCondition::Title { operator } => push_string_operator(query, "bm.TITLE", operator),
+        BookCondition::ReleaseDate { operator } => push_date_operator(query, "bm.RELEASE_DATE", operator),
+        BookCondition::Tag { operator } => {
+            push_nullable_relation(query, "BOOK_METADATA_TAG", "BOOK_ID", "b.ID", "TAG", operator);
+        }
+        BookCondition::NumberSort { operator } => push_numeric(query, "bm.NUMBER_SORT", operator),
+        BookCondition::MediaStatus { operator } => push_media_status(query, operator),
+        BookCondition::MediaProfile { operator } => push_media_profile(query, operator),
         BookCondition::ReadStatus { operator } => push_book_read_status(query, operator),
+        BookCondition::Author { operator } => {
+            push_author(query, "BOOK_METADATA_AUTHOR", "BOOK_ID", "b.ID", operator);
+        }
+        BookCondition::Poster { operator } => push_poster(query, operator),
     }
 }
 
@@ -524,15 +558,288 @@ fn push_condition_group<T>(
     query.push(")");
 }
 
-fn push_equality(query: &mut QueryBuilder<'static, Sqlite>, column: &str, operator: &EqualityOperator) {
+fn push_string_equality(
+    query: &mut QueryBuilder<'static, Sqlite>,
+    column: &str,
+    operator: &EqualityOperator,
+    unicode_ignore_case: bool,
+) {
+    query.push(column);
+    if unicode_ignore_case {
+        query.push(" COLLATE KOMGA_UNICODE_NOCASE");
+    }
     match operator {
         EqualityOperator::Is { value } => {
-            query.push(column).push(" = ").push_bind(value.clone());
+            query.push(" = ").push_bind(value.clone());
         }
         EqualityOperator::IsNot { value } => {
-            query.push(column).push(" <> ").push_bind(value.clone());
+            query.push(" <> ").push_bind(value.clone());
         }
     }
+}
+
+fn push_relation_equality(
+    query: &mut QueryBuilder<'static, Sqlite>,
+    table: &str,
+    parent_column: &str,
+    parent_id: &str,
+    value_column: &str,
+    operator: &EqualityOperator,
+) {
+    let (negation, value) = match operator {
+        EqualityOperator::Is { value } => ("", value),
+        EqualityOperator::IsNot { value } => ("NOT ", value),
+    };
+    query
+        .push(negation)
+        .push("EXISTS(SELECT 1 FROM ")
+        .push(table)
+        .push(" relation_match WHERE relation_match.")
+        .push(parent_column)
+        .push(" = ")
+        .push(parent_id)
+        .push(" AND relation_match.")
+        .push(value_column)
+        .push(" = ")
+        .push_bind(value.clone())
+        .push(")");
+}
+
+fn push_nullable_relation(
+    query: &mut QueryBuilder<'static, Sqlite>,
+    table: &str,
+    parent_column: &str,
+    parent_id: &str,
+    value_column: &str,
+    operator: &NullableEqualityOperator<String>,
+) {
+    let (negation, value) = match operator {
+        NullableEqualityOperator::Is { value } => ("", Some(value)),
+        NullableEqualityOperator::IsNot { value } => ("NOT ", Some(value)),
+        NullableEqualityOperator::IsNull => ("NOT ", None),
+        NullableEqualityOperator::IsNotNull => ("", None),
+    };
+    query
+        .push(negation)
+        .push("EXISTS(SELECT 1 FROM ")
+        .push(table)
+        .push(" relation_match WHERE relation_match.")
+        .push(parent_column)
+        .push(" = ")
+        .push(parent_id);
+    if let Some(value) = value {
+        query
+            .push(" AND relation_match.")
+            .push(value_column)
+            .push(" COLLATE KOMGA_UNICODE_NOCASE = ")
+            .push_bind(value.clone());
+    }
+    query.push(")");
+}
+
+fn push_series_tag(query: &mut QueryBuilder<'static, Sqlite>, operator: &NullableEqualityOperator<String>) {
+    let (negation, value) = match operator {
+        NullableEqualityOperator::Is { value } => ("", Some(value)),
+        NullableEqualityOperator::IsNot { value } => ("NOT ", Some(value)),
+        NullableEqualityOperator::IsNull => ("NOT ", None),
+        NullableEqualityOperator::IsNotNull => ("", None),
+    };
+    query.push(negation).push("(");
+    for (index, table) in ["SERIES_METADATA_TAG", "BOOK_METADATA_AGGREGATION_TAG"]
+        .iter()
+        .enumerate()
+    {
+        if index > 0 {
+            query.push(" OR ");
+        }
+        query
+            .push("EXISTS(SELECT 1 FROM ")
+            .push(*table)
+            .push(" tag_match WHERE tag_match.SERIES_ID = s.ID");
+        if let Some(value) = value {
+            query
+                .push(" AND tag_match.TAG COLLATE KOMGA_UNICODE_NOCASE = ")
+                .push_bind(value.clone());
+        }
+        query.push(")");
+    }
+    query.push(")");
+}
+
+fn push_author(
+    query: &mut QueryBuilder<'static, Sqlite>,
+    table: &str,
+    parent_column: &str,
+    parent_id: &str,
+    operator: &EqualityOperator<AuthorMatch>,
+) {
+    let (negation, value) = match operator {
+        EqualityOperator::Is { value } => ("", value),
+        EqualityOperator::IsNot { value } => ("NOT ", value),
+    };
+    if value.name.is_none() && value.role.is_none() {
+        query.push("1 = 1");
+        return;
+    }
+    query
+        .push(negation)
+        .push("EXISTS(SELECT 1 FROM ")
+        .push(table)
+        .push(" author_match WHERE author_match.")
+        .push(parent_column)
+        .push(" = ")
+        .push(parent_id);
+    if let Some(name) = &value.name {
+        query
+            .push(" AND author_match.NAME COLLATE KOMGA_UNICODE_NOCASE = ")
+            .push_bind(name.clone());
+    }
+    if let Some(role) = &value.role {
+        query
+            .push(" AND author_match.ROLE COLLATE KOMGA_UNICODE_NOCASE = ")
+            .push_bind(role.clone());
+    }
+    query.push(")");
+}
+
+fn push_poster(query: &mut QueryBuilder<'static, Sqlite>, operator: &EqualityOperator<PosterMatch>) {
+    let (negation, value) = match operator {
+        EqualityOperator::Is { value } => ("", value),
+        EqualityOperator::IsNot { value } => ("NOT ", value),
+    };
+    if value.poster_type.is_none() && value.selected.is_none() {
+        query.push("1 = 1");
+        return;
+    }
+    query
+        .push(negation)
+        .push("EXISTS(SELECT 1 FROM THUMBNAIL_BOOK poster_match WHERE poster_match.BOOK_ID = b.ID");
+    if let Some(poster_type) = value.poster_type {
+        query.push(" AND poster_match.TYPE = ").push_bind(poster_type.as_str());
+    }
+    if let Some(selected) = value.selected {
+        query.push(" AND poster_match.SELECTED = ").push_bind(selected);
+    }
+    query.push(")");
+}
+
+fn push_numeric(query: &mut QueryBuilder<'static, Sqlite>, column: &str, operator: &NumericOperator<f64>) {
+    let (comparison, value) = match operator {
+        NumericOperator::Is { value } => (" = ", value),
+        NumericOperator::IsNot { value } => (" <> ", value),
+        NumericOperator::GreaterThan { value } => (" > ", value),
+        NumericOperator::LessThan { value } => (" < ", value),
+    };
+    query.push(column).push(comparison).push_bind(*value);
+}
+
+fn push_nullable_numeric(
+    query: &mut QueryBuilder<'static, Sqlite>,
+    column: &str,
+    operator: &NullableNumericOperator<i32>,
+) {
+    match operator {
+        NullableNumericOperator::Is { value } => {
+            query.push(column).push(" = ").push_bind(*value);
+        }
+        NullableNumericOperator::IsNot { value } => {
+            query
+                .push("(")
+                .push(column)
+                .push(" <> ")
+                .push_bind(*value)
+                .push(" OR ")
+                .push(column)
+                .push(" IS NULL)");
+        }
+        NullableNumericOperator::GreaterThan { value } => {
+            query.push(column).push(" > ").push_bind(*value);
+        }
+        NullableNumericOperator::LessThan { value } => {
+            query.push(column).push(" < ").push_bind(*value);
+        }
+        NullableNumericOperator::IsNull => {
+            query.push(column).push(" IS NULL");
+        }
+        NullableNumericOperator::IsNotNull => {
+            query.push(column).push(" IS NOT NULL");
+        }
+    }
+}
+
+fn push_date_operator(query: &mut QueryBuilder<'static, Sqlite>, column: &str, operator: &DateOperator) {
+    use chrono::Utc;
+
+    match operator {
+        DateOperator::Before { date_time } => {
+            query
+                .push(column)
+                .push(" < ")
+                .push_bind(date_time.with_timezone(&Utc).date_naive().to_string());
+        }
+        DateOperator::After { date_time } => {
+            query
+                .push(column)
+                .push(" > ")
+                .push_bind(date_time.with_timezone(&Utc).date_naive().to_string());
+        }
+        DateOperator::IsInTheLast { days } => {
+            query
+                .push(column)
+                .push(" > date('now', ")
+                .push_bind(format!("-{days} days"))
+                .push(")");
+        }
+        DateOperator::IsNotInTheLast { days } => {
+            query
+                .push(column)
+                .push(" < date('now', ")
+                .push_bind(format!("-{days} days"))
+                .push(")");
+        }
+        DateOperator::IsNull => {
+            query.push(column).push(" IS NULL");
+        }
+        DateOperator::IsNotNull => {
+            query.push(column).push(" IS NOT NULL");
+        }
+    }
+}
+
+fn push_series_status(query: &mut QueryBuilder<'static, Sqlite>, operator: &EqualityOperator<SeriesStatus>) {
+    let (comparison, value) = match operator {
+        EqualityOperator::Is { value } => (" = ", value),
+        EqualityOperator::IsNot { value } => (" <> ", value),
+    };
+    query.push("sm.STATUS").push(comparison).push_bind(value.as_str());
+}
+
+fn push_media_status(query: &mut QueryBuilder<'static, Sqlite>, operator: &EqualityOperator<MediaStatus>) {
+    let (comparison, value) = match operator {
+        EqualityOperator::Is { value } => (" = ", value),
+        EqualityOperator::IsNot { value } => (" <> ", value),
+    };
+    query.push("m.STATUS").push(comparison).push_bind(value.as_str());
+}
+
+fn push_media_profile(query: &mut QueryBuilder<'static, Sqlite>, operator: &EqualityOperator<MediaProfile>) {
+    let (negation, profile) = match operator {
+        EqualityOperator::Is { value } => ("", value),
+        EqualityOperator::IsNot { value } => (" NOT", value),
+    };
+    let media_types: &[&str] = match profile {
+        MediaProfile::Divina => &[ZIP_MEDIA_TYPE, RAR_MEDIA_TYPE, RAR4_MEDIA_TYPE, RAR5_MEDIA_TYPE],
+        MediaProfile::Pdf => &[PDF_MEDIA_TYPE],
+        MediaProfile::Epub => &[EPUB_MEDIA_TYPE],
+    };
+    query.push("m.MEDIA_TYPE").push(negation).push(" IN (");
+    for (index, media_type) in media_types.iter().enumerate() {
+        if index > 0 {
+            query.push(",");
+        }
+        query.push_bind(*media_type);
+    }
+    query.push(")");
 }
 
 fn push_optional_boolean(query: &mut QueryBuilder<'static, Sqlite>, column: &str, operator: &BooleanOperator) {
@@ -585,48 +892,48 @@ fn like_pattern(value: &str, prefix: bool, suffix: bool) -> String {
     )
 }
 
-fn push_series_read_status(query: &mut QueryBuilder<'static, Sqlite>, operator: &ReadStatusOperator) {
+fn push_series_read_status(query: &mut QueryBuilder<'static, Sqlite>, operator: &EqualityOperator<ReadStatus>) {
     let expression = match operator {
-        ReadStatusOperator::Is {
+        EqualityOperator::Is {
             value: ReadStatus::Unread,
         } => "rps.READ_COUNT IS NULL",
-        ReadStatusOperator::Is {
+        EqualityOperator::Is {
             value: ReadStatus::Read,
         } => "rps.READ_COUNT = s.BOOK_COUNT",
-        ReadStatusOperator::Is {
+        EqualityOperator::Is {
             value: ReadStatus::InProgress,
         } => "rps.READ_COUNT <> s.BOOK_COUNT",
-        ReadStatusOperator::IsNot {
+        EqualityOperator::IsNot {
             value: ReadStatus::Unread,
         } => "rps.READ_COUNT IS NOT NULL",
-        ReadStatusOperator::IsNot {
+        EqualityOperator::IsNot {
             value: ReadStatus::Read,
         } => "(rps.READ_COUNT <> s.BOOK_COUNT OR rps.READ_COUNT IS NULL)",
-        ReadStatusOperator::IsNot {
+        EqualityOperator::IsNot {
             value: ReadStatus::InProgress,
         } => "(rps.READ_COUNT = s.BOOK_COUNT OR rps.READ_COUNT IS NULL)",
     };
     query.push(expression);
 }
 
-fn push_book_read_status(query: &mut QueryBuilder<'static, Sqlite>, operator: &ReadStatusOperator) {
+fn push_book_read_status(query: &mut QueryBuilder<'static, Sqlite>, operator: &EqualityOperator<ReadStatus>) {
     let expression = match operator {
-        ReadStatusOperator::Is {
+        EqualityOperator::Is {
             value: ReadStatus::Unread,
         } => "rp.COMPLETED IS NULL",
-        ReadStatusOperator::Is {
+        EqualityOperator::Is {
             value: ReadStatus::Read,
         } => "rp.COMPLETED = 1",
-        ReadStatusOperator::Is {
+        EqualityOperator::Is {
             value: ReadStatus::InProgress,
         } => "rp.COMPLETED = 0",
-        ReadStatusOperator::IsNot {
+        EqualityOperator::IsNot {
             value: ReadStatus::Unread,
         } => "rp.COMPLETED IS NOT NULL",
-        ReadStatusOperator::IsNot {
+        EqualityOperator::IsNot {
             value: ReadStatus::Read,
         } => "(rp.COMPLETED IS NULL OR rp.COMPLETED = 0)",
-        ReadStatusOperator::IsNot {
+        EqualityOperator::IsNot {
             value: ReadStatus::InProgress,
         } => "(rp.COMPLETED IS NULL OR rp.COMPLETED = 1)",
     };

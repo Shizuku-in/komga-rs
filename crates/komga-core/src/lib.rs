@@ -32,8 +32,9 @@ pub use content::{
     SeriesDto, SeriesMetadataDto, WebLinkDto,
 };
 pub use content_query::{
-    BookCondition, BookSearch, BooleanOperator, EqualityOperator, ReadStatus, ReadStatusOperator, SeriesCondition,
-    SeriesSearch, StringOperator,
+    AuthorMatch, BookCondition, BookSearch, BooleanOperator, DateOperator, EqualityOperator, NullableEqualityOperator,
+    NullableNumericOperator, NumericOperator, PosterMatch, PosterType, ReadStatus, SeriesCondition, SeriesSearch,
+    StringOperator,
 };
 pub use media::{
     BookPage, Dimension, EPUB_ASSET_SUBTYPE, EPUB_EXTENSION_CLASS, EPUB_MEDIA_TYPE, EPUB_PAGE_SUBTYPE, EpubTocEntry,
