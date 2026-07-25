@@ -17,6 +17,7 @@ mod hashing;
 mod image_ops;
 mod metadata;
 mod pdf;
+mod zip_edit;
 
 pub use comicrack::{ComicRackListError, parse_read_list};
 pub use hashing::{
@@ -27,6 +28,7 @@ pub use metadata::{
     ComicInfoContainers, ComicInfoReadList, EmbeddedMetadata, extract_comic_info_containers,
     extract_comic_info_metadata, extract_epub_metadata, extract_mylar_metadata,
 };
+pub use zip_edit::{ZipPageRemoval, ZipPageRemovalError, remove_hashed_zip_pages};
 
 #[cfg(test)]
 use metadata::parse_comic_info_containers;
