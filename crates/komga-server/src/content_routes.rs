@@ -7,6 +7,7 @@ use axum::{
 use komga_core::{
     BookDto, BookSearch, ContentPage, PageRequest, SeriesDto, SeriesSearch, SortDirection, SortOrder, User,
 };
+use komga_search::EntityKind;
 use serde::Serialize;
 
 use crate::{AppState, auth::AuthContext, error::ApiError, routes::ApiJson};
@@ -18,7 +19,19 @@ pub(crate) async fn list_series(
     ApiJson(search): ApiJson<SeriesSearch>,
 ) -> Result<Json<SpringPage<SeriesDto>>, ApiError> {
     let page = parse_page_request(raw_query.as_deref())?;
-    let mut result = state.storage.query_series(&search, &page, &auth.user).await?;
+    let mut result = if let Some(query) = non_empty(search.full_text_search.as_deref()) {
+        let hits = search_hits(&state, EntityKind::Series, query).await;
+        let mut database_search = search.clone();
+        database_search.full_text_search = None;
+        let storage_page = storage_page(&page);
+        let all = state
+            .storage
+            .query_series(&database_search, &storage_page, &auth.user)
+            .await?;
+        ranked_page(all.content, &page, hits, |value| &value.id)
+    } else {
+        state.storage.query_series(&search, &page, &auth.user).await?
+    };
     if !auth.user.is_admin() {
         result.content.iter_mut().for_each(|series| series.url.clear());
     }
@@ -55,11 +68,79 @@ pub(crate) async fn list_books(
     ApiJson(search): ApiJson<BookSearch>,
 ) -> Result<Json<SpringPage<BookDto>>, ApiError> {
     let page = parse_page_request(raw_query.as_deref())?;
-    let mut result = state.storage.query_books(&search, &page, &auth.user).await?;
+    let mut result = if let Some(query) = non_empty(search.full_text_search.as_deref()) {
+        let hits = search_hits(&state, EntityKind::Book, query).await;
+        let mut database_search = search.clone();
+        database_search.full_text_search = None;
+        let storage_page = storage_page(&page);
+        let all = state
+            .storage
+            .query_books(&database_search, &storage_page, &auth.user)
+            .await?;
+        ranked_page(all.content, &page, hits, |value| &value.id)
+    } else {
+        state.storage.query_books(&search, &page, &auth.user).await?
+    };
     if !auth.user.is_admin() {
         result.content.iter_mut().for_each(restrict_book_url);
     }
     Ok(Json(SpringPage::from_content(result)))
+}
+
+pub(crate) fn non_empty(value: Option<&str>) -> Option<&str> {
+    value.map(str::trim).filter(|value| !value.is_empty())
+}
+
+pub(crate) async fn search_hits(state: &AppState, kind: EntityKind, query: &str) -> Vec<String> {
+    let index = state.search.clone();
+    let query = query.to_owned();
+    tokio::task::spawn_blocking(move || index.search(kind, &query).into_iter().map(|hit| hit.id).collect())
+        .await
+        .unwrap_or_default()
+}
+
+pub(crate) fn storage_page(page: &PageRequest) -> PageRequest {
+    PageRequest {
+        page: 0,
+        size: page.size,
+        unpaged: true,
+        sort: page
+            .sort
+            .iter()
+            .filter(|sort| sort.property != "relevance")
+            .cloned()
+            .collect(),
+    }
+}
+
+pub(crate) fn ranked_page<T>(
+    mut values: Vec<T>,
+    page: &PageRequest,
+    hits: Vec<String>,
+    id: impl Fn(&T) -> &str,
+) -> ContentPage<T> {
+    use std::collections::HashMap;
+    let ranks: HashMap<_, _> = hits.into_iter().enumerate().map(|(rank, id)| (id, rank)).collect();
+    values.retain(|value| ranks.contains_key(id(value)));
+    if page.sort.is_empty() || page.sort.iter().all(|sort| sort.property == "relevance") {
+        values.sort_by_key(|value| ranks[id(value)]);
+    }
+    let total_elements = values.len() as u64;
+    if !page.unpaged {
+        let start = page.page.saturating_mul(page.size) as usize;
+        values = values.into_iter().skip(start).take(page.size as usize).collect();
+    }
+    ContentPage {
+        content: values,
+        total_elements,
+        page: if page.unpaged { 0 } else { page.page },
+        size: if page.unpaged {
+            total_elements.max(20)
+        } else {
+            page.size
+        },
+        sort: page.sort.clone(),
+    }
 }
 
 pub(crate) async fn get_book(

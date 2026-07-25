@@ -3,7 +3,9 @@
 use crate::{
     AppState,
     auth::AuthContext,
-    content_routes::{SpringPage, parse_page_request, restrict_book_url},
+    content_routes::{
+        SpringPage, non_empty, parse_page_request, ranked_page, restrict_book_url, search_hits, storage_page,
+    },
     dto::{CollectionPatchDto, ReadListPatchDto, preserving},
     error::ApiError,
     routes::{ApiJson, require_admin},
@@ -18,6 +20,7 @@ use komga_core::{
     CollectionCreation, CollectionDto, ReadListCreation, ReadListDto, ReadListProgressUpdate, ReadListReadProgressDto,
     new_id,
 };
+use komga_search::{EntityKind, SearchEntity};
 use komga_storage::ContainerThumbnail;
 
 fn query_value(raw: Option<&str>, key: &str) -> Option<String> {
@@ -32,15 +35,20 @@ pub(crate) async fn list_collections(
 ) -> Result<Json<SpringPage<CollectionDto>>, ApiError> {
     let page = parse_page_request(raw.as_deref())?;
     let library = query_value(raw.as_deref(), "library_id").or_else(|| query_value(raw.as_deref(), "libraryId"));
-    let result = state
-        .storage
-        .list_collections(
-            query_value(raw.as_deref(), "search").as_deref(),
-            library.as_deref(),
-            &page,
-            &auth.user,
-        )
-        .await?;
+    let search = query_value(raw.as_deref(), "search");
+    let result = if let Some(query) = non_empty(search.as_deref()) {
+        let hits = search_hits(&state, EntityKind::Collection, query).await;
+        let all = state
+            .storage
+            .list_collections(None, library.as_deref(), &storage_page(&page), &auth.user)
+            .await?;
+        ranked_page(all.content, &page, hits, |value| &value.id)
+    } else {
+        state
+            .storage
+            .list_collections(None, library.as_deref(), &page, &auth.user)
+            .await?
+    };
     Ok(Json(SpringPage::from_content(result)))
 }
 pub(crate) async fn create_collection(
@@ -51,6 +59,9 @@ pub(crate) async fn create_collection(
     require_admin(&auth)?;
     let id = new_id();
     state.storage.create_collection(&id, &value).await?;
+    state
+        .sync_search_entity(SearchEntity::new(EntityKind::Collection, &id).field("name", &value.name))
+        .await;
     Ok(Json(state.storage.find_collection(&id, &auth.user).await?.ok_or_else(
         || ApiError::internal("Created collection could not be loaded"),
     )?))
@@ -82,6 +93,11 @@ pub(crate) async fn patch_collection(
     {
         return Err(ApiError::not_found("Collection not found"));
     }
+    if let Some(value) = state.storage.find_collection(&id, &auth.user).await? {
+        state
+            .sync_search_entity(SearchEntity::new(EntityKind::Collection, &id).field("name", value.name))
+            .await;
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 pub(crate) async fn delete_collection(
@@ -93,6 +109,7 @@ pub(crate) async fn delete_collection(
     if !state.storage.delete_collection(&id).await? {
         return Err(ApiError::not_found("Collection not found"));
     }
+    state.delete_search_entity(id).await;
     Ok(StatusCode::NO_CONTENT)
 }
 pub(crate) async fn collection_series(
@@ -130,10 +147,17 @@ pub(crate) async fn list_read_lists(
     RawQuery(raw): RawQuery,
 ) -> Result<Json<SpringPage<ReadListDto>>, ApiError> {
     let page = parse_page_request(raw.as_deref())?;
-    let result = state
-        .storage
-        .list_read_lists(query_value(raw.as_deref(), "search").as_deref(), &page, &auth.user)
-        .await?;
+    let search = query_value(raw.as_deref(), "search");
+    let result = if let Some(query) = non_empty(search.as_deref()) {
+        let hits = search_hits(&state, EntityKind::ReadList, query).await;
+        let all = state
+            .storage
+            .list_read_lists(None, &storage_page(&page), &auth.user)
+            .await?;
+        ranked_page(all.content, &page, hits, |value| &value.id)
+    } else {
+        state.storage.list_read_lists(None, &page, &auth.user).await?
+    };
     Ok(Json(SpringPage::from_content(result)))
 }
 pub(crate) async fn create_read_list(
@@ -144,6 +168,9 @@ pub(crate) async fn create_read_list(
     require_admin(&auth)?;
     let id = new_id();
     state.storage.create_read_list(&id, &value).await?;
+    state
+        .sync_search_entity(SearchEntity::new(EntityKind::ReadList, &id).field("name", &value.name))
+        .await;
     Ok(Json(state.storage.find_read_list(&id, &auth.user).await?.ok_or_else(
         || ApiError::internal("Created read list could not be loaded"),
     )?))
@@ -182,6 +209,11 @@ pub(crate) async fn patch_read_list(
     {
         return Err(ApiError::not_found("Read list not found"));
     }
+    if let Some(value) = state.storage.find_read_list(&id, &auth.user).await? {
+        state
+            .sync_search_entity(SearchEntity::new(EntityKind::ReadList, &id).field("name", value.name))
+            .await;
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 pub(crate) async fn delete_read_list(
@@ -193,6 +225,7 @@ pub(crate) async fn delete_read_list(
     if !state.storage.delete_read_list(&id).await? {
         return Err(ApiError::not_found("Read list not found"));
     }
+    state.delete_search_entity(id).await;
     Ok(StatusCode::NO_CONTENT)
 }
 pub(crate) async fn read_list_books(

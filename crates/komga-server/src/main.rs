@@ -4,6 +4,7 @@ use std::net::SocketAddr;
 
 use anyhow::Context;
 use clap::Parser;
+use komga_search::SearchIndex;
 use komga_server::{AppState, build_app, config::Config};
 use komga_storage::{Storage, TaskStorage};
 use tracing_subscriber::EnvFilter;
@@ -19,6 +20,7 @@ async fn main() -> anyhow::Result<()> {
     let config = Config::parse();
     let database_file = config.database_file();
     let tasks_database_file = config.tasks_database_file();
+    let search_directory = config.search_directory();
     if let Some(parent) = database_file.parent() {
         tokio::fs::create_dir_all(parent)
             .await
@@ -40,7 +42,9 @@ async fn main() -> anyhow::Result<()> {
         .await
         .with_context(|| format!("failed to bind {address}"))?;
 
-    let state = AppState::new(storage, tasks).await?;
+    let search = SearchIndex::open(&search_directory)
+        .with_context(|| format!("failed to open search index {}", search_directory.display()))?;
+    let state = AppState::with_search(storage, tasks, search).await?;
     let runtime = state.start_runtime().await?;
     let signal_shutdown = runtime.shutdown_handle();
     let server_shutdown = runtime.shutdown_handle();

@@ -22,6 +22,7 @@ http.workspace = true
 httpdate.workspace = true
 komga-core = { path = "../komga-core" }
 komga-media = { path = "../komga-media" }
+komga-search = { path = "../komga-search" }
 komga-storage = { path = "../komga-storage" }
 mediatype.workspace = true
 rand.workspace = true

@@ -12,7 +12,7 @@ The reference baseline is Komga commit `4ef86df`. Porting is organized as vertic
 | Series/books/read progress | Partial | Skeleton persistence, natural ordering, modern list/detail APIs, Spring pagination, basic recursive filtering, sibling navigation, access restrictions, progress hydration, per-book and series-level writes, REST Readium progression, Mihon/Tachiyomi series synchronization, administrator book/series metadata mutations, book/series thumbnail management and regeneration, CBZ/CBR/PDF and fixed-layout EPUB pages, EPUB resources/positions, WebPub manifests, and streaming original-file downloads are implemented. Deprecated/specialized lists remain pending. |
 | Collections/read lists | Core complete | CRUD, visible membership, reverse lookup, navigation, Mihon progress, ComicRack matching, streamed ZIP downloads, uploads, dynamic collage posters, and scanner-driven ComicInfo relationship import. |
 | Media | Partial | ZIP/CBZ, RAR4/RAR5/CBR (including solid archives), PDF, and EPUB analysis are implemented without external runtime commands. PDF supports rendered and raw pages; EPUB supports OPF/NAV/NCX discovery, resources, Readium positions, native KEPUB detection, fixed-layout pages, and package covers. Divina, PDF, and EPUB WebPub manifests are available. EPUB metadata import, uncommon image codecs, hashing, and duplicate pages are pending. |
-| Search | Pending | Lucene-equivalent multilingual indexing and lifecycle. |
+| Search | Partial | In-process Tantivy indexing covers ranked Book/Series `fullTextSearch` and Collection/ReadList `search`, with SQLite visibility filtering and startup rebuilds. Kotlin Lucene index interoperability, the full Classic QueryParser grammar, and event-driven lifecycle coverage remain pending. |
 | OPDS | Pending | OPDS 1 XML and OPDS 2 JSON catalogs. |
 | Device sync | Pending | Kobo, KOReader, sync points, and KEPUB conversion. |
 | Operations | Partial | Persistent task storage, atomic worker ownership, startup recovery, scan/media/thumbnail/metadata-refresh/metadata-aggregation workers, library scheduling, task-status SSE, task clearing, client settings, and selected server settings are implemented. Metrics, announcements, full server settings, fonts, and release checks are pending. |
@@ -28,17 +28,15 @@ The reference baseline is Komga commit `4ef86df`. Porting is organized as vertic
 
 ## Current limitations
 
-- Scan workers analyze ZIP/CBZ, RAR/CBR, PDF, and EPUB files and generate book covers. Encrypted and multi-volume RAR archives, password-protected PDFs, and DRM-protected or obfuscated EPUB resources remain unsupported. Page hashes, duplicate detection, EPUB metadata providers, and KEPUB conversion are not implemented.
-- Series/Book queries do not yet support Lucene `fullTextSearch`, poster/media-profile conditions, deprecated GET lists, alphabetical groups, or latest/new/updated feeds. Collection/read-list membership conditions are supported. Unsupported request bodies and sort fields return `400 Bad Request`.
+- Scan workers analyze ZIP/CBZ, RAR/CBR, PDF, and EPUB files, import EPUB metadata, and generate book covers. Encrypted and multi-volume RAR archives, password-protected PDFs, DRM-protected or obfuscated EPUB resources, page hashes, duplicate detection, and KEPUB conversion remain unsupported.
+- Series/Book queries support ranked multilingual `fullTextSearch`; poster/media-profile conditions, deprecated GET lists, alphabetical groups, and latest/new/updated feeds remain pending. Collection/read-list membership conditions are supported. Unsupported request bodies and sort fields return `400 Bad Request`.
 - Unknown Kotlin tasks remain queued and are not claimed by Rust workers.
-- Only empty libraries can be deleted. Non-empty library deletion returns `409 Conflict` until the full series/book cascade is ported.
 - The OAuth provider endpoint intentionally returns an empty list until OAuth authentication is implemented.
 - `SERVER_SETTINGS` is read only for remember-me duration and task-pool size; the server-settings API is not implemented.
 
 ## Next slice
 
-The next dependency-ordered slice is search indexing. Domain-event/SSE integration
-remains later work.
+The next dependency-ordered search work is complete incremental lifecycle coverage. Domain-event/SSE integration remains later work.
 
 Book and series metadata can be patched through the Kotlin-compatible administrator routes. The HTTP boundary preserves
 each field's distinct omitted-versus-null behavior, while `komga-core` owns normalization and validation. Bulk book

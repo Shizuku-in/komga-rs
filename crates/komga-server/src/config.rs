@@ -24,6 +24,10 @@ pub struct Config {
     #[arg(long, env = "KOMGA_TASKS_DATABASE_FILE")]
     pub tasks_database_file: Option<PathBuf>,
 
+    /// Override the Tantivy search index directory.
+    #[arg(long, env = "KOMGA_SEARCH_DIRECTORY")]
+    pub search_directory: Option<PathBuf>,
+
     /// Address on which the HTTP server listens.
     #[arg(long, env = "KOMGA_HOST", default_value = "0.0.0.0")]
     pub host: IpAddr,
@@ -59,5 +63,12 @@ impl Config {
         self.tasks_database_file
             .clone()
             .unwrap_or_else(|| self.config_dir().join("tasks.sqlite"))
+    }
+
+    /// Returns the explicit search directory or `search` in the config directory.
+    pub fn search_directory(&self) -> PathBuf {
+        self.search_directory
+            .clone()
+            .unwrap_or_else(|| self.config_dir().join("search"))
     }
 }

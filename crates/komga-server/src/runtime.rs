@@ -175,7 +175,7 @@ pub(super) enum TaskOutcome {
     Retry,
 }
 
-const SUPPORTED_TASK_TYPES: [&str; 8] = [
+const SUPPORTED_TASK_TYPES: [&str; 10] = [
     "ScanLibrary",
     "EmptyTrash",
     "AnalyzeBook",
@@ -184,6 +184,8 @@ const SUPPORTED_TASK_TYPES: [&str; 8] = [
     "GenerateBookThumbnail",
     "AggregateSeriesMetadata",
     "FindBookThumbnailsToRegenerate",
+    "RebuildIndex",
+    "UpgradeIndex",
 ];
 
 async fn worker_loop(state: AppState, index: usize) {
@@ -238,6 +240,13 @@ async fn process_task(state: &AppState, task: &TaskRecord) -> TaskOutcome {
         "GenerateBookThumbnail" => process_generate_thumbnail_task(state, task).await,
         "AggregateSeriesMetadata" => process_aggregate_series_metadata_task(state, task).await,
         "FindBookThumbnailsToRegenerate" => process_find_thumbnails_task(state, task).await,
+        "RebuildIndex" | "UpgradeIndex" => {
+            if state.rebuild_search().await {
+                TaskOutcome::Completed
+            } else {
+                TaskOutcome::Retry
+            }
+        }
         _ => TaskOutcome::Completed,
     }
 }

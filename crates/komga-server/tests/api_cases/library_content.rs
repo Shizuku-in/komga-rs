@@ -374,7 +374,7 @@ async fn content_queries_page_filter_restrict_and_navigate_books() {
         .unwrap();
     assert_eq!(unanalyzed_manifest.status(), StatusCode::NOT_FOUND);
 
-    let unsupported = app
+    let searched = app
         .clone()
         .oneshot(
             Request::post("/api/v1/books/list")
@@ -385,5 +385,11 @@ async fn content_queries_page_filter_restrict_and_navigate_books() {
         )
         .await
         .unwrap();
-    assert_eq!(unsupported.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(searched.status(), StatusCode::OK);
+    let searched = body_json(searched).await;
+    assert!(
+        searched["content"]
+            .as_array()
+            .is_some_and(|content| !content.is_empty())
+    );
 }

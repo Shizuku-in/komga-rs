@@ -40,6 +40,7 @@ use axum::{
     middleware,
     routing::{delete, get, patch, post},
 };
+use komga_search::{EntityKind, SearchEntity, SearchIndex};
 use komga_storage::{Storage, StorageError, TaskRecord, TaskStorage};
 use tokio::sync::{Mutex, Notify};
 use tokio_util::sync::CancellationToken;
@@ -57,6 +58,7 @@ use tower_http::{
 #[derive(Clone)]
 pub struct AppState {
     storage: Storage,
+    search: SearchIndex,
     tasks: TaskStorage,
     sessions: SessionStore,
     claim_lock: Arc<Mutex<()>>,
@@ -72,16 +74,143 @@ impl AppState {
     ///
     /// Returns a storage error when server settings cannot be loaded.
     pub async fn new(storage: Storage, tasks: TaskStorage) -> Result<Self, StorageError> {
+        let search = SearchIndex::in_memory().expect("in-memory search index creation must succeed");
+        Self::with_search(storage, tasks, search).await
+    }
+
+    /// Creates application state with an explicitly configured search index.
+    pub async fn with_search(storage: Storage, tasks: TaskStorage, search: SearchIndex) -> Result<Self, StorageError> {
         let remember_me_duration_days = storage.remember_me_duration_days().await?;
-        Ok(Self {
+        let state = Self {
             storage,
+            search,
             tasks,
             sessions: SessionStore::new(remember_me_duration_days),
             claim_lock: Arc::new(Mutex::new(())),
             task_notify: Arc::new(Notify::new()),
             schedule_notify: Arc::new(Notify::new()),
             shutdown: CancellationToken::new(),
+        };
+        state.rebuild_search().await;
+        Ok(state)
+    }
+
+    pub(crate) async fn rebuild_search(&self) -> bool {
+        use komga_core::{ContentRestrictions, PageRequest, User, UserRole};
+        use std::collections::BTreeSet;
+        let admin = User {
+            id: "search-index".into(),
+            email: String::new(),
+            password_hash: String::new(),
+            roles: BTreeSet::from([UserRole::Admin]),
+            shared_all_libraries: true,
+            shared_library_ids: BTreeSet::new(),
+            restrictions: ContentRestrictions::default(),
+        };
+        let page = PageRequest {
+            unpaged: true,
+            ..PageRequest::default()
+        };
+        let series = self.storage.query_series(&Default::default(), &page, &admin).await;
+        let books = self.storage.query_books(&Default::default(), &page, &admin).await;
+        let collections = self.storage.list_collections(None, None, &page, &admin).await;
+        let read_lists = self.storage.list_read_lists(None, &page, &admin).await;
+        let (Ok(series), Ok(books), Ok(collections), Ok(read_lists)) = (series, books, collections, read_lists) else {
+            tracing::error!("could not load documents for search index rebuild");
+            return false;
+        };
+        let mut documents = Vec::new();
+        for value in books.content {
+            let mut document = SearchEntity::new(EntityKind::Book, value.id)
+                .field("title", value.metadata.title)
+                .field("isbn", value.metadata.isbn)
+                .field("deleted", value.deleted.to_string())
+                .field("oneshot", value.oneshot.to_string())
+                .field("mediaStatus", value.media.status);
+            if let Some(date) = value.metadata.release_date {
+                document = document.field("releaseYear", date.get(..4).unwrap_or(&date));
+            }
+            for author in value.metadata.authors {
+                document = document.field("author", author.name);
+            }
+            for tag in value.metadata.tags {
+                document = document.field("tag", tag);
+            }
+            documents.push(document);
+        }
+        for value in series.content {
+            let mut document = SearchEntity::new(EntityKind::Series, value.id)
+                .field("title", value.metadata.title)
+                .field("titleSort", value.metadata.title_sort)
+                .field("publisher", value.metadata.publisher)
+                .field("status", value.metadata.status)
+                .field("deleted", value.deleted.to_string())
+                .field("oneshot", value.oneshot.to_string());
+            for alternate in value.metadata.alternate_titles {
+                document = document.field("alternateTitle", alternate.title);
+            }
+            for author in value.books_metadata.authors {
+                document = document.field("author", author.name);
+            }
+            for tag in value.metadata.tags.into_iter().chain(value.books_metadata.tags) {
+                document = document.field("tag", tag);
+            }
+            documents.push(document);
+        }
+        documents.extend(
+            collections
+                .content
+                .into_iter()
+                .map(|value| SearchEntity::new(EntityKind::Collection, value.id).field("name", value.name)),
+        );
+        documents.extend(
+            read_lists
+                .content
+                .into_iter()
+                .map(|value| SearchEntity::new(EntityKind::ReadList, value.id).field("name", value.name)),
+        );
+        let search = self.search.clone();
+        match tokio::task::spawn_blocking(move || {
+            search.replace(
+                &[
+                    EntityKind::Book,
+                    EntityKind::Series,
+                    EntityKind::Collection,
+                    EntityKind::ReadList,
+                ],
+                documents,
+            )
         })
+        .await
+        {
+            Ok(Ok(())) => true,
+            Ok(Err(error)) => {
+                tracing::error!(%error, "could not rebuild search index");
+                false
+            }
+            Err(error) => {
+                tracing::error!(%error, "search rebuild task panicked");
+                false
+            }
+        }
+    }
+
+    pub(crate) async fn sync_search_entity(&self, entity: SearchEntity) {
+        let search = self.search.clone();
+        match tokio::task::spawn_blocking(move || search.upsert(entity)).await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => tracing::error!(%error, "could not update search index"),
+            Err(error) => tracing::error!(%error, "search update task panicked"),
+        }
+    }
+
+    pub(crate) async fn delete_search_entity(&self, id: String) {
+        let search = self.search.clone();
+        match tokio::task::spawn_blocking(move || search.delete(&id)).await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => tracing::error!(%error, "could not delete search document"),
+            Err(error) => tracing::error!(%error, "search delete task panicked"),
+        }
     }
 
     pub(crate) async fn enqueue_task(&self, task: &TaskRecord) -> Result<(), StorageError> {
