@@ -11,6 +11,7 @@ mod auth;
 mod containers;
 mod content;
 mod content_queries;
+mod history;
 mod library;
 mod lifecycle;
 mod media;

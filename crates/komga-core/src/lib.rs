@@ -9,6 +9,7 @@
 mod containers;
 mod content;
 mod content_query;
+mod history;
 mod media;
 mod metadata;
 mod page_hash;
@@ -37,6 +38,7 @@ pub use content_query::{
     NullableEqualityOperator, NullableNumericOperator, NumericOperator, PosterMatch, PosterType, ReadStatus,
     SeriesCondition, SeriesSearch, StringOperator,
 };
+pub use history::HistoricalEvent;
 pub use media::{
     BookPage, Dimension, EPUB_ASSET_SUBTYPE, EPUB_EXTENSION_CLASS, EPUB_MEDIA_TYPE, EPUB_PAGE_SUBTYPE, EpubTocEntry,
     JPEG_MEDIA_TYPE, Media, MediaExtension, MediaExtensionEpub, MediaFile, MediaProfile, MediaStatus, PDF_MEDIA_TYPE,

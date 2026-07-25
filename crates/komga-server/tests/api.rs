@@ -29,6 +29,8 @@ mod auth_cases;
 mod book_file_cases;
 #[path = "api_cases/duplicates.rs"]
 mod duplicate_cases;
+#[path = "api_cases/history.rs"]
+mod history_cases;
 #[path = "api_cases/legacy_content.rs"]
 mod legacy_content_cases;
 #[path = "api_cases/library_content.rs"]

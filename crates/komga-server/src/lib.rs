@@ -17,6 +17,7 @@ mod content_routes;
 mod dto;
 mod error;
 mod filesystem_routes;
+mod history_routes;
 mod legacy_content_query;
 mod library_routes;
 mod media_routes;
