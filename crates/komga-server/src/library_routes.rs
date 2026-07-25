@@ -6,6 +6,7 @@ use axum::{
     http::StatusCode,
 };
 use komga_core::{Library, ScanInterval, SeriesCover};
+use komga_search::EntityKind;
 use komga_storage::{DeleteLibraryResult, TaskRecord};
 use serde::{Deserialize, Serialize};
 use url::Url;
@@ -269,7 +270,15 @@ pub(crate) async fn delete_library(
 ) -> Result<StatusCode, ApiError> {
     require_admin(&auth)?;
     match state.storage.delete_library(&library_id).await? {
-        DeleteLibraryResult::Deleted => {
+        DeleteLibraryResult::Deleted { book_ids, series_ids } => {
+            let entities = book_ids
+                .into_iter()
+                .map(|id| (EntityKind::Book, id))
+                .chain(series_ids.into_iter().map(|id| (EntityKind::Series, id)))
+                .collect();
+            if !state.delete_search_entities(entities).await {
+                state.recover_search_after_http_failure().await;
+            }
             state.library_schedule_changed();
             Ok(StatusCode::NO_CONTENT)
         }

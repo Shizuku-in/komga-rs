@@ -9,7 +9,8 @@ use komga_media::{
     MediaAnalysisError, MediaOperationError, analyze_book, extract_comic_info_metadata, extract_epub_metadata,
     extract_mylar_metadata, generate_thumbnail, image_dimension,
 };
-use komga_storage::{StorageError, TaskRecord};
+use komga_search::EntityKind;
+use komga_storage::{RebuildIndexEntity, StorageError, TaskRecord};
 use serde::Deserialize;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
@@ -168,6 +169,12 @@ struct FindThumbnailsPayload {
     for_bigger_result_only: bool,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RebuildIndexPayload {
+    entities: Option<std::collections::BTreeSet<RebuildIndexEntity>>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum TaskOutcome {
     Completed,
@@ -240,13 +247,124 @@ async fn process_task(state: &AppState, task: &TaskRecord) -> TaskOutcome {
         "GenerateBookThumbnail" => process_generate_thumbnail_task(state, task).await,
         "AggregateSeriesMetadata" => process_aggregate_series_metadata_task(state, task).await,
         "FindBookThumbnailsToRegenerate" => process_find_thumbnails_task(state, task).await,
-        "RebuildIndex" | "UpgradeIndex" => {
-            if state.rebuild_search().await {
+        "RebuildIndex" => {
+            let payload = match serde_json::from_str::<RebuildIndexPayload>(&task.payload) {
+                Ok(payload) => payload,
+                Err(error) => {
+                    tracing::error!(%error, task_id = %task.id, "invalid RebuildIndex payload");
+                    return TaskOutcome::Completed;
+                }
+            };
+            let kinds = payload
+                .entities
+                .map(|entities| entities.into_iter().map(search_kind).collect::<Vec<_>>())
+                .unwrap_or_else(|| all_search_kinds().to_vec());
+            if state.rebuild_search(&kinds).await {
+                TaskOutcome::Completed
+            } else {
+                TaskOutcome::Retry
+            }
+        }
+        "UpgradeIndex" => {
+            if state.rebuild_search(&all_search_kinds()).await {
                 TaskOutcome::Completed
             } else {
                 TaskOutcome::Retry
             }
         }
         _ => TaskOutcome::Completed,
+    }
+}
+
+fn search_kind(entity: RebuildIndexEntity) -> EntityKind {
+    match entity {
+        RebuildIndexEntity::Book => EntityKind::Book,
+        RebuildIndexEntity::Series => EntityKind::Series,
+        RebuildIndexEntity::Collection => EntityKind::Collection,
+        RebuildIndexEntity::ReadList => EntityKind::ReadList,
+    }
+}
+
+fn all_search_kinds() -> [EntityKind; 4] {
+    [
+        EntityKind::Book,
+        EntityKind::Series,
+        EntityKind::Collection,
+        EntityKind::ReadList,
+    ]
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{collections::BTreeSet, fs};
+
+    use komga_core::{Library, scan_library_files};
+    use komga_search::SearchMutation;
+    use komga_storage::{Storage, TaskStorage};
+    use url::Url;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn rebuild_index_honors_subsets_and_upgrade_index_rebuilds_everything() {
+        let storage = Storage::connect_memory().await.unwrap();
+        let tasks = TaskStorage::connect_memory().await.unwrap();
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("library");
+        fs::create_dir_all(root.join("Series")).unwrap();
+        fs::write(root.join("Series/Volume.cbz"), [1_u8]).unwrap();
+        let library = Library::new("Library".into(), Url::from_directory_path(&root).unwrap());
+        storage.create_library(&library).await.unwrap();
+        storage
+            .apply_library_scan(&library.id, &scan_library_files(&library, || false).unwrap(), false)
+            .await
+            .unwrap();
+        let series = storage.list_series_by_library_id(&library.id).await.unwrap().remove(0);
+        let book = storage.list_books_by_series_id(&series.id).await.unwrap().remove(0);
+        let state = AppState::new(storage, tasks).await.unwrap();
+
+        state
+            .search
+            .mutate([
+                SearchMutation::Delete {
+                    kind: EntityKind::Book,
+                    id: book.id.clone(),
+                },
+                SearchMutation::Delete {
+                    kind: EntityKind::Series,
+                    id: series.id.clone(),
+                },
+            ])
+            .unwrap();
+        let subset = TaskRecord::rebuild_index(Some(&BTreeSet::from([RebuildIndexEntity::Book])), 8);
+        assert_eq!(process_task(&state, &subset).await, TaskOutcome::Completed);
+        assert_eq!(state.search.search(EntityKind::Book, "volume")[0].id, book.id);
+        assert!(state.search.search(EntityKind::Series, "series").is_empty());
+
+        state
+            .search
+            .mutate([
+                SearchMutation::Delete {
+                    kind: EntityKind::Book,
+                    id: book.id.clone(),
+                },
+                SearchMutation::Delete {
+                    kind: EntityKind::Series,
+                    id: series.id.clone(),
+                },
+            ])
+            .unwrap();
+        let upgrade = TaskRecord {
+            id: "UPGRADE_INDEX".into(),
+            priority: 8,
+            group_id: None,
+            class: "org.gotson.komga.application.tasks.Task$UpgradeIndex".into(),
+            simple_type: "UpgradeIndex".into(),
+            payload: "{}".into(),
+            owner: None,
+        };
+        assert_eq!(process_task(&state, &upgrade).await, TaskOutcome::Completed);
+        assert_eq!(state.search.search(EntityKind::Book, "volume")[0].id, book.id);
+        assert_eq!(state.search.search(EntityKind::Series, "series")[0].id, series.id);
     }
 }

@@ -89,12 +89,21 @@ pub(super) async fn process_refresh_book_metadata_task(state: &AppState, task: &
         } else {
             Vec::new()
         };
-        if let Err(error) = state
+        let container_update = match state
             .storage
             .append_comic_info_containers(&book.series_id, &book.id, &collections, &read_lists)
             .await
         {
-            tracing::error!(%error, book_id=%book.id, "could not persist ComicInfo containers");
+            Ok(update) => update,
+            Err(error) => {
+                tracing::error!(%error, book_id=%book.id, "could not persist ComicInfo containers");
+                return TaskOutcome::Retry;
+            }
+        };
+        let collection_ids = container_update.collection_ids.into_iter().collect::<Vec<_>>();
+        let read_list_ids = container_update.read_list_ids.into_iter().collect::<Vec<_>>();
+        if !state.sync_collections(&collection_ids).await || !state.sync_read_lists(&read_list_ids).await {
+            state.recover_search_after_http_failure().await;
             return TaskOutcome::Retry;
         }
     } else if let Ok(Err(error)) = comic {
@@ -128,6 +137,10 @@ pub(super) async fn process_refresh_book_metadata_task(state: &AppState, task: &
     }
     if let Err(error) = state.storage.save_book_metadata(&metadata).await {
         tracing::error!(%error, book_id=%book.id, "could not persist book metadata");
+        return TaskOutcome::Retry;
+    }
+    if !state.sync_books(std::slice::from_ref(&book.id)).await {
+        state.recover_search_after_http_failure().await;
         return TaskOutcome::Retry;
     }
     if let Err(error) = state
@@ -268,6 +281,10 @@ pub(super) async fn process_refresh_series_metadata_task(state: &AppState, task:
     }
     if let Err(error) = state.storage.save_series_metadata(&target).await {
         tracing::error!(%error, "could not persist series metadata");
+        return TaskOutcome::Retry;
+    }
+    if !state.sync_series(std::slice::from_ref(&series.id)).await {
+        state.recover_search_after_http_failure().await;
         return TaskOutcome::Retry;
     }
     if let Err(error) = state

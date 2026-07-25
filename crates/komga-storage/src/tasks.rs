@@ -1,12 +1,25 @@
 use std::{collections::BTreeMap, path::Path, str::FromStr, time::Duration};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sqlx::{
     FromRow, SqlitePool,
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions},
 };
 
 use crate::Result;
+
+/// Entity subset accepted by Komga's `RebuildIndex` task payload.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
+pub enum RebuildIndexEntity {
+    /// Book documents.
+    Book,
+    /// Series documents.
+    Series,
+    /// Collection documents.
+    Collection,
+    /// Read-list documents.
+    ReadList,
+}
 
 /// One opaque task row using Komga's persistent queue contract.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, FromRow)]
@@ -29,6 +42,26 @@ pub struct TaskRecord {
 }
 
 impl TaskRecord {
+    /// Builds a Kotlin-compatible full or partial search-index rebuild task.
+    pub fn rebuild_index(entities: Option<&std::collections::BTreeSet<RebuildIndexEntity>>, priority: i32) -> Self {
+        let id = "REBUILD_INDEX".to_owned();
+        Self {
+            id: id.clone(),
+            priority,
+            group_id: None,
+            class: "org.gotson.komga.application.tasks.Task$RebuildIndex".into(),
+            simple_type: "RebuildIndex".into(),
+            payload: serde_json::json!({
+                "entities": entities,
+                "priority": priority,
+                "groupId": null,
+                "uniqueId": id,
+            })
+            .to_string(),
+            owner: None,
+        }
+    }
+
     /// Builds a Kotlin-compatible library scan task.
     pub fn scan_library(library_id: &str, scan_deep: bool, priority: i32) -> Self {
         let id = format!("SCAN_LIBRARY_{library_id}_DEEP_{scan_deep}");

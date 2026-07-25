@@ -17,6 +17,16 @@ pub struct NumberingRefreshTarget {
 /// Counts and follow-up work produced by emptying one library's trash.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct EmptyTrashResult {
+    /// Permanently removed series identifiers.
+    pub series_ids: Vec<String>,
+    /// Permanently removed book identifiers.
+    pub book_ids: Vec<String>,
+    /// Series kept after book deletion and therefore rebuilt or reordered.
+    pub affected_series_ids: Vec<String>,
+    /// Permanently removed collection identifiers.
+    pub collection_ids: Vec<String>,
+    /// Permanently removed read-list identifiers.
+    pub read_list_ids: Vec<String>,
     /// Permanently removed series rows.
     pub series_deleted: u64,
     /// Permanently removed book rows.
@@ -53,19 +63,19 @@ impl Storage {
         .bind(library_id)
         .fetch_all(&mut *tx)
         .await?;
-        let series_deleted =
-            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM SERIES WHERE LIBRARY_ID=? AND DELETED_DATE IS NOT NULL")
+        let series_ids =
+            sqlx::query_scalar::<_, String>("SELECT ID FROM SERIES WHERE LIBRARY_ID=? AND DELETED_DATE IS NOT NULL")
                 .bind(library_id)
-                .fetch_one(&mut *tx)
+                .fetch_all(&mut *tx)
                 .await?;
-        let books_deleted = sqlx::query_scalar::<_, i64>(
-            r#"SELECT COUNT(*) FROM BOOK WHERE LIBRARY_ID=? AND
+        let book_ids = sqlx::query_scalar::<_, String>(
+            r#"SELECT ID FROM BOOK WHERE LIBRARY_ID=? AND
                (DELETED_DATE IS NOT NULL OR SERIES_ID IN
                  (SELECT ID FROM SERIES WHERE LIBRARY_ID=? AND DELETED_DATE IS NOT NULL))"#,
         )
         .bind(library_id)
         .bind(library_id)
-        .fetch_one(&mut *tx)
+        .fetch_all(&mut *tx)
         .await?;
 
         let book_subquery = r#"SELECT ID FROM BOOK WHERE LIBRARY_ID=? AND
@@ -86,26 +96,37 @@ impl Storage {
             .await?;
 
         let mut numbering_refreshes = Vec::new();
-        for series_id in affected_series {
-            reorder_series(&mut tx, &series_id, &mut numbering_refreshes).await?;
+        for series_id in &affected_series {
+            reorder_series(&mut tx, series_id, &mut numbering_refreshes).await?;
         }
-        let (collections_deleted, read_lists_deleted) = cleanup_empty_containers(&mut tx).await?;
+        let (collection_ids, read_list_ids) = cleanup_empty_containers(&mut tx).await?;
         tx.commit().await?;
         Ok(Some(EmptyTrashResult {
-            series_deleted: u64::try_from(series_deleted).unwrap_or_default(),
-            books_deleted: u64::try_from(books_deleted).unwrap_or_default(),
-            collections_deleted,
-            read_lists_deleted,
+            series_deleted: series_ids.len() as u64,
+            books_deleted: book_ids.len() as u64,
+            collections_deleted: collection_ids.len() as u64,
+            read_lists_deleted: read_list_ids.len() as u64,
+            series_ids,
+            book_ids,
+            affected_series_ids: affected_series,
+            collection_ids,
+            read_list_ids,
             numbering_refreshes,
         }))
     }
 
     /// Deletes empty collections and read lists according to server settings.
     pub async fn cleanup_empty_containers(&self) -> Result<(u64, u64)> {
+        let (collections, read_lists) = self.cleanup_empty_container_ids().await?;
+        Ok((collections.len() as u64, read_lists.len() as u64))
+    }
+
+    /// Deletes empty collections and read lists and returns their identifiers.
+    pub async fn cleanup_empty_container_ids(&self) -> Result<(Vec<String>, Vec<String>)> {
         let mut tx = self.pool.begin().await?;
-        let result = cleanup_empty_containers(&mut tx).await?;
+        let (collections, read_lists) = cleanup_empty_containers(&mut tx).await?;
         tx.commit().await?;
-        Ok(result)
+        Ok((collections, read_lists))
     }
 
     /// Permanently deletes a library and all database-owned content.
@@ -122,6 +143,14 @@ impl Storage {
             return Ok(DeleteLibraryResult::NotFound);
         }
 
+        let book_ids = sqlx::query_scalar::<_, String>("SELECT ID FROM BOOK WHERE LIBRARY_ID=?")
+            .bind(library_id)
+            .fetch_all(&mut *tx)
+            .await?;
+        let series_ids = sqlx::query_scalar::<_, String>("SELECT ID FROM SERIES WHERE LIBRARY_ID=?")
+            .bind(library_id)
+            .fetch_all(&mut *tx)
+            .await?;
         let book_subquery = "SELECT ID FROM BOOK WHERE LIBRARY_ID=?";
         delete_book_dependents(&mut tx, book_subquery, &[library_id]).await?;
         sqlx::query(&format!("DELETE FROM BOOK WHERE ID IN ({book_subquery})"))
@@ -146,7 +175,7 @@ impl Storage {
             .execute(&mut *tx)
             .await?;
         tx.commit().await?;
-        Ok(DeleteLibraryResult::Deleted)
+        Ok(DeleteLibraryResult::Deleted { book_ids, series_ids })
     }
 }
 
@@ -261,26 +290,31 @@ async fn reorder_series(
     Ok(())
 }
 
-async fn cleanup_empty_containers(tx: &mut Transaction<'_, Sqlite>) -> Result<(u64, u64)> {
+async fn cleanup_empty_containers(tx: &mut Transaction<'_, Sqlite>) -> Result<(Vec<String>, Vec<String>)> {
     let collections = if setting_enabled(tx, "DELETE_EMPTY_COLLECTIONS").await? {
+        let ids = sqlx::query_scalar::<_, String>("SELECT ID FROM COLLECTION WHERE NOT EXISTS (SELECT 1 FROM COLLECTION_SERIES CS WHERE CS.COLLECTION_ID=COLLECTION.ID)")
+            .fetch_all(&mut **tx).await?;
         sqlx::query("DELETE FROM THUMBNAIL_COLLECTION WHERE COLLECTION_ID IN (SELECT ID FROM COLLECTION WHERE NOT EXISTS (SELECT 1 FROM COLLECTION_SERIES CS WHERE CS.COLLECTION_ID=COLLECTION.ID))")
             .execute(&mut **tx).await?;
         sqlx::query("DELETE FROM COLLECTION WHERE NOT EXISTS (SELECT 1 FROM COLLECTION_SERIES CS WHERE CS.COLLECTION_ID=COLLECTION.ID)")
-            .execute(&mut **tx).await?.rows_affected()
+            .execute(&mut **tx).await?;
+        ids
     } else {
-        0
+        Vec::new()
     };
     let read_lists = if setting_enabled(tx, "DELETE_EMPTY_READLISTS").await? {
+        let ids = sqlx::query_scalar::<_, String>("SELECT ID FROM READLIST WHERE NOT EXISTS (SELECT 1 FROM READLIST_BOOK RB WHERE RB.READLIST_ID=READLIST.ID)")
+            .fetch_all(&mut **tx).await?;
         sqlx::query("DELETE FROM THUMBNAIL_READLIST WHERE READLIST_ID IN (SELECT ID FROM READLIST WHERE NOT EXISTS (SELECT 1 FROM READLIST_BOOK RB WHERE RB.READLIST_ID=READLIST.ID))")
             .execute(&mut **tx).await?;
         sqlx::query(
             "DELETE FROM READLIST WHERE NOT EXISTS (SELECT 1 FROM READLIST_BOOK RB WHERE RB.READLIST_ID=READLIST.ID)",
         )
         .execute(&mut **tx)
-        .await?
-        .rows_affected()
+        .await?;
+        ids
     } else {
-        0
+        Vec::new()
     };
     Ok((collections, read_lists))
 }
@@ -379,6 +413,14 @@ mod tests {
         assert_eq!(result.collections_deleted, 1);
         assert_eq!(result.read_lists_deleted, 1);
         assert_eq!(result.numbering_refreshes.len(), 2);
+        assert_eq!(result.series_ids, std::slice::from_ref(&gone.id));
+        assert_eq!(
+            result.book_ids.iter().collect::<std::collections::BTreeSet<_>>(),
+            [&removed.id, &gone_book.id].into()
+        );
+        assert_eq!(result.affected_series_ids, std::slice::from_ref(&keep.id));
+        assert_eq!(result.collection_ids, ["collection"]);
+        assert_eq!(result.read_list_ids, ["readlist"]);
 
         let remaining = storage.list_books_by_series_id(&keep.id).await.unwrap();
         assert_eq!(remaining.iter().map(|book| book.number).collect::<Vec<_>>(), [1, 2]);

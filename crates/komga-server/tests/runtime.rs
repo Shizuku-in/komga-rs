@@ -1,10 +1,52 @@
 use std::{fs, fs::File, io::Write, path::PathBuf, time::Duration};
 
 use komga_core::{BookMetadataPatch, Library, MetadataUpdate, PageRequest, ScanInterval, User, scan_library_files};
+use komga_search::{EntityKind, IndexState, SearchIndex};
 use komga_server::AppState;
 use komga_storage::{Storage, TaskRecord, TaskStorage};
 use url::Url;
 use zip::{ZipArchive, ZipWriter, write::SimpleFileOptions};
+
+#[tokio::test]
+async fn file_search_startup_enqueues_only_non_current_indexes() {
+    let storage = Storage::connect_memory().await.unwrap();
+    let tasks = TaskStorage::connect_memory().await.unwrap();
+    let empty_directory = tempfile::tempdir().unwrap();
+    let empty = SearchIndex::open(empty_directory.path()).unwrap();
+    assert_eq!(empty.state(), IndexState::Empty);
+
+    AppState::with_file_search(storage.clone(), tasks.clone(), empty.clone())
+        .await
+        .unwrap();
+    AppState::with_file_search(storage.clone(), tasks.clone(), empty)
+        .await
+        .unwrap();
+    let queued = tasks.list().await.unwrap();
+    assert_eq!(queued.len(), 1);
+    assert_eq!(queued[0].id, "REBUILD_INDEX");
+    assert_eq!(queued[0].priority, 8);
+
+    let current_tasks = TaskStorage::connect_memory().await.unwrap();
+    let current_directory = tempfile::tempdir().unwrap();
+    let current = SearchIndex::open(current_directory.path()).unwrap();
+    current
+        .replace(
+            &[
+                EntityKind::Book,
+                EntityKind::Series,
+                EntityKind::Collection,
+                EntityKind::ReadList,
+            ],
+            [],
+        )
+        .unwrap();
+    assert_eq!(current.state(), IndexState::Current);
+
+    AppState::with_file_search(storage, current_tasks.clone(), current)
+        .await
+        .unwrap();
+    assert!(current_tasks.list().await.unwrap().is_empty());
+}
 
 #[tokio::test]
 async fn empty_trash_tasks_permanently_delete_soft_deleted_content_and_missing_libraries_complete() {
@@ -135,7 +177,7 @@ async fn scan_imports_comic_info_collections_and_read_lists_idempotently() {
 
     let user = User::new("reader@example.org".into(), "hash".into());
     let collections = storage
-        .list_collections(None, None, &PageRequest::default(), &user)
+        .list_collections(None, None, None, &PageRequest::default(), &user)
         .await
         .unwrap();
     assert_eq!(
@@ -153,7 +195,7 @@ async fn scan_imports_comic_info_collections_and_read_lists_idempotently() {
             .all(|value| !value.ordered && value.series_ids.len() == 1)
     );
     let read_lists = storage
-        .list_read_lists(None, &PageRequest::default(), &user)
+        .list_read_lists(None, None, &PageRequest::default(), &user)
         .await
         .unwrap();
     assert_eq!(
@@ -187,7 +229,7 @@ async fn scan_imports_comic_info_collections_and_read_lists_idempotently() {
     .expect("deep ComicInfo backfill did not complete");
     assert_eq!(
         storage
-            .list_collections(None, None, &PageRequest::default(), &user)
+            .list_collections(None, None, None, &PageRequest::default(), &user)
             .await
             .unwrap()
             .total_elements,
@@ -195,7 +237,7 @@ async fn scan_imports_comic_info_collections_and_read_lists_idempotently() {
     );
     assert_eq!(
         storage
-            .list_read_lists(None, &PageRequest::default(), &user)
+            .list_read_lists(None, None, &PageRequest::default(), &user)
             .await
             .unwrap()
             .total_elements,

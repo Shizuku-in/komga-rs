@@ -47,6 +47,12 @@ pub(super) async fn process_scan_task(state: &AppState, task: &TaskRecord) -> Ta
     {
         Ok(stats) => {
             tracing::info!(library_id = %payload.library_id, ?stats, "library scan completed");
+            let book_ids = stats.book_ids.iter().cloned().collect::<Vec<_>>();
+            let series_ids = stats.series_ids.iter().cloned().collect::<Vec<_>>();
+            if !state.sync_series(&series_ids).await || !state.sync_books(&book_ids).await {
+                state.recover_search_after_http_failure().await;
+                return TaskOutcome::Retry;
+            }
             for series_id in stats.sidecars_changed {
                 if let Err(error) = state
                     .enqueue_task(&TaskRecord::refresh_series_metadata(&series_id, task.priority))
@@ -66,9 +72,28 @@ pub(super) async fn process_scan_task(state: &AppState, task: &TaskRecord) -> Ta
         if perform_empty_trash(state, &payload.library_id).await == TaskOutcome::Retry {
             return TaskOutcome::Retry;
         }
-    } else if let Err(error) = state.storage.cleanup_empty_containers().await {
-        tracing::error!(%error, library_id = %payload.library_id, "could not clean empty collections and read lists");
-        return TaskOutcome::Retry;
+    } else {
+        match state.storage.cleanup_empty_container_ids().await {
+            Ok((collections, read_lists)) => {
+                let deleted = collections
+                    .into_iter()
+                    .map(|id| (komga_search::EntityKind::Collection, id))
+                    .chain(
+                        read_lists
+                            .into_iter()
+                            .map(|id| (komga_search::EntityKind::ReadList, id)),
+                    )
+                    .collect();
+                if !state.delete_search_entities(deleted).await {
+                    state.recover_search_after_http_failure().await;
+                    return TaskOutcome::Retry;
+                }
+            }
+            Err(error) => {
+                tracing::error!(%error, library_id = %payload.library_id, "could not clean empty collections and read lists");
+                return TaskOutcome::Retry;
+            }
+        }
     }
     let targets = match state.storage.list_book_analysis_targets(&payload.library_id).await {
         Ok(targets) => targets,

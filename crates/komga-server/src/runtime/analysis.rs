@@ -56,6 +56,10 @@ pub(super) async fn process_analyze_book_task(state: &AppState, task: &TaskRecor
         tracing::error!(%error, book_id = %book.id, "could not persist media analysis");
         return TaskOutcome::Retry;
     }
+    if !state.sync_books(std::slice::from_ref(&book.id)).await {
+        state.recover_search_after_http_failure().await;
+        return TaskOutcome::Retry;
+    }
     if media.status == MediaStatus::Ready
         && let Err(error) = state
             .enqueue_task(&TaskRecord::generate_book_thumbnail(

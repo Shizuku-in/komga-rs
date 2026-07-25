@@ -7,10 +7,15 @@ use url::Url;
 use crate::{Result, Storage, StorageError};
 
 /// Outcome of a library deletion.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DeleteLibraryResult {
     /// The library and its configuration relations were deleted.
-    Deleted,
+    Deleted {
+        /// Permanently removed book identifiers.
+        book_ids: Vec<String>,
+        /// Permanently removed series identifiers.
+        series_ids: Vec<String>,
+    },
     /// No library had the supplied identifier.
     NotFound,
 }

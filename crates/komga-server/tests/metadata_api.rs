@@ -93,6 +93,32 @@ async fn patch_json(app: &Router, path: &str, authorization: Option<&str>, paylo
         .unwrap()
 }
 
+async fn search_ids(app: &Router, authorization: &str, entity: &str, query: &str) -> Vec<String> {
+    let response = app
+        .clone()
+        .oneshot(
+            Request::post(format!("/api/v1/{entity}/list"))
+                .header(header::AUTHORIZATION, authorization)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(serde_json::json!({ "fullTextSearch": query }).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = http_body_util::BodyExt::collect(response.into_body())
+        .await
+        .unwrap()
+        .to_bytes();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    body["content"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["id"].as_str().unwrap().to_owned())
+        .collect()
+}
+
 fn object(entries: impl IntoIterator<Item = (String, Value)>) -> Value {
     serde_json::to_value(entries.into_iter().collect::<BTreeMap<_, _>>()).unwrap()
 }
@@ -130,6 +156,18 @@ async fn metadata_routes_require_an_administrator_and_report_missing_ids() {
 async fn book_metadata_patch_normalizes_values_and_preserves_or_clears_nulls() {
     let fixture = metadata_fixture().await;
     let book = &fixture.books[0][0];
+    let original_title = fixture
+        .storage
+        .find_book_metadata(&book.id)
+        .await
+        .unwrap()
+        .unwrap()
+        .title;
+    assert!(
+        search_ids(&fixture.app, &fixture.admin, "books", &format!("\"{original_title}\""))
+            .await
+            .contains(&book.id)
+    );
     let path = format!("/api/v1/books/{}/metadata", book.id);
     let response = patch_json(
         &fixture.app,
@@ -158,6 +196,16 @@ async fn book_metadata_patch_normalizes_values_and_preserves_or_clears_nulls() {
     )
     .await;
     assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    assert!(
+        search_ids(&fixture.app, &fixture.admin, "books", "\"Updated title\"")
+            .await
+            .contains(&book.id)
+    );
+    assert!(
+        !search_ids(&fixture.app, &fixture.admin, "books", &format!("\"{original_title}\""))
+            .await
+            .contains(&book.id)
+    );
 
     let metadata = fixture.storage.find_book_metadata(&book.id).await.unwrap().unwrap();
     assert_eq!(metadata.title, "Updated title");
@@ -329,6 +377,13 @@ async fn bulk_book_metadata_validates_before_writes_and_deduplicates_series_task
 async fn series_metadata_patch_handles_nulls_normalization_and_validation() {
     let fixture = metadata_fixture().await;
     let series = &fixture.series[0];
+    let original_title = fixture
+        .storage
+        .find_series_metadata(&series.id)
+        .await
+        .unwrap()
+        .unwrap()
+        .title;
     let path = format!("/api/v1/series/{}/metadata", series.id);
     let response = patch_json(
         &fixture.app,
@@ -367,6 +422,16 @@ async fn series_metadata_patch_handles_nulls_normalization_and_validation() {
     )
     .await;
     assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    assert!(
+        search_ids(&fixture.app, &fixture.admin, "series", "\"Updated series\"")
+            .await
+            .contains(&series.id)
+    );
+    assert!(
+        !search_ids(&fixture.app, &fixture.admin, "series", &format!("\"{original_title}\""))
+            .await
+            .contains(&series.id)
+    );
     let metadata = fixture.storage.find_series_metadata(&series.id).await.unwrap().unwrap();
     assert_eq!(metadata.status.as_str(), "ENDED");
     assert_eq!(metadata.title, "Updated series");

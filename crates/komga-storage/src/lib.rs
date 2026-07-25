@@ -20,13 +20,13 @@ mod schema;
 mod settings;
 mod tasks;
 
-pub use containers::ContainerThumbnail;
+pub use containers::{ComicInfoContainerUpdate, ContainerThumbnail};
 pub use content::ScanApplyStats;
 pub use content_queries::ReadListFile;
 pub use library::DeleteLibraryResult;
 pub use lifecycle::{EmptyTrashResult, NumberingRefreshTarget};
 pub use settings::ClientSetting;
-pub use tasks::{TaskRecord, TaskStorage};
+pub use tasks::{RebuildIndexEntity, TaskRecord, TaskStorage};
 
 pub(crate) use auth::sqlite_datetime_to_utc;
 
@@ -560,9 +560,9 @@ mod tests {
 
     use super::*;
     use komga_core::{
-        ALL_ROLES, AgeRestriction, AllowExclude, BookCondition, BookSearch, ContentRestrictions, EqualityOperator,
-        Library, PageRequest, ReadStatus, ReadStatusOperator, ScanInterval, SeriesSearch, SortDirection, SortOrder,
-        new_id, scan_library_files,
+        ALL_ROLES, AgeRestriction, AllowExclude, BookCondition, BookSearch, CollectionCreation, ContentRestrictions,
+        EqualityOperator, Library, PageRequest, ReadListCreation, ReadStatus, ReadStatusOperator, ScanInterval,
+        SeriesSearch, SortDirection, SortOrder, new_id, scan_library_files,
     };
     use url::Url;
 
@@ -744,10 +744,10 @@ mod tests {
         assert_eq!(settings["ui.theme"].value, "light");
         assert_eq!(settings["ui.theme"].allow_unauthorized, Some(true));
 
-        assert_eq!(
+        assert!(matches!(
             storage.delete_library(&library.id).await.unwrap(),
-            DeleteLibraryResult::Deleted
-        );
+            DeleteLibraryResult::Deleted { .. }
+        ));
     }
 
     #[tokio::test]
@@ -807,6 +807,30 @@ mod tests {
         assert!(tasks.release(&scan.id, "worker").await.unwrap());
         assert!(tasks.delete(&scan.id).await.unwrap());
         assert_eq!(tasks.list().await.unwrap()[0].simple_type, "EmptyTrash");
+    }
+
+    #[tokio::test]
+    async fn rebuild_index_task_matches_kotlin_payload_and_deduplicates() {
+        let tasks = TaskStorage::connect_memory().await.unwrap();
+        let full = TaskRecord::rebuild_index(None, 8);
+        assert_eq!(full.id, "REBUILD_INDEX");
+        assert_eq!(full.class, "org.gotson.komga.application.tasks.Task$RebuildIndex");
+        assert_eq!(full.simple_type, "RebuildIndex");
+        let payload: serde_json::Value = serde_json::from_str(&full.payload).unwrap();
+        assert_eq!(payload["entities"], serde_json::Value::Null);
+        assert_eq!(payload["uniqueId"], "REBUILD_INDEX");
+        tasks.save(&full).await.unwrap();
+
+        let entities = BTreeSet::from([RebuildIndexEntity::Book, RebuildIndexEntity::Series]);
+        tasks
+            .save(&TaskRecord::rebuild_index(Some(&entities), 4))
+            .await
+            .unwrap();
+        let queued = tasks.list().await.unwrap();
+        assert_eq!(queued.len(), 1);
+        assert_eq!(queued[0].priority, 4);
+        let payload: serde_json::Value = serde_json::from_str(&queued[0].payload).unwrap();
+        assert_eq!(payload["entities"], serde_json::json!(["Book", "Series"]));
     }
 
     #[tokio::test]
@@ -872,6 +896,8 @@ mod tests {
         assert_eq!(first_stats.books_added, 1);
         let original_series = storage.list_series_by_library_id(&library.id).await.unwrap()[0].clone();
         let original_book = storage.list_books_by_series_id(&original_series.id).await.unwrap()[0].clone();
+        assert_eq!(first_stats.series_ids, BTreeSet::from([original_series.id.clone()]));
+        assert_eq!(first_stats.book_ids, BTreeSet::from([original_book.id.clone()]));
 
         let unchanged = scan_library_files(&library, || false).unwrap();
         assert_eq!(
@@ -891,6 +917,7 @@ mod tests {
         let changed = scan_library_files(&library, || false).unwrap();
         let changed_stats = storage.apply_library_scan(&library.id, &changed, true).await.unwrap();
         assert_eq!(changed_stats.books_updated, 1);
+        assert_eq!(changed_stats.book_ids, BTreeSet::from([original_book.id.clone()]));
         assert_eq!(
             sqlx::query_scalar::<_, String>("SELECT STATUS FROM MEDIA WHERE BOOK_ID = ?")
                 .bind(&original_book.id)
@@ -905,6 +932,8 @@ mod tests {
         let deleted_stats = storage.apply_library_scan(&library.id, &empty, false).await.unwrap();
         assert_eq!(deleted_stats.books_deleted, 1);
         assert_eq!(deleted_stats.series_deleted, 1);
+        assert_eq!(deleted_stats.book_ids, BTreeSet::from([original_book.id.clone()]));
+        assert_eq!(deleted_stats.series_ids, BTreeSet::from([original_series.id.clone()]));
         assert!(
             storage.list_series_by_library_id(&library.id).await.unwrap()[0]
                 .deleted_date
@@ -1027,7 +1056,7 @@ mod tests {
         .unwrap();
 
         let series_page = storage
-            .query_series(&SeriesSearch::default(), &PageRequest::default(), &user)
+            .query_series(&SeriesSearch::default(), &PageRequest::default(), &user, None)
             .await
             .unwrap();
         assert_eq!(series_page.total_elements, 1);
@@ -1055,12 +1084,183 @@ mod tests {
                 direction: SortDirection::Ascending,
             }],
         };
-        let book_page = storage.query_books(&read_search, &page_request, &user).await.unwrap();
+        let book_page = storage
+            .query_books(&read_search, &page_request, &user, None)
+            .await
+            .unwrap();
         assert_eq!(book_page.total_elements, 1);
         assert_eq!(book_page.content[0].media.media_profile, "PDF");
         assert_eq!(book_page.content[0].metadata.tags, BTreeSet::from(["BookTag".into()]));
         assert_eq!(book_page.content[0].read_progress.as_ref().unwrap().device_id, "device");
         assert_eq!(book_page.content[0].size, "1.5 KiB");
+        let ranked = vec![books[1].id.clone(), books[0].id.clone()];
+        let ranked_page = storage
+            .query_books(
+                &BookSearch::default(),
+                &PageRequest {
+                    page: 0,
+                    size: 1,
+                    ..PageRequest::default()
+                },
+                &user,
+                Some(&ranked),
+            )
+            .await
+            .unwrap();
+        assert_eq!(ranked_page.total_elements, 2);
+        assert_eq!(ranked_page.content[0].id, books[1].id);
+        let explicitly_sorted = storage
+            .query_books(
+                &BookSearch::default(),
+                &PageRequest {
+                    unpaged: true,
+                    sort: vec![SortOrder {
+                        property: "metadata.numberSort".into(),
+                        direction: SortDirection::Ascending,
+                    }],
+                    ..PageRequest::default()
+                },
+                &user,
+                Some(&ranked),
+            )
+            .await
+            .unwrap();
+        assert_eq!(explicitly_sorted.content[0].id, books[0].id);
+        assert_eq!(
+            storage
+                .query_books(&BookSearch::default(), &PageRequest::default(), &user, Some(&[]))
+                .await
+                .unwrap()
+                .total_elements,
+            0
+        );
+        assert!(
+            storage
+                .query_books(
+                    &BookSearch::default(),
+                    &PageRequest {
+                        sort: vec![SortOrder {
+                            property: "relevance".into(),
+                            direction: SortDirection::Ascending,
+                        }],
+                        ..PageRequest::default()
+                    },
+                    &user,
+                    None,
+                )
+                .await
+                .is_err()
+        );
+
+        for (id, name) in [("collection-a", "Alpha"), ("collection-z", "Zulu")] {
+            storage
+                .create_collection(
+                    id,
+                    &CollectionCreation {
+                        name: name.into(),
+                        ordered: false,
+                        series_ids: vec![series.id.clone()],
+                    },
+                )
+                .await
+                .unwrap();
+        }
+        let container_rank = ["collection-z".into(), "collection-a".into()];
+        let collection_page = storage
+            .list_collections(
+                None,
+                Some(&library.id),
+                Some(&container_rank),
+                &PageRequest {
+                    page: 0,
+                    size: 1,
+                    ..PageRequest::default()
+                },
+                &user,
+            )
+            .await
+            .unwrap();
+        assert_eq!(collection_page.total_elements, 2);
+        assert_eq!(collection_page.content[0].id, "collection-z");
+        let explicitly_sorted = storage
+            .list_collections(
+                None,
+                None,
+                Some(&container_rank),
+                &PageRequest {
+                    unpaged: true,
+                    sort: vec![SortOrder {
+                        property: "name".into(),
+                        direction: SortDirection::Ascending,
+                    }],
+                    ..PageRequest::default()
+                },
+                &user,
+            )
+            .await
+            .unwrap();
+        assert_eq!(explicitly_sorted.content[0].id, "collection-a");
+        assert_eq!(
+            storage
+                .list_collections(
+                    None,
+                    Some("missing"),
+                    Some(&container_rank),
+                    &PageRequest::default(),
+                    &user
+                )
+                .await
+                .unwrap()
+                .total_elements,
+            0
+        );
+        assert_eq!(
+            storage
+                .list_collections(None, None, Some(&[]), &PageRequest::default(), &user)
+                .await
+                .unwrap()
+                .total_elements,
+            0
+        );
+
+        for (id, name) in [("readlist-a", "Alpha"), ("readlist-z", "Zulu")] {
+            storage
+                .create_read_list(
+                    id,
+                    &ReadListCreation {
+                        name: name.into(),
+                        summary: String::new(),
+                        ordered: true,
+                        book_ids: vec![books[0].id.clone()],
+                    },
+                )
+                .await
+                .unwrap();
+        }
+        let read_list_rank = ["readlist-z".into(), "readlist-a".into()];
+        let read_list_page = storage
+            .list_read_lists(
+                None,
+                Some(&read_list_rank),
+                &PageRequest {
+                    page: 0,
+                    size: 1,
+                    ..PageRequest::default()
+                },
+                &user,
+            )
+            .await
+            .unwrap();
+        assert_eq!(read_list_page.total_elements, 2);
+        assert_eq!(read_list_page.content[0].id, "readlist-z");
+        assert_eq!(
+            storage
+                .list_read_lists(None, Some(&[]), &PageRequest::default(), &user)
+                .await
+                .unwrap()
+                .total_elements,
+            0
+        );
         assert_eq!(
             storage
                 .find_book_sibling_dto(&books[0].id, &user.id, true)
@@ -1081,7 +1281,7 @@ mod tests {
         );
         assert_eq!(
             storage
-                .query_series(&SeriesSearch::default(), &PageRequest::default(), &user)
+                .query_series(&SeriesSearch::default(), &PageRequest::default(), &user, None)
                 .await
                 .unwrap()
                 .total_elements,
@@ -1091,7 +1291,7 @@ mod tests {
         user.shared_all_libraries = false;
         assert_eq!(
             storage
-                .query_books(&BookSearch::default(), &PageRequest::default(), &user)
+                .query_books(&BookSearch::default(), &PageRequest::default(), &user, None)
                 .await
                 .unwrap()
                 .total_elements,
@@ -1109,7 +1309,8 @@ mod tests {
                 .query_books(
                     &media_search,
                     &PageRequest::default(),
-                    &User::new("all@example.org".into(), "hash".into())
+                    &User::new("all@example.org".into(), "hash".into()),
+                    None,
                 )
                 .await
                 .unwrap()
@@ -1132,10 +1333,10 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(
+        assert!(matches!(
             storage.delete_library(&library.id).await.unwrap(),
-            DeleteLibraryResult::Deleted
-        );
+            DeleteLibraryResult::Deleted { .. }
+        ));
         assert!(storage.find_library_by_id(&library.id).await.unwrap().is_none());
     }
 }

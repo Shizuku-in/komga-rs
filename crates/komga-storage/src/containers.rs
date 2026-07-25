@@ -72,6 +72,15 @@ pub struct ContainerThumbnail {
     pub parent_id: String,
 }
 
+/// Containers created or modified while importing one ComicInfo document.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ComicInfoContainerUpdate {
+    /// Affected collection identifiers.
+    pub collection_ids: BTreeSet<String>,
+    /// Affected read-list identifiers.
+    pub read_list_ids: BTreeSet<String>,
+}
+
 fn normalized_name(name: &str) -> String {
     name.nfkc().flat_map(char::to_lowercase).collect()
 }
@@ -100,8 +109,9 @@ impl Storage {
         book_id: &str,
         collections: &[String],
         read_lists: &[(String, Option<i32>)],
-    ) -> Result<()> {
+    ) -> Result<ComicInfoContainerUpdate> {
         let mut tx = self.pool.begin().await?;
+        let mut result = ComicInfoContainerUpdate::default();
         for name in collections {
             let name = name.trim();
             if name.is_empty() {
@@ -146,6 +156,7 @@ impl Storage {
                 .bind(&id)
                 .execute(&mut *tx)
                 .await?;
+                result.collection_ids.insert(id);
             }
         }
         for (name, requested) in read_lists {
@@ -205,9 +216,10 @@ impl Storage {
                 .bind(&id)
                 .execute(&mut *tx)
                 .await?;
+            result.read_list_ids.insert(id);
         }
         tx.commit().await?;
-        Ok(())
+        Ok(result)
     }
     /// Matches a parsed ComicRack request against all persisted series and books.
     pub async fn match_read_list_request(&self, request: ReadListRequest) -> Result<ReadListRequestMatchDto> {
@@ -498,10 +510,22 @@ impl Storage {
         &self,
         search: Option<&str>,
         library_id: Option<&str>,
+        ranked_ids: Option<&[String]>,
         page: &PageRequest,
         user: &User,
     ) -> Result<ContentPage<CollectionDto>> {
-        let rows=sqlx::query_as::<_,CollectionRow>("SELECT ID id,NAME name,ORDERED ordered,SERIES_COUNT series_count,CAST(CREATED_DATE AS TEXT) created_date,CAST(LAST_MODIFIED_DATE AS TEXT) last_modified_date FROM COLLECTION").fetch_all(&self.pool).await?;
+        let select = "SELECT COLLECTION.ID id,COLLECTION.NAME name,COLLECTION.ORDERED ordered,COLLECTION.SERIES_COUNT series_count,CAST(COLLECTION.CREATED_DATE AS TEXT) created_date,CAST(COLLECTION.LAST_MODIFIED_DATE AS TEXT) last_modified_date FROM COLLECTION";
+        let rows = if let Some(ids) = ranked_ids {
+            let json = serde_json::to_string(ids).expect("string identifiers always serialize");
+            sqlx::query_as::<_, CollectionRow>(&format!(
+                "{select} JOIN json_each(?) ranked ON ranked.value=COLLECTION.ID ORDER BY CAST(ranked.key AS INTEGER)"
+            ))
+            .bind(json)
+            .fetch_all(&self.pool)
+            .await?
+        } else {
+            sqlx::query_as::<_, CollectionRow>(select).fetch_all(&self.pool).await?
+        };
         let needle = search.map(normalized_name);
         let mut out = Vec::new();
         for row in rows {
@@ -519,18 +543,32 @@ impl Storage {
             }
         }
         for sort in &page.sort {
+            if sort.property == "relevance" {
+                if ranked_ids.is_some() {
+                    continue;
+                }
+                return Err(StorageError::InvalidQuery(
+                    "relevance sort requires a full-text search".into(),
+                ));
+            }
             if !matches!(
                 sort.property.as_str(),
                 "name" | "createdDate" | "created" | "lastModifiedDate" | "lastModified"
             ) {
                 return Err(StorageError::InvalidQuery(format!(
-                    "unsupported read-list sort property: {}",
+                    "unsupported collection sort property: {}",
                     sort.property
                 )));
             }
         }
+        let ranks = ranked_ids.map(|ids| {
+            ids.iter()
+                .enumerate()
+                .map(|(rank, id)| (id.as_str(), rank))
+                .collect::<HashMap<_, _>>()
+        });
         out.sort_by(|a, b| {
-            for sort in &page.sort {
+            for sort in page.sort.iter().filter(|sort| sort.property != "relevance") {
                 let ordering = match sort.property.as_str() {
                     "name" => normalized_name(&a.name).cmp(&normalized_name(&b.name)),
                     "createdDate" | "created" => a.created_date.cmp(&b.created_date),
@@ -541,6 +579,12 @@ impl Storage {
                     SortDirection::Ascending => ordering,
                     SortDirection::Descending => ordering.reverse(),
                 };
+                if !ordering.is_eq() {
+                    return ordering;
+                }
+            }
+            if let Some(ranks) = &ranks {
+                let ordering = ranks[a.id.as_str()].cmp(&ranks[b.id.as_str()]);
                 if !ordering.is_eq() {
                     return ordering;
                 }
@@ -586,6 +630,7 @@ impl Storage {
             },
             &page,
             user,
+            None,
         )
         .await
     }
@@ -686,10 +731,22 @@ impl Storage {
     pub async fn list_read_lists(
         &self,
         search: Option<&str>,
+        ranked_ids: Option<&[String]>,
         page: &PageRequest,
         user: &User,
     ) -> Result<ContentPage<ReadListDto>> {
-        let rows=sqlx::query_as::<_,ReadListRow>("SELECT ID id,NAME name,SUMMARY summary,ORDERED ordered,BOOK_COUNT book_count,CAST(CREATED_DATE AS TEXT) created_date,CAST(LAST_MODIFIED_DATE AS TEXT) last_modified_date FROM READLIST").fetch_all(&self.pool).await?;
+        let select = "SELECT READLIST.ID id,READLIST.NAME name,READLIST.SUMMARY summary,READLIST.ORDERED ordered,READLIST.BOOK_COUNT book_count,CAST(READLIST.CREATED_DATE AS TEXT) created_date,CAST(READLIST.LAST_MODIFIED_DATE AS TEXT) last_modified_date FROM READLIST";
+        let rows = if let Some(ids) = ranked_ids {
+            let json = serde_json::to_string(ids).expect("string identifiers always serialize");
+            sqlx::query_as::<_, ReadListRow>(&format!(
+                "{select} JOIN json_each(?) ranked ON ranked.value=READLIST.ID ORDER BY CAST(ranked.key AS INTEGER)"
+            ))
+            .bind(json)
+            .fetch_all(&self.pool)
+            .await?
+        } else {
+            sqlx::query_as::<_, ReadListRow>(select).fetch_all(&self.pool).await?
+        };
         let needle = search.map(normalized_name);
         let mut out = Vec::new();
         for row in rows {
@@ -700,7 +757,48 @@ impl Storage {
                 out.push(dto)
             }
         }
+        for sort in &page.sort {
+            if sort.property == "relevance" && ranked_ids.is_some() {
+                continue;
+            }
+            if !matches!(
+                sort.property.as_str(),
+                "name" | "createdDate" | "created" | "lastModifiedDate" | "lastModified"
+            ) {
+                return Err(StorageError::InvalidQuery(format!(
+                    "unsupported read-list sort property: {}",
+                    sort.property
+                )));
+            }
+        }
+        let ranks = ranked_ids.map(|ids| {
+            ids.iter()
+                .enumerate()
+                .map(|(rank, id)| (id.as_str(), rank))
+                .collect::<HashMap<_, _>>()
+        });
         out.sort_by(|a, b| {
+            for sort in page.sort.iter().filter(|sort| sort.property != "relevance") {
+                let ordering = match sort.property.as_str() {
+                    "name" => normalized_name(&a.name).cmp(&normalized_name(&b.name)),
+                    "createdDate" | "created" => a.created_date.cmp(&b.created_date),
+                    "lastModifiedDate" | "lastModified" => a.last_modified_date.cmp(&b.last_modified_date),
+                    _ => unreachable!("sort fields were validated"),
+                };
+                let ordering = match sort.direction {
+                    SortDirection::Ascending => ordering,
+                    SortDirection::Descending => ordering.reverse(),
+                };
+                if !ordering.is_eq() {
+                    return ordering;
+                }
+            }
+            if let Some(ranks) = &ranks {
+                let ordering = ranks[a.id.as_str()].cmp(&ranks[b.id.as_str()]);
+                if !ordering.is_eq() {
+                    return ordering;
+                }
+            }
             normalized_name(&a.name)
                 .cmp(&normalized_name(&b.name))
                 .then(a.id.cmp(&b.id))
@@ -749,6 +847,7 @@ impl Storage {
             },
             &page,
             user,
+            None,
         )
         .await
     }

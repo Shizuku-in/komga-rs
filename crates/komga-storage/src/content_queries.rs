@@ -254,12 +254,13 @@ impl Storage {
         search: &SeriesSearch,
         page: &PageRequest,
         user: &User,
+        ranked_ids: Option<&[String]>,
     ) -> Result<ContentPage<SeriesDto>> {
         validate_page(page)?;
         reject_full_text(search.full_text_search.as_deref())?;
-        validate_series_sorts(page)?;
+        validate_series_sorts(page, ranked_ids.is_some())?;
 
-        let mut count = series_count_builder(user);
+        let mut count = series_count_builder(user, ranked_ids);
         push_series_visibility(&mut count, user);
         if let Some(condition) = &search.condition {
             count.push(" AND ");
@@ -268,13 +269,13 @@ impl Storage {
         let total = count.build_query_scalar::<i64>().fetch_one(&self.pool).await?;
         let total = u64::try_from(total).map_err(|_| StorageError::InvalidData("negative series count".into()))?;
 
-        let mut query = series_query_builder(user);
+        let mut query = series_query_builder(user, ranked_ids);
         push_series_visibility(&mut query, user);
         if let Some(condition) = &search.condition {
             query.push(" AND ");
             push_series_condition(&mut query, condition);
         }
-        push_series_order(&mut query, page);
+        push_series_order(&mut query, page, ranked_ids.is_some());
         push_pagination(&mut query, page)?;
         let rows = query.build_query_as::<SeriesQueryRow>().fetch_all(&self.pool).await?;
         let content = rows.into_iter().map(SeriesQueryRow::into_dto).collect::<Result<_>>()?;
@@ -291,7 +292,7 @@ impl Storage {
     ///
     /// Returns an error when the row cannot be queried or hydrated.
     pub async fn find_series_dto_by_id(&self, id: &str, user_id: &str) -> Result<Option<SeriesDto>> {
-        let mut query = series_query_builder_for_user_id(user_id);
+        let mut query = series_query_builder_for_user_id(user_id, None);
         query.push(" AND s.ID = ").push_bind(id.to_owned());
         query
             .build_query_as::<SeriesQueryRow>()
@@ -312,12 +313,13 @@ impl Storage {
         search: &BookSearch,
         page: &PageRequest,
         user: &User,
+        ranked_ids: Option<&[String]>,
     ) -> Result<ContentPage<BookDto>> {
         validate_page(page)?;
         reject_full_text(search.full_text_search.as_deref())?;
-        validate_book_sorts(page)?;
+        validate_book_sorts(page, ranked_ids.is_some())?;
 
-        let mut count = book_count_builder(user);
+        let mut count = book_count_builder(user, ranked_ids);
         push_book_visibility(&mut count, user);
         if let Some(condition) = &search.condition {
             count.push(" AND ");
@@ -326,13 +328,13 @@ impl Storage {
         let total = count.build_query_scalar::<i64>().fetch_one(&self.pool).await?;
         let total = u64::try_from(total).map_err(|_| StorageError::InvalidData("negative book count".into()))?;
 
-        let mut query = book_query_builder(user);
+        let mut query = book_query_builder(user, ranked_ids);
         push_book_visibility(&mut query, user);
         if let Some(condition) = &search.condition {
             query.push(" AND ");
             push_book_condition(&mut query, condition);
         }
-        push_book_order(&mut query, page);
+        push_book_order(&mut query, page, ranked_ids.is_some());
         push_pagination(&mut query, page)?;
         let rows = query.build_query_as::<BookQueryRow>().fetch_all(&self.pool).await?;
         let content = rows.into_iter().map(BookQueryRow::into_dto).collect::<Result<_>>()?;
@@ -346,7 +348,7 @@ impl Storage {
     ///
     /// Returns an error when the row cannot be queried or hydrated.
     pub async fn find_book_dto_by_id(&self, id: &str, user_id: &str) -> Result<Option<BookDto>> {
-        let mut query = book_query_builder_for_user_id(user_id);
+        let mut query = book_query_builder_for_user_id(user_id, None);
         query.push(" AND b.ID = ").push_bind(id.to_owned());
         query
             .build_query_as::<BookQueryRow>()
@@ -389,17 +391,19 @@ impl Storage {
     }
 }
 
-fn series_query_builder(user: &User) -> QueryBuilder<'static, Sqlite> {
-    series_query_builder_for_user_id(&user.id)
+fn series_query_builder(user: &User, ranked_ids: Option<&[String]>) -> QueryBuilder<'static, Sqlite> {
+    series_query_builder_for_user_id(&user.id, ranked_ids)
 }
 
-fn series_query_builder_for_user_id(user_id: &str) -> QueryBuilder<'static, Sqlite> {
+fn series_query_builder_for_user_id(user_id: &str, ranked_ids: Option<&[String]>) -> QueryBuilder<'static, Sqlite> {
     let mut query = QueryBuilder::new(SERIES_SELECT);
-    query.push_bind(user_id.to_owned()).push(" WHERE 1 = 1");
+    query.push_bind(user_id.to_owned());
+    push_ranked_join(&mut query, ranked_ids, "s.ID");
+    query.push(" WHERE 1 = 1");
     query
 }
 
-fn series_count_builder(user: &User) -> QueryBuilder<'static, Sqlite> {
+fn series_count_builder(user: &User, ranked_ids: Option<&[String]>) -> QueryBuilder<'static, Sqlite> {
     let mut query = QueryBuilder::new(
         r#"SELECT COUNT(*)
              FROM SERIES s
@@ -407,21 +411,25 @@ fn series_count_builder(user: &User) -> QueryBuilder<'static, Sqlite> {
              JOIN BOOK_METADATA_AGGREGATION bma ON bma.SERIES_ID = s.ID
              LEFT JOIN READ_PROGRESS_SERIES rps ON rps.SERIES_ID = s.ID AND rps.USER_ID = "#,
     );
-    query.push_bind(user.id.clone()).push(" WHERE 1 = 1");
+    query.push_bind(user.id.clone());
+    push_ranked_join(&mut query, ranked_ids, "s.ID");
+    query.push(" WHERE 1 = 1");
     query
 }
 
-fn book_query_builder(user: &User) -> QueryBuilder<'static, Sqlite> {
-    book_query_builder_for_user_id(&user.id)
+fn book_query_builder(user: &User, ranked_ids: Option<&[String]>) -> QueryBuilder<'static, Sqlite> {
+    book_query_builder_for_user_id(&user.id, ranked_ids)
 }
 
-fn book_query_builder_for_user_id(user_id: &str) -> QueryBuilder<'static, Sqlite> {
+fn book_query_builder_for_user_id(user_id: &str, ranked_ids: Option<&[String]>) -> QueryBuilder<'static, Sqlite> {
     let mut query = QueryBuilder::new(BOOK_SELECT);
-    query.push_bind(user_id.to_owned()).push(" WHERE 1 = 1");
+    query.push_bind(user_id.to_owned());
+    push_ranked_join(&mut query, ranked_ids, "b.ID");
+    query.push(" WHERE 1 = 1");
     query
 }
 
-fn book_count_builder(user: &User) -> QueryBuilder<'static, Sqlite> {
+fn book_count_builder(user: &User, ranked_ids: Option<&[String]>) -> QueryBuilder<'static, Sqlite> {
     let mut query = QueryBuilder::new(
         r#"SELECT COUNT(*)
              FROM BOOK b
@@ -430,8 +438,21 @@ fn book_count_builder(user: &User) -> QueryBuilder<'static, Sqlite> {
              JOIN SERIES_METADATA sm ON sm.SERIES_ID = b.SERIES_ID
              LEFT JOIN READ_PROGRESS rp ON rp.BOOK_ID = b.ID AND rp.USER_ID = "#,
     );
-    query.push_bind(user.id.clone()).push(" WHERE 1 = 1");
+    query.push_bind(user.id.clone());
+    push_ranked_join(&mut query, ranked_ids, "b.ID");
+    query.push(" WHERE 1 = 1");
     query
+}
+
+fn push_ranked_join(query: &mut QueryBuilder<'static, Sqlite>, ranked_ids: Option<&[String]>, id_column: &str) {
+    if let Some(ids) = ranked_ids {
+        let json = serde_json::to_string(ids).expect("string identifiers always serialize");
+        query
+            .push(" JOIN json_each(")
+            .push_bind(json)
+            .push(") ranked ON ranked.value = ")
+            .push(id_column);
+    }
 }
 
 fn push_series_visibility(query: &mut QueryBuilder<'static, Sqlite>, user: &User) {
@@ -717,8 +738,16 @@ fn reject_full_text(value: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-fn validate_series_sorts(page: &PageRequest) -> Result<()> {
+fn validate_series_sorts(page: &PageRequest, ranked: bool) -> Result<()> {
     for sort in &page.sort {
+        if sort.property == "relevance" {
+            if ranked {
+                continue;
+            }
+            return Err(StorageError::InvalidQuery(
+                "relevance sort requires a full-text search".into(),
+            ));
+        }
         series_sort_column(&sort.property).ok_or_else(|| {
             StorageError::InvalidQuery(format!("unsupported series sort property: {}", sort.property))
         })?;
@@ -726,8 +755,16 @@ fn validate_series_sorts(page: &PageRequest) -> Result<()> {
     Ok(())
 }
 
-fn validate_book_sorts(page: &PageRequest) -> Result<()> {
+fn validate_book_sorts(page: &PageRequest, ranked: bool) -> Result<()> {
     for sort in &page.sort {
+        if sort.property == "relevance" {
+            if ranked {
+                continue;
+            }
+            return Err(StorageError::InvalidQuery(
+                "relevance sort requires a full-text search".into(),
+            ));
+        }
         book_sort_column(&sort.property)
             .ok_or_else(|| StorageError::InvalidQuery(format!("unsupported book sort property: {}", sort.property)))?;
     }
@@ -771,12 +808,12 @@ fn book_sort_column(property: &str) -> Option<&'static str> {
     }
 }
 
-fn push_series_order(query: &mut QueryBuilder<'static, Sqlite>, page: &PageRequest) {
-    push_order(query, page, series_sort_column, "s.ID");
+fn push_series_order(query: &mut QueryBuilder<'static, Sqlite>, page: &PageRequest, ranked: bool) {
+    push_order(query, page, series_sort_column, "s.ID", ranked);
 }
 
-fn push_book_order(query: &mut QueryBuilder<'static, Sqlite>, page: &PageRequest) {
-    push_order(query, page, book_sort_column, "b.ID");
+fn push_book_order(query: &mut QueryBuilder<'static, Sqlite>, page: &PageRequest, ranked: bool) {
+    push_order(query, page, book_sort_column, "b.ID", ranked);
 }
 
 fn push_order(
@@ -784,9 +821,15 @@ fn push_order(
     page: &PageRequest,
     column: fn(&str) -> Option<&'static str>,
     id_column: &str,
+    ranked: bool,
 ) {
     query.push(" ORDER BY ");
-    for (index, order) in page.sort.iter().enumerate() {
+    let explicit = page
+        .sort
+        .iter()
+        .filter(|order| order.property != "relevance")
+        .collect::<Vec<_>>();
+    for (index, order) in explicit.iter().enumerate() {
         if index > 0 {
             query.push(", ");
         }
@@ -797,8 +840,11 @@ fn push_order(
                 SortDirection::Descending => " DESC",
             });
     }
-    if !page.sort.is_empty() {
+    if !explicit.is_empty() {
         query.push(", ");
+    }
+    if ranked {
+        query.push("CAST(ranked.key AS INTEGER) ASC, ");
     }
     query.push(id_column).push(" ASC");
 }

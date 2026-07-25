@@ -40,6 +40,9 @@ pub(crate) async fn update_book_metadata(
     if !state.storage.save_book_metadata(&updated).await? {
         return Err(ApiError::not_found("Book not found"));
     }
+    if !state.sync_books(std::slice::from_ref(&book_id)).await {
+        state.recover_search_after_http_failure().await;
+    }
     if let Some(book) = state.storage.find_book_by_id(&book_id).await? {
         state
             .enqueue_task(&TaskRecord::aggregate_series_metadata(
@@ -71,10 +74,15 @@ pub(crate) async fn update_book_metadata_batch(
     }
 
     let mut affected_series = BTreeSet::new();
+    let mut affected_books = Vec::new();
     for (metadata, series_id) in prepared {
         if state.storage.save_book_metadata(&metadata).await? {
+            affected_books.push(metadata.book_id.clone());
             affected_series.insert(series_id);
         }
+    }
+    if !state.sync_books(&affected_books).await {
+        state.recover_search_after_http_failure().await;
     }
     for series_id in affected_series {
         state
@@ -103,6 +111,9 @@ pub(crate) async fn update_series_metadata(
     let updated = existing.apply_patch(update.into_patch()).map_err(map_metadata_error)?;
     if !state.storage.save_series_metadata(&updated).await? {
         return Err(ApiError::not_found("Series not found"));
+    }
+    if !state.sync_series(std::slice::from_ref(&series_id)).await {
+        state.recover_search_after_http_failure().await;
     }
     Ok(StatusCode::NO_CONTENT)
 }

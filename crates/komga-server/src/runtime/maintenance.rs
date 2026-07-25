@@ -58,7 +58,14 @@ pub(super) async fn process_aggregate_series_metadata_task(state: &AppState, tas
         .rebuild_book_metadata_aggregation(&payload.series_id)
         .await
     {
-        Ok(true) => TaskOutcome::Completed,
+        Ok(true) => {
+            if state.sync_series(std::slice::from_ref(&payload.series_id)).await {
+                TaskOutcome::Completed
+            } else {
+                state.recover_search_after_http_failure().await;
+                TaskOutcome::Retry
+            }
+        }
         Ok(false) => {
             tracing::warn!(series_id = %payload.series_id, "aggregation task references a missing series");
             TaskOutcome::Completed

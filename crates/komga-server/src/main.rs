@@ -44,7 +44,7 @@ async fn main() -> anyhow::Result<()> {
 
     let search = SearchIndex::open(&search_directory)
         .with_context(|| format!("failed to open search index {}", search_directory.display()))?;
-    let state = AppState::with_search(storage, tasks, search).await?;
+    let state = AppState::with_file_search(storage, tasks, search).await?;
     let runtime = state.start_runtime().await?;
     let signal_shutdown = runtime.shutdown_handle();
     let server_shutdown = runtime.shutdown_handle();

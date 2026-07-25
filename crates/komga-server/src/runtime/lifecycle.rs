@@ -1,3 +1,4 @@
+use komga_search::EntityKind;
 use komga_storage::TaskRecord;
 
 use crate::AppState;
@@ -27,6 +28,39 @@ pub(super) async fn perform_empty_trash(state: &AppState, library_id: &str) -> T
             return TaskOutcome::Retry;
         }
     };
+    let deleted = result
+        .book_ids
+        .iter()
+        .cloned()
+        .map(|id| (EntityKind::Book, id))
+        .chain(result.series_ids.iter().cloned().map(|id| (EntityKind::Series, id)))
+        .chain(
+            result
+                .collection_ids
+                .iter()
+                .cloned()
+                .map(|id| (EntityKind::Collection, id)),
+        )
+        .chain(
+            result
+                .read_list_ids
+                .iter()
+                .cloned()
+                .map(|id| (EntityKind::ReadList, id)),
+        )
+        .collect();
+    let refreshed_books = result
+        .numbering_refreshes
+        .iter()
+        .map(|target| target.book_id.clone())
+        .collect::<Vec<_>>();
+    if !state.delete_search_entities(deleted).await
+        || !state.sync_books(&refreshed_books).await
+        || !state.sync_series(&result.affected_series_ids).await
+    {
+        state.recover_search_after_http_failure().await;
+        return TaskOutcome::Retry;
+    }
     for target in &result.numbering_refreshes {
         if let Err(error) = state
             .enqueue_task(&TaskRecord::refresh_book_numbering(

@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use chrono::{Local, NaiveDateTime};
 use komga_core::{Book, ScanResult, Series};
@@ -10,6 +10,10 @@ use crate::{Result, Storage, StorageError};
 /// Counts of content rows changed while applying one filesystem scan.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ScanApplyStats {
+    /// Book identifiers whose indexed projections changed.
+    pub book_ids: BTreeSet<String>,
+    /// Series identifiers whose indexed projections changed.
+    pub series_ids: BTreeSet<String>,
     /// Newly persisted series.
     pub series_added: u64,
     /// Existing series whose filesystem fields changed.
@@ -191,6 +195,7 @@ impl Storage {
                 .await?;
             series_with_missing_books.insert(book.series_id.clone());
             stats.books_deleted += 1;
+            stats.book_ids.insert(book.id.clone());
         }
         for series in existing_series
             .iter()
@@ -202,6 +207,7 @@ impl Storage {
                 .execute(&mut *tx)
                 .await?;
             stats.series_deleted += 1;
+            stats.series_ids.insert(series.id.clone());
         }
 
         let mut active_series = HashMap::new();
@@ -242,6 +248,7 @@ impl Storage {
                     .execute(&mut *tx)
                     .await?;
                     stats.series_updated += 1;
+                    stats.series_ids.insert(existing.id.clone());
                 }
                 (existing.id.clone(), deep || changed)
             } else {
@@ -272,6 +279,7 @@ impl Storage {
                     .execute(&mut *tx)
                     .await?;
                 stats.series_added += 1;
+                stats.series_ids.insert(scanned.series.id.clone());
                 (scanned.series.id.clone(), true)
             };
 
@@ -323,10 +331,12 @@ impl Storage {
                             .await?;
                         }
                         stats.books_updated += 1;
+                        stats.book_ids.insert(existing.id.clone());
                     }
                 } else {
                     insert_book(&mut tx, scanned_book, &series_id, library_id).await?;
                     stats.books_added += 1;
+                    stats.book_ids.insert(scanned_book.id.clone());
                 }
             }
         }

@@ -51,12 +51,12 @@ async fn opens_kotlin_flyway_databases_and_maps_current_rows() {
     let user = User::new("fixture-reader@example.org".into(), "$2b$10$fixture".into());
     storage.create_user(&user).await.unwrap();
     let series_page = storage
-        .query_series(&SeriesSearch::default(), &PageRequest::default(), &user)
+        .query_series(&SeriesSearch::default(), &PageRequest::default(), &user, None)
         .await
         .unwrap();
     assert_eq!(series_page.content[0].metadata.title, "Kotlin Series");
     let book_page = storage
-        .query_books(&BookSearch::default(), &PageRequest::default(), &user)
+        .query_books(&BookSearch::default(), &PageRequest::default(), &user, None)
         .await
         .unwrap();
     assert_eq!(book_page.content[0].series_title, "Kotlin Series");
@@ -104,10 +104,10 @@ async fn opens_kotlin_flyway_databases_and_maps_current_rows() {
             .unwrap(),
         1
     );
-    assert_eq!(
+    assert!(matches!(
         storage.delete_library(&library.id).await.unwrap(),
-        DeleteLibraryResult::Deleted
-    );
+        DeleteLibraryResult::Deleted { .. }
+    ));
     assert!(content_root.join("Kotlin Series/Volume 1.cbz").exists());
 
     let tasks = TaskStorage::connect_path(&tasks_database).await.unwrap();
