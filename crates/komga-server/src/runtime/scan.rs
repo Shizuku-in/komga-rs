@@ -20,9 +20,10 @@ pub(super) async fn process_scan_task(state: &AppState, task: &TaskRecord) -> Ta
         }
     };
     let empty_trash_after_scan = library.empty_trash_after_scan;
+    let hash_files = library.hash_files;
     let cancellation = state.shutdown.clone();
     let scan = tokio::task::spawn_blocking(move || scan_library_files(&library, || cancellation.is_cancelled())).await;
-    let scan = match scan {
+    let mut scan = match scan {
         Ok(Ok(scan)) => scan,
         Ok(Err(ScanError::Cancelled)) => return TaskOutcome::Cancelled,
         Ok(Err(ScanError::RootUnavailable(path))) => {
@@ -34,6 +35,34 @@ pub(super) async fn process_scan_task(state: &AppState, task: &TaskRecord) -> Ta
         }
         Err(error) => {
             tracing::error!(%error, library_id = %payload.library_id, "filesystem scanner panicked");
+            return TaskOutcome::Retry;
+        }
+    };
+    let existing_books = match state.storage.list_active_books_by_library_id(&payload.library_id).await {
+        Ok(books) => books,
+        Err(error) => {
+            tracing::error!(%error, library_id = %payload.library_id, "could not load books for scan hash reconciliation");
+            return TaskOutcome::Retry;
+        }
+    };
+    let cancellation = state.shutdown.clone();
+    let reconciled = tokio::task::spawn_blocking(move || {
+        reconcile_scan_hashes(&mut scan, &existing_books, || cancellation.is_cancelled()).map(|()| scan)
+    })
+    .await;
+    let scan = match reconciled {
+        Ok(Ok(scan)) => scan,
+        Ok(Err(FileHashError::Cancelled)) => return TaskOutcome::Cancelled,
+        Ok(Err(FileHashError::SourceChanged(error))) => {
+            tracing::warn!(library_id = %payload.library_id, source = %error, "book changed during scan hash reconciliation");
+            return TaskOutcome::Retry;
+        }
+        Ok(Err(error)) => {
+            tracing::error!(%error, library_id = %payload.library_id, "scan hash reconciliation failed");
+            return TaskOutcome::Completed;
+        }
+        Err(error) => {
+            tracing::error!(%error, library_id = %payload.library_id, "scan hash reconciler panicked");
             return TaskOutcome::Retry;
         }
     };
@@ -128,6 +157,10 @@ pub(super) async fn process_scan_task(state: &AppState, task: &TaskRecord) -> Ta
                 return TaskOutcome::Retry;
             }
         }
+    }
+    if hash_files && let Err(error) = state.enqueue_missing_book_hashes(&payload.library_id).await {
+        tracing::error!(%error, library_id = %payload.library_id, "could not enqueue missing book hashes");
+        return TaskOutcome::Retry;
     }
     TaskOutcome::Completed
 }

@@ -135,6 +135,86 @@ async fn scan_tasks_honor_empty_trash_after_scan() {
 }
 
 #[tokio::test]
+async fn scan_tasks_hash_missing_book_files_with_kotlin_xxh3() {
+    let storage = Storage::connect_memory().await.unwrap();
+    let tasks = TaskStorage::connect_memory().await.unwrap();
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path().join("library");
+    fs::create_dir_all(root.join("Series")).unwrap();
+    fs::write(root.join("Series/Book.cbz"), b"hello").unwrap();
+    let mut library = Library::new("Hashes".into(), Url::from_directory_path(&root).unwrap());
+    library.scan_interval = ScanInterval::Disabled;
+    storage.create_library(&library).await.unwrap();
+    tasks
+        .save(&TaskRecord::scan_library(&library.id, false, 8))
+        .await
+        .unwrap();
+
+    let state = AppState::new(storage.clone(), tasks.clone()).await.unwrap();
+    let runtime = state.start_runtime().await.unwrap();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let books = storage.list_active_books_by_library_id(&library.id).await.unwrap();
+            if books
+                .first()
+                .is_some_and(|book| book.file_hash == "b5e9c1ad071b3e7fc779cfaa5e523818")
+                && tasks.list().await.unwrap().is_empty()
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("scan-triggered file hashing did not complete");
+    runtime.shutdown().await;
+}
+
+#[tokio::test]
+async fn hash_tasks_skip_books_when_library_hashing_is_disabled() {
+    let storage = Storage::connect_memory().await.unwrap();
+    let tasks = TaskStorage::connect_memory().await.unwrap();
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path().join("library");
+    fs::create_dir_all(root.join("Series")).unwrap();
+    fs::write(root.join("Series/Book.cbz"), b"hello").unwrap();
+    let mut library = Library::new("Hashes disabled".into(), Url::from_directory_path(&root).unwrap());
+    library.hash_files = false;
+    storage.create_library(&library).await.unwrap();
+    storage
+        .apply_library_scan(&library.id, &scan_library_files(&library, || false).unwrap(), false)
+        .await
+        .unwrap();
+    let book = storage
+        .list_active_books_by_library_id(&library.id)
+        .await
+        .unwrap()
+        .remove(0);
+    tasks.save(&TaskRecord::hash_book(&book.id, 0)).await.unwrap();
+
+    let state = AppState::new(storage.clone(), tasks.clone()).await.unwrap();
+    let runtime = state.start_runtime().await.unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !tasks.list().await.unwrap().is_empty() {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("disabled hash task did not complete");
+
+    assert!(
+        storage
+            .find_book_by_id(&book.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .file_hash
+            .is_empty()
+    );
+    runtime.shutdown().await;
+}
+
+#[tokio::test]
 async fn scan_imports_comic_info_collections_and_read_lists_idempotently() {
     let storage = Storage::connect_memory().await.unwrap();
     let tasks = TaskStorage::connect_memory().await.unwrap();

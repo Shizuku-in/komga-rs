@@ -130,6 +130,60 @@ impl Storage {
         rows.into_iter().map(BookRow::into_domain).collect()
     }
 
+    /// Lists active books in a library in stable source order.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when rows contain invalid URLs or cannot be queried.
+    pub async fn list_active_books_by_library_id(&self, library_id: &str) -> Result<Vec<Book>> {
+        let rows = sqlx::query_as::<_, BookRow>(&format!(
+            "{SELECT_BOOK} WHERE LIBRARY_ID = ? AND DELETED_DATE IS NULL ORDER BY URL, LAST_MODIFIED_DATE"
+        ))
+        .bind(library_id)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter().map(BookRow::into_domain).collect()
+    }
+
+    /// Lists active books whose standard source-file hash is missing.
+    ///
+    /// # Errors
+    ///
+    /// Returns a database error when the rows cannot be queried.
+    pub async fn list_books_without_file_hash(&self, library_id: &str) -> Result<Vec<String>> {
+        Ok(sqlx::query_scalar(
+            "SELECT ID FROM BOOK WHERE LIBRARY_ID = ? AND DELETED_DATE IS NULL AND FILE_HASH = '' ORDER BY URL",
+        )
+        .bind(library_id)
+        .fetch_all(&self.pool)
+        .await?)
+    }
+
+    /// Stores a file hash only while the persisted source snapshot still
+    /// matches `book` and no other worker has supplied a hash.
+    ///
+    /// Returns `false` when the book was deleted, changed, or already hashed.
+    ///
+    /// # Errors
+    ///
+    /// Returns a database error when the conditional update cannot be executed.
+    pub async fn update_book_file_hash_if_current(&self, book: &Book, file_hash: &str) -> Result<bool> {
+        Ok(sqlx::query(
+            r#"UPDATE BOOK SET FILE_HASH = ?, LAST_MODIFIED_DATE = CURRENT_TIMESTAMP
+                WHERE ID = ? AND URL = ? AND FILE_SIZE = ? AND FILE_LAST_MODIFIED = ?
+                  AND DELETED_DATE IS NULL AND FILE_HASH = ''"#,
+        )
+        .bind(file_hash)
+        .bind(&book.id)
+        .bind(book.url.as_str())
+        .bind(book.file_size)
+        .bind(book.file_last_modified)
+        .execute(&self.pool)
+        .await?
+        .rows_affected()
+            == 1)
+    }
+
     /// Lists active books with ready media in a library.
     pub async fn list_ready_books_by_library_id(&self, library_id: &str) -> Result<Vec<(String, String)>> {
         Ok(sqlx::query_as(
@@ -298,13 +352,16 @@ impl Storage {
                     if changed {
                         sqlx::query(
                             r#"UPDATE BOOK SET NAME = ?, URL = ?, FILE_LAST_MODIFIED = ?,
-                                      FILE_SIZE = ?, NUMBER = ?, ONESHOT = ?, DELETED_DATE = NULL,
+                                      FILE_SIZE = ?, FILE_HASH = CASE WHEN ? THEN ? ELSE FILE_HASH END,
+                                      NUMBER = ?, ONESHOT = ?, DELETED_DATE = NULL,
                                       LAST_MODIFIED_DATE = CURRENT_TIMESTAMP WHERE ID = ?"#,
                         )
                         .bind(&scanned_book.name)
                         .bind(scanned_book.url.as_str())
                         .bind(scanned_book.file_last_modified)
                         .bind(scanned_book.file_size)
+                        .bind(file_changed)
+                        .bind(&scanned_book.file_hash)
                         .bind(scanned_book.number)
                         .bind(scanned_book.oneshot)
                         .bind(&existing.id)
@@ -322,7 +379,9 @@ impl Storage {
                         .bind(&existing.id)
                         .execute(&mut *tx)
                         .await?;
-                        if file_changed {
+                        let content_unchanged =
+                            !existing.file_hash.is_empty() && existing.file_hash == scanned_book.file_hash;
+                        if file_changed && !content_unchanged {
                             sqlx::query(
                                 "UPDATE MEDIA SET STATUS = 'OUTDATED', LAST_MODIFIED_DATE = CURRENT_TIMESTAMP WHERE BOOK_ID = ?",
                             )

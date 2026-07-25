@@ -13,11 +13,13 @@ use komga_core::{
 mod archive;
 mod comicrack;
 mod epub;
+mod hashing;
 mod image_ops;
 mod metadata;
 mod pdf;
 
 pub use comicrack::{ComicRackListError, parse_read_list};
+pub use hashing::{FileHashError, hash_file, reconcile_scan_hashes};
 pub use metadata::{
     ComicInfoContainers, ComicInfoReadList, EmbeddedMetadata, extract_comic_info_containers,
     extract_comic_info_metadata, extract_epub_metadata, extract_mylar_metadata,

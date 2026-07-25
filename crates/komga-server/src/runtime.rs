@@ -6,8 +6,9 @@ use komga_core::{
     MediaStatus, MetadataUpdate, ScanError, SeriesMetadataPatch, ThumbnailBook, new_id, scan_library_files,
 };
 use komga_media::{
-    MediaAnalysisError, MediaOperationError, analyze_book, extract_comic_info_metadata, extract_epub_metadata,
-    extract_mylar_metadata, generate_thumbnail, image_dimension,
+    FileHashError, MediaAnalysisError, MediaOperationError, analyze_book, extract_comic_info_metadata,
+    extract_epub_metadata, extract_mylar_metadata, generate_thumbnail, hash_file, image_dimension,
+    reconcile_scan_hashes,
 };
 use komga_search::EntityKind;
 use komga_storage::{RebuildIndexEntity, StorageError, TaskRecord};
@@ -18,6 +19,7 @@ use tokio_util::sync::CancellationToken;
 use crate::AppState;
 
 mod analysis;
+mod hashing;
 mod lifecycle;
 mod maintenance;
 mod metadata;
@@ -26,6 +28,7 @@ mod scheduler;
 mod thumbnail;
 
 use analysis::process_analyze_book_task;
+use hashing::process_hash_book_task;
 use lifecycle::{perform_empty_trash, process_empty_trash_task};
 use maintenance::{process_aggregate_series_metadata_task, process_find_thumbnails_task};
 use metadata::{process_refresh_book_metadata_task, process_refresh_series_metadata_task};
@@ -182,10 +185,11 @@ pub(super) enum TaskOutcome {
     Retry,
 }
 
-const SUPPORTED_TASK_TYPES: [&str; 10] = [
+const SUPPORTED_TASK_TYPES: [&str; 11] = [
     "ScanLibrary",
     "EmptyTrash",
     "AnalyzeBook",
+    "HashBook",
     "RefreshBookMetadata",
     "RefreshSeriesMetadata",
     "GenerateBookThumbnail",
@@ -242,6 +246,7 @@ async fn process_task(state: &AppState, task: &TaskRecord) -> TaskOutcome {
         "ScanLibrary" => process_scan_task(state, task).await,
         "EmptyTrash" => process_empty_trash_task(state, task).await,
         "AnalyzeBook" => process_analyze_book_task(state, task).await,
+        "HashBook" => process_hash_book_task(state, task).await,
         "RefreshBookMetadata" => process_refresh_book_metadata_task(state, task).await,
         "RefreshSeriesMetadata" => process_refresh_series_metadata_task(state, task).await,
         "GenerateBookThumbnail" => process_generate_thumbnail_task(state, task).await,

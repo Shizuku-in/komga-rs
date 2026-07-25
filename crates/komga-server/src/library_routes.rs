@@ -260,6 +260,9 @@ pub(crate) async fn update_library(
     if current.scan_interval != updated.scan_interval {
         state.library_schedule_changed();
     }
+    if !current.hash_files && updated.hash_files {
+        state.enqueue_missing_book_hashes(&library_id).await?;
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 

@@ -123,6 +123,26 @@ impl TaskRecord {
         }
     }
 
+    /// Builds a Kotlin-compatible standard book-file hashing task.
+    pub fn hash_book(book_id: &str, priority: i32) -> Self {
+        let id = format!("HASH_BOOK_{book_id}");
+        Self {
+            id: id.clone(),
+            priority,
+            group_id: None,
+            class: "org.gotson.komga.application.tasks.Task$HashBook".into(),
+            simple_type: "HashBook".into(),
+            payload: serde_json::json!({
+                "bookId": book_id,
+                "priority": priority,
+                "groupId": null,
+                "uniqueId": id,
+            })
+            .to_string(),
+            owner: None,
+        }
+    }
+
     /// Builds a Kotlin-compatible book metadata refresh task.
     pub fn refresh_book_metadata(book_id: &str, series_id: &str, priority: i32) -> Self {
         Self::refresh_book_metadata_with_capabilities(

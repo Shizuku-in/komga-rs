@@ -389,6 +389,13 @@ impl AppState {
         Ok(())
     }
 
+    pub(crate) async fn enqueue_missing_book_hashes(&self, library_id: &str) -> Result<(), StorageError> {
+        for book_id in self.storage.list_books_without_file_hash(library_id).await? {
+            self.enqueue_task(&TaskRecord::hash_book(&book_id, 0)).await?;
+        }
+        Ok(())
+    }
+
     pub(crate) fn library_schedule_changed(&self) {
         self.schedule_notify.notify_one();
     }

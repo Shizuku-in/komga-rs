@@ -856,6 +856,25 @@ mod tests {
         assert_eq!(payload["entities"], serde_json::json!(["Book", "Series"]));
     }
 
+    #[test]
+    fn hash_book_task_matches_kotlin_payload() {
+        let task = TaskRecord::hash_book("book", 0);
+        assert_eq!(task.id, "HASH_BOOK_book");
+        assert_eq!(task.priority, 0);
+        assert_eq!(task.group_id, None);
+        assert_eq!(task.class, "org.gotson.komga.application.tasks.Task$HashBook");
+        assert_eq!(task.simple_type, "HashBook");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&task.payload).unwrap(),
+            serde_json::json!({
+                "bookId": "book",
+                "priority": 0,
+                "groupId": null,
+                "uniqueId": "HASH_BOOK_book",
+            })
+        );
+    }
+
     #[tokio::test]
     async fn supported_task_claims_choose_global_priority_and_keep_kotlin_payloads() {
         let tasks = TaskStorage::connect_memory().await.unwrap();
