@@ -47,9 +47,10 @@ use std::{num::NonZeroUsize, sync::Arc};
 
 use auth::SessionStore;
 use axum::Router;
+use komga_core::DomainEvent;
 use komga_search::{IndexState, SearchIndex};
 use komga_storage::{Storage, StorageError, TaskRecord, TaskStorage};
-use tokio::sync::{Mutex, Notify};
+use tokio::sync::{Mutex, Notify, broadcast};
 use tokio_util::sync::CancellationToken;
 
 /// Shared dependencies used by the HTTP router.
@@ -66,6 +67,7 @@ pub struct AppState {
     claim_lock: Arc<Mutex<()>>,
     task_notify: Arc<Notify>,
     schedule_notify: Arc<Notify>,
+    domain_events: broadcast::Sender<Arc<DomainEvent>>,
     shutdown: CancellationToken,
     page_hashing: NonZeroUsize,
 }
@@ -108,6 +110,7 @@ impl AppState {
 
     async fn build(storage: Storage, tasks: TaskStorage, search: SearchIndex) -> Result<Self, StorageError> {
         let remember_me_duration_days = storage.remember_me_duration_days().await?;
+        let (domain_events, _) = broadcast::channel(1_024);
         Ok(Self {
             storage,
             search,
@@ -116,6 +119,7 @@ impl AppState {
             claim_lock: Arc::new(Mutex::new(())),
             task_notify: Arc::new(Notify::new()),
             schedule_notify: Arc::new(Notify::new()),
+            domain_events,
             shutdown: CancellationToken::new(),
             page_hashing: NonZeroUsize::new(3).expect("page hashing default is nonzero"),
         })
@@ -143,6 +147,17 @@ impl AppState {
 
     pub(crate) fn library_schedule_changed(&self) {
         self.schedule_notify.notify_one();
+    }
+
+    /// Publishes a best-effort notification after a durable domain mutation.
+    ///
+    /// Events are discarded when no live subscriber is connected.
+    pub fn publish_domain_event(&self, event: DomainEvent) {
+        let _ = self.domain_events.send(Arc::new(event));
+    }
+
+    pub(crate) fn subscribe_domain_events(&self) -> broadcast::Receiver<Arc<DomainEvent>> {
+        self.domain_events.subscribe()
     }
 }
 

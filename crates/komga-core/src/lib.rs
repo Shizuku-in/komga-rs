@@ -9,6 +9,7 @@
 mod containers;
 mod content;
 mod content_query;
+mod events;
 mod history;
 mod media;
 mod metadata;
@@ -37,6 +38,10 @@ pub use content_query::{
     AuthorMatch, BookCondition, BookSearch, BooleanOperator, DateOperator, EqualityOperator, GroupCountDto,
     NullableEqualityOperator, NullableNumericOperator, NumericOperator, PosterMatch, PosterType, ReadStatus,
     SeriesCondition, SeriesSearch, StringOperator,
+};
+pub use events::{
+    BookEvent, BookImportEvent, BookThumbnailEvent, ContainerEvent, ContainerThumbnailEvent, DomainEvent, LibraryEvent,
+    ReadProgressEvent, SeriesEvent, SeriesReadProgressEvent, SeriesThumbnailEvent, UserEvent,
 };
 pub use history::HistoricalEvent;
 pub use media::{
