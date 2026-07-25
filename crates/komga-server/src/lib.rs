@@ -18,6 +18,7 @@ mod dto;
 mod error;
 mod filesystem_routes;
 mod history_routes;
+mod kobo;
 mod koreader_routes;
 mod legacy_content_query;
 mod library_routes;
@@ -71,6 +72,7 @@ pub struct AppState {
     domain_events: broadcast::Sender<Arc<DomainEvent>>,
     shutdown: CancellationToken,
     page_hashing: NonZeroUsize,
+    kobo_sync_item_limit: NonZeroUsize,
 }
 
 impl AppState {
@@ -123,6 +125,7 @@ impl AppState {
             domain_events,
             shutdown: CancellationToken::new(),
             page_hashing: NonZeroUsize::new(3).expect("page hashing default is nonzero"),
+            kobo_sync_item_limit: NonZeroUsize::new(100).expect("Kobo sync default is nonzero"),
         })
     }
 
@@ -130,6 +133,13 @@ impl AppState {
     #[must_use]
     pub fn with_page_hashing(mut self, page_hashing: NonZeroUsize) -> Self {
         self.page_hashing = page_hashing;
+        self
+    }
+
+    /// Overrides the maximum number of source items claimed by one Kobo sync response.
+    #[must_use]
+    pub fn with_kobo_sync_item_limit(mut self, limit: NonZeroUsize) -> Self {
+        self.kobo_sync_item_limit = limit;
         self
     }
 

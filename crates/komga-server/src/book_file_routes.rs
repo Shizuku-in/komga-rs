@@ -13,7 +13,7 @@ use axum::{
     http::{HeaderValue, header},
     response::{IntoResponse, Response},
 };
-use komga_core::UserRole;
+use komga_core::{User, UserRole};
 use tokio::fs::File;
 use tokio_util::io::ReaderStream;
 
@@ -42,7 +42,11 @@ pub(crate) async fn download_book_file_with_name(
 
 async fn download(state: &AppState, auth: &AuthContext, book_id: &str) -> Result<Response, ApiError> {
     require_file_download(auth)?;
-    load_visible_book(state, &auth.user, book_id).await?;
+    download_for_user(state, &auth.user, book_id).await
+}
+
+pub(crate) async fn download_for_user(state: &AppState, user: &User, book_id: &str) -> Result<Response, ApiError> {
+    load_visible_book(state, user, book_id).await?;
 
     let book = state
         .storage

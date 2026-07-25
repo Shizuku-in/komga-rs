@@ -8,7 +8,7 @@ use std::collections::BTreeSet;
 use axum::{
     Json,
     body::Bytes,
-    extract::{Extension, FromRequest, Path, Request, State},
+    extract::{Extension, FromRequest, Path, RawQuery, Request, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
@@ -286,6 +286,27 @@ pub(crate) async fn delete_api_key(
     if !state.storage.delete_api_key(&auth.user.id, &key_id).await? {
         return Err(ApiError::not_found("API key not found"));
     }
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub(crate) async fn delete_my_sync_points(
+    State(state): State<AppState>,
+    Extension(auth): Extension<AuthContext>,
+    RawQuery(query): RawQuery,
+) -> Result<StatusCode, ApiError> {
+    let key_ids = query
+        .as_deref()
+        .into_iter()
+        .flat_map(|query| url::form_urlencoded::parse(query.as_bytes()))
+        .filter(|(name, _)| name == "key_id")
+        .flat_map(|(_, value)| value.split(',').map(str::to_owned).collect::<Vec<_>>())
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>();
+    state
+        .storage
+        .delete_sync_points_for_user(&auth.user.id, &key_ids)
+        .await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

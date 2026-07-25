@@ -71,6 +71,11 @@ impl ApiError {
         Self::new(StatusCode::INTERNAL_SERVER_ERROR, message)
     }
 
+    /// Creates a temporary service-unavailable response.
+    pub(crate) fn service_unavailable(message: impl Into<String>) -> Self {
+        Self::new(StatusCode::SERVICE_UNAVAILABLE, message)
+    }
+
     /// Creates an error with an explicit HTTP status and client-safe message.
     fn new(status: StatusCode, message: impl Into<String>) -> Self {
         Self {

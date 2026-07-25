@@ -634,6 +634,18 @@ impl Storage {
         .map(ThumbnailRow::into_domain))
     }
 
+    /// Finds a book thumbnail by its globally unique identifier.
+    pub async fn find_book_thumbnail_by_id(&self, thumbnail_id: &str) -> Result<Option<ThumbnailBook>> {
+        Ok(sqlx::query_as::<_, ThumbnailRow>(&format!(
+            "{} WHERE ID = ?",
+            thumbnail_select("THUMBNAIL_BOOK", "BOOK_ID", "book_id")
+        ))
+        .bind(thumbnail_id)
+        .fetch_optional(&self.pool)
+        .await?
+        .map(ThumbnailRow::into_domain))
+    }
+
     /// Inserts a user-uploaded book thumbnail and applies selection policy atomically.
     pub async fn insert_book_thumbnail(&self, thumbnail: &ThumbnailBook, selected: bool) -> Result<ThumbnailBook> {
         let mut tx = self.pool.begin().await?;

@@ -14,6 +14,23 @@ struct ApiKeyRow {
 }
 
 impl Storage {
+    /// Finds an API key record by its persisted SHA-512 digest.
+    ///
+    /// The returned key value remains the digest; protocol authentication must
+    /// never expose it in a response.
+    pub async fn find_api_key_by_hash(&self, api_key_hash: &str) -> Result<Option<ApiKey>> {
+        let row = sqlx::query_as::<_, ApiKeyRow>(
+            r#"SELECT ID AS id, USER_ID AS user_id, API_KEY AS api_key, COMMENT AS comment,
+                      CAST(CREATED_DATE AS TEXT) AS created_date,
+                      CAST(LAST_MODIFIED_DATE AS TEXT) AS last_modified_date
+               FROM USER_API_KEY WHERE API_KEY = ?"#,
+        )
+        .bind(api_key_hash)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(ApiKeyRow::into_domain))
+    }
+
     /// Lists API key records owned by a user in creation order.
     ///
     /// Returned [`ApiKey::key`] values are persisted digests. HTTP callers must

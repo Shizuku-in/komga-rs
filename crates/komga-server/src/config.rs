@@ -32,6 +32,10 @@ pub struct Config {
     #[arg(long, env = "KOMGA_PAGE_HASHING", default_value = "3")]
     pub page_hashing: NonZeroUsize,
 
+    /// Maximum source books or tags returned by one Kobo sync page.
+    #[arg(long, env = "KOMGA_KOBO_SYNC_ITEM_LIMIT", default_value = "100")]
+    pub kobo_sync_item_limit: NonZeroUsize,
+
     /// Address on which the HTTP server listens.
     #[arg(long, env = "KOMGA_HOST", default_value = "0.0.0.0")]
     pub host: IpAddr,
@@ -82,8 +86,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn page_hashing_defaults_to_three_and_rejects_zero() {
-        assert_eq!(Config::try_parse_from(["komga-server"]).unwrap().page_hashing.get(), 3);
+    fn positive_limits_have_compatible_defaults_and_reject_zero() {
+        let config = Config::try_parse_from(["komga-server"]).unwrap();
+        assert_eq!(config.page_hashing.get(), 3);
+        assert_eq!(config.kobo_sync_item_limit.get(), 100);
         assert!(Config::try_parse_from(["komga-server", "--page-hashing", "0"]).is_err());
+        assert!(Config::try_parse_from(["komga-server", "--kobo-sync-item-limit", "0"]).is_err());
     }
 }

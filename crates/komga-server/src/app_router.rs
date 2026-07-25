@@ -2,7 +2,9 @@
 
 use axum::{
     Router,
+    body::Body,
     extract::DefaultBodyLimit,
+    http::{Request, Uri},
     middleware,
     routing::{delete, get, patch, post},
 };
@@ -13,7 +15,7 @@ use tower_http::{
 };
 
 use crate::{
-    AppState, auth, book_file_routes, container_routes, content_routes, filesystem_routes, history_routes,
+    AppState, auth, book_file_routes, container_routes, content_routes, filesystem_routes, history_routes, kobo,
     koreader_routes, library_routes, media_routes, metadata_routes, opds_router, page_hash_routes,
     read_list_file_routes, read_list_match_routes, read_progress_routes, referential_routes, routes, settings_routes,
     sse_routes, thumbnail_routes, webpub_routes,
@@ -27,13 +29,37 @@ pub(crate) fn build(state: AppState) -> Router {
     public_api()
         .merge(opds_router::public())
         .merge(koreader_routes::router(&state))
+        .merge(kobo::router(&state))
         .merge(protected)
         .layer(DefaultBodyLimit::max(2 * 1024 * 1024))
         .layer(CorsLayer::permissive())
         .layer(PropagateRequestIdLayer::x_request_id())
         .layer(SetRequestIdLayer::x_request_id(MakeRequestUuid))
-        .layer(TraceLayer::new_for_http())
+        .layer(TraceLayer::new_for_http().make_span_with(make_http_span))
         .with_state(state)
+}
+
+fn make_http_span(request: &Request<Body>) -> tracing::Span {
+    tracing::info_span!(
+        "request",
+        method = %request.method(),
+        uri = %redacted_request_uri(request.uri())
+    )
+}
+
+fn redacted_request_uri(uri: &Uri) -> String {
+    let path = uri.path();
+    let redacted = path.strip_prefix("/kobo/").map_or_else(
+        || path.to_owned(),
+        |rest| match rest.split_once('/') {
+            Some((_, suffix)) => format!("/kobo/{{authToken}}/{suffix}"),
+            None => "/kobo/{authToken}".to_owned(),
+        },
+    );
+    match uri.query() {
+        Some(query) => format!("{redacted}?{query}"),
+        None => redacted,
+    }
 }
 
 fn protected_api() -> Router<AppState> {
@@ -45,6 +71,7 @@ fn protected_api() -> Router<AppState> {
             get(routes::list_api_keys).post(routes::create_api_key),
         )
         .route("/api/v2/users/me/api-keys/{key_id}", delete(routes::delete_api_key))
+        .route("/api/v1/syncpoints/me", delete(routes::delete_my_sync_points))
         .route("/api/v2/users", get(routes::list_users).post(routes::create_user))
         .route(
             "/api/v2/users/{user_id}",
@@ -373,4 +400,18 @@ fn public_api() -> Router<AppState> {
             "/api/v1/books/{book_id}/resource/{*resource}",
             get(media_routes::get_epub_resource),
         )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::redacted_request_uri;
+
+    #[test]
+    fn tracing_redacts_only_the_kobo_path_token() {
+        let uri = "/kobo/plain-secret/v1/library/sync?x=1".parse().unwrap();
+        let redacted = redacted_request_uri(&uri);
+        assert_eq!(redacted, "/kobo/{authToken}/v1/library/sync?x=1");
+        assert!(!redacted.contains("plain-secret"));
+        assert_eq!(redacted_request_uri(&"/api/v1/books".parse().unwrap()), "/api/v1/books");
+    }
 }
