@@ -77,7 +77,7 @@ pub struct BookPage {
     pub media_type: String,
     /// Optional dimensions controlled by the library analysis setting.
     pub dimension: Option<Dimension>,
-    /// Page hash, empty until page hashing is ported.
+    /// Page hash, empty until the configured page-hashing task processes it.
     pub file_hash: String,
     /// Uncompressed entry size when available.
     pub file_size: Option<i64>,

@@ -5,12 +5,37 @@ use std::{
     path::Path,
 };
 
+use image::{ImageFormat, ImageReader};
 use thiserror::Error;
 use xxhash_rust::xxh3::Xxh3;
 
 use komga_core::{Book, ScanResult};
 
 const BUFFER_SIZE: usize = 8_192;
+const RGB_PAGE_HASH_HEADER: &[u8] = b"KOMGA_PAGE_RGB24_V1\0";
+
+/// Algorithm marker persisted beside raw page-content hashes.
+pub const RAW_PAGE_HASH_ALGORITHM: &str = "RAW_XXH3_128_V1";
+
+/// Algorithm marker persisted beside canonical JPEG pixel hashes.
+pub const RGB_PAGE_HASH_ALGORITHM: &str = "RGB24_XXH3_128_V1";
+
+/// A page hash paired with the algorithm needed to interpret it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ComputedPageHash {
+    /// Seeded XXH3-128 digest as 32 lowercase hexadecimal characters.
+    pub hash: String,
+    /// Stable algorithm marker persisted with the digest.
+    pub algorithm: &'static str,
+}
+
+/// Errors that prevent page content from being normalized for hashing.
+#[derive(Debug, Error)]
+pub enum PageHashError {
+    /// JPEG content could not be decoded into canonical RGB pixels.
+    #[error("could not decode JPEG page: {0}")]
+    InvalidJpeg(String),
+}
 
 /// Errors that prevent a source file hash from being computed.
 #[derive(Debug, Error)]
@@ -56,6 +81,39 @@ pub fn hash_file(path: &Path, cancelled: impl Fn() -> bool) -> Result<String, Fi
         hasher.update(&buffer[..count]);
     }
     Ok(format!("{:032x}", hasher.digest128()))
+}
+
+/// Computes a deterministic page-content hash.
+///
+/// JPEG input is decoded to row-major RGB24 pixels and hashed with a versioned
+/// header plus its little-endian width and height. This removes metadata while
+/// avoiding encoder-dependent JPEG bytes. Other media types retain Komga's raw
+/// byte hashing behavior.
+///
+/// # Errors
+///
+/// Returns [`PageHashError::InvalidJpeg`] when `media_type` is exactly
+/// `image/jpeg` and the content cannot be decoded as JPEG.
+pub fn hash_page(content: &[u8], media_type: &str) -> Result<ComputedPageHash, PageHashError> {
+    let mut hasher = Xxh3::with_seed(0);
+    let algorithm = if media_type == "image/jpeg" {
+        let image = ImageReader::with_format(std::io::Cursor::new(content), ImageFormat::Jpeg)
+            .decode()
+            .map_err(|error| PageHashError::InvalidJpeg(error.to_string()))?
+            .to_rgb8();
+        hasher.update(RGB_PAGE_HASH_HEADER);
+        hasher.update(&image.width().to_le_bytes());
+        hasher.update(&image.height().to_le_bytes());
+        hasher.update(image.as_raw());
+        RGB_PAGE_HASH_ALGORITHM
+    } else {
+        hasher.update(content);
+        RAW_PAGE_HASH_ALGORITHM
+    };
+    Ok(ComputedPageHash {
+        hash: format!("{:032x}", hasher.digest128()),
+        algorithm,
+    })
 }
 
 /// Recomputes hashes needed to distinguish timestamp-only scan changes.
@@ -111,7 +169,7 @@ pub fn reconcile_scan_hashes(
 
 #[cfg(test)]
 mod tests {
-    use std::{cell::Cell, fs};
+    use std::{cell::Cell, fs, path::PathBuf};
 
     use super::*;
 
@@ -125,6 +183,41 @@ mod tests {
 
         fs::write(&path, b"hello").unwrap();
         assert_eq!(hash_file(&path, || false).unwrap(), "b5e9c1ad071b3e7fc779cfaa5e523818");
+    }
+
+    #[test]
+    fn jpeg_page_hashes_ignore_metadata_and_match_canonical_vectors() {
+        let fixture = |directory: &str, file: &str| {
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../komga/komga/src/test/resources/hashpage")
+                .join(directory)
+                .join(file)
+        };
+        let vectors = [
+            ("e-sou.jpeg", "b0b432764c6e797f13db4e22424bc172"),
+            ("e-z.jpeg", "51e3c31e4edfc7236cb49d38dfb45bac"),
+            ("m-d.jpeg", "3b2a789232cb4b8e8a49c66afb5eab4d"),
+        ];
+
+        for (directory, expected) in vectors {
+            let first = hash_page(&fs::read(fixture(directory, "1.jpg")).unwrap(), "image/jpeg").unwrap();
+            let second = hash_page(&fs::read(fixture(directory, "2.jpg")).unwrap(), "image/jpeg").unwrap();
+            assert_eq!(first, second);
+            assert_eq!(first.hash, expected);
+            assert_eq!(first.algorithm, RGB_PAGE_HASH_ALGORITHM);
+        }
+    }
+
+    #[test]
+    fn non_jpeg_pages_hash_raw_bytes_and_invalid_jpegs_fail() {
+        let raw = hash_page(b"hello", "image/png").unwrap();
+        assert_eq!(raw.hash, "b5e9c1ad071b3e7fc779cfaa5e523818");
+        assert_eq!(raw.algorithm, RAW_PAGE_HASH_ALGORITHM);
+
+        assert!(matches!(
+            hash_page(b"not a jpeg", "image/jpeg"),
+            Err(PageHashError::InvalidJpeg(_))
+        ));
     }
 
     #[test]
