@@ -316,6 +316,15 @@ mod tests {
                 .delete_count,
             1
         );
+        let history = storage
+            .list_historical_events(&komga_core::PageRequest::default())
+            .await
+            .unwrap();
+        assert_eq!(history.total_elements, 1);
+        assert_eq!(history.content[0].event_type, "DuplicatePageDeleted");
+        assert_eq!(history.content[0].book_id.as_deref(), Some(book.id.as_str()));
+        assert_eq!(history.content[0].properties["page file hash"], delete_hash);
+        assert_eq!(history.content[0].properties["page file name"], "1.png");
         assert_eq!(
             storage
                 .find_read_progress(&book.id, &user.id)

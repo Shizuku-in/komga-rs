@@ -1,8 +1,8 @@
 use chrono::NaiveDateTime;
 use flate2::{Compression, read::GzDecoder, write::GzEncoder};
 use komga_core::{
-    BookPage, Dimension, EPUB_EXTENSION_CLASS, HashedPageTarget, Media, MediaExtension, MediaExtensionEpub, MediaFile,
-    MediaStatus, SeriesCover, ThumbnailBook, ThumbnailSeries,
+    BookPage, Dimension, EPUB_EXTENSION_CLASS, HashedPageTarget, HistoricalEvent, Media, MediaExtension,
+    MediaExtensionEpub, MediaFile, MediaStatus, SeriesCover, ThumbnailBook, ThumbnailSeries,
 };
 use sqlx::{FromRow, Sqlite, Transaction};
 
@@ -513,6 +513,11 @@ impl Storage {
             )
             .bind(&target.file_hash)
             .execute(&mut *tx)
+            .await?;
+            crate::history::insert_historical_event(
+                &mut tx,
+                &HistoricalEvent::duplicate_page_deleted(original_book, target),
+            )
             .await?;
         }
         tx.commit().await?;
@@ -1478,6 +1483,24 @@ mod tests {
                 .delete_count,
             1
         );
+        let history = storage
+            .list_historical_events(&komga_core::PageRequest::default())
+            .await
+            .unwrap();
+        assert_eq!(history.total_elements, 1);
+        let event = &history.content[0];
+        assert_eq!(event.event_type, "DuplicatePageDeleted");
+        assert_eq!(event.book_id.as_deref(), Some(book.id.as_str()));
+        assert_eq!(event.series_id.as_deref(), Some(book.series_id.as_str()));
+        assert_eq!(event.properties["page number"], "1");
+        assert_eq!(event.properties["page file name"], removed.file_name);
+        assert_eq!(event.properties["page file hash"], "remove-hash");
+        assert_eq!(event.properties["page file size"], removed.file_size.to_string());
+        assert_eq!(event.properties["page media type"], removed.media_type);
+        assert_eq!(
+            event.properties["name"],
+            original_book.url.to_file_path().unwrap().to_string_lossy()
+        );
         assert!(
             !storage
                 .apply_zip_page_removal_if_current(
@@ -1497,6 +1520,14 @@ mod tests {
                 .unwrap()
                 .unwrap()
                 .delete_count,
+            1
+        );
+        assert_eq!(
+            storage
+                .list_historical_events(&komga_core::PageRequest::default())
+                .await
+                .unwrap()
+                .total_elements,
             1
         );
     }
