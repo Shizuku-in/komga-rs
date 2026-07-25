@@ -1206,6 +1206,57 @@ mod tests {
             2
         );
 
+        let groups = storage
+            .series_alphabetical_groups(&SeriesSearch::default(), &user, None)
+            .await
+            .unwrap();
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].group, "s");
+        assert_eq!(groups[0].count, 1);
+        assert!(
+            storage
+                .series_alphabetical_groups(&SeriesSearch::default(), &user, Some(&[]))
+                .await
+                .unwrap()
+                .is_empty()
+        );
+
+        let updated_page = PageRequest {
+            sort: vec![SortOrder {
+                property: "lastModified".into(),
+                direction: SortDirection::Descending,
+            }],
+            ..PageRequest::default()
+        };
+        assert_eq!(
+            storage
+                .query_recently_updated_series(&SeriesSearch::default(), &updated_page, &user)
+                .await
+                .unwrap()
+                .total_elements,
+            0
+        );
+        sqlx::query("UPDATE SERIES SET LAST_MODIFIED_DATE = datetime(CREATED_DATE, '+1 day') WHERE ID = ?")
+            .bind(&series.id)
+            .execute(storage.pool())
+            .await
+            .unwrap();
+        assert_eq!(
+            storage
+                .query_recently_updated_series(&SeriesSearch::default(), &updated_page, &user)
+                .await
+                .unwrap()
+                .total_elements,
+            1
+        );
+
+        let on_deck = storage
+            .query_books_on_deck(&[], &PageRequest::default(), &user)
+            .await
+            .unwrap();
+        assert_eq!(on_deck.total_elements, 1);
+        assert_eq!(on_deck.content[0].id, books[1].id);
+
         let read_search = BookSearch {
             condition: Some(BookCondition::ReadStatus {
                 operator: EqualityOperator::Is {
@@ -1436,6 +1487,14 @@ mod tests {
                 .total_elements,
             0
         );
+        assert_eq!(
+            storage
+                .query_books_on_deck(&[], &PageRequest::default(), &user)
+                .await
+                .unwrap()
+                .total_elements,
+            0
+        );
 
         let media_search = BookSearch {
             condition: Some(BookCondition::MediaStatus {
@@ -1457,6 +1516,97 @@ mod tests {
                 .unwrap()
                 .total_elements,
             2
+        );
+    }
+
+    #[tokio::test]
+    async fn on_deck_requires_read_progress_and_uses_stable_unread_order() {
+        let storage = Storage::connect_memory().await.unwrap();
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("library");
+        let directory = root.join("Series");
+        fs::create_dir_all(&directory).unwrap();
+        for number in 1..=3 {
+            fs::write(directory.join(format!("Volume {number}.cbz")), [number]).unwrap();
+        }
+        let library = Library::new("Library".into(), Url::from_directory_path(&root).unwrap());
+        storage.create_library(&library).await.unwrap();
+        let scan = scan_library_files(&library, || false).unwrap();
+        storage.apply_library_scan(&library.id, &scan, false).await.unwrap();
+        let series = storage.list_series_by_library_id(&library.id).await.unwrap().remove(0);
+        let mut books = storage.list_books_by_series_id(&series.id).await.unwrap();
+        books.sort_by(|left, right| left.name.cmp(&right.name));
+        for book in &books[1..] {
+            sqlx::query("UPDATE BOOK_METADATA SET NUMBER_SORT = 2 WHERE BOOK_ID = ?")
+                .bind(&book.id)
+                .execute(storage.pool())
+                .await
+                .unwrap();
+        }
+
+        let user = User::new("reader@example.org".into(), "hash".into());
+        storage.create_user(&user).await.unwrap();
+        assert_eq!(
+            storage
+                .query_books_on_deck(&[], &PageRequest::default(), &user)
+                .await
+                .unwrap()
+                .total_elements,
+            0
+        );
+
+        let progress = |book_id: &str, completed| komga_core::ReadProgress {
+            book_id: book_id.to_owned(),
+            user_id: user.id.clone(),
+            page: 1,
+            completed,
+            read_date: chrono::Utc::now().naive_utc(),
+            device_id: String::new(),
+            device_name: String::new(),
+            locator: None,
+        };
+        storage.save_read_progress(&progress(&books[0].id, true)).await.unwrap();
+        let expected = [&books[1].id, &books[2].id].into_iter().min().unwrap();
+        let on_deck = storage
+            .query_books_on_deck(&[], &PageRequest::default(), &user)
+            .await
+            .unwrap();
+        assert_eq!(on_deck.total_elements, 1);
+        assert_eq!(&on_deck.content[0].id, expected);
+        assert_eq!(
+            storage
+                .query_books_on_deck(
+                    std::slice::from_ref(&"missing".to_owned()),
+                    &PageRequest::default(),
+                    &user
+                )
+                .await
+                .unwrap()
+                .total_elements,
+            0
+        );
+
+        storage.save_read_progress(&progress(expected, false)).await.unwrap();
+        assert_eq!(
+            storage
+                .query_books_on_deck(&[], &PageRequest::default(), &user)
+                .await
+                .unwrap()
+                .total_elements,
+            0
+        );
+        storage.delete_read_progress(expected, &user.id).await.unwrap();
+
+        for book in &books[1..] {
+            storage.save_read_progress(&progress(&book.id, true)).await.unwrap();
+        }
+        assert_eq!(
+            storage
+                .query_books_on_deck(&[], &PageRequest::default(), &user)
+                .await
+                .unwrap()
+                .total_elements,
+            0
         );
     }
 

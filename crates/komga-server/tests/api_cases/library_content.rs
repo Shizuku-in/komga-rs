@@ -393,3 +393,179 @@ async fn content_queries_page_filter_restrict_and_navigate_books() {
             .is_some_and(|content| !content.is_empty())
     );
 }
+
+#[tokio::test]
+async fn discovery_feeds_groups_and_on_deck_match_modern_contracts() {
+    let storage = Storage::connect_memory().await.unwrap();
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path().join("library");
+    for (series, books) in [("Alpha", 2), ("Beta", 1), ("Empty", 1)] {
+        let directory = root.join(series);
+        fs::create_dir_all(&directory).unwrap();
+        for book in 1..=books {
+            fs::write(directory.join(format!("Volume {book}.cbz")), [book as u8]).unwrap();
+        }
+    }
+    let library = Library::new("Library".into(), Url::from_directory_path(&root).unwrap());
+    storage.create_library(&library).await.unwrap();
+    let scan = scan_library_files(&library, || false).unwrap();
+    storage.apply_library_scan(&library.id, &scan, false).await.unwrap();
+
+    let mut series = storage.list_series_by_library_id(&library.id).await.unwrap();
+    series.sort_by(|left, right| left.name.cmp(&right.name));
+    for (item, title_sort) in series.iter().zip(["Alpha", "beta", ""]) {
+        let mut metadata = storage.find_series_metadata(&item.id).await.unwrap().unwrap();
+        metadata.title = title_sort.to_owned();
+        metadata.title_sort = title_sort.to_owned();
+        storage.save_series_metadata(&metadata).await.unwrap();
+    }
+
+    let app = app_with_storage(storage.clone()).await;
+    assert_eq!(claim(&app).await.status(), StatusCode::OK);
+    let admin = basic("admin@example.org", "password");
+
+    let groups = app
+        .clone()
+        .oneshot(
+            Request::post("/api/v1/series/list/alphabetical-groups")
+                .header(header::AUTHORIZATION, &admin)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from("{}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(groups.status(), StatusCode::OK);
+    assert_eq!(
+        body_json(groups).await,
+        serde_json::json!([
+            {"group": "", "count": 1},
+            {"group": "a", "count": 1},
+            {"group": "b", "count": 1}
+        ])
+    );
+
+    let filtered_groups = app
+        .clone()
+        .oneshot(
+            Request::post("/api/v1/series/list/alphabetical-groups")
+                .header(header::AUTHORIZATION, &admin)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    r#"{"condition":{"title":{"operator":"beginsWith","value":"alp"}}}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        body_json(filtered_groups).await,
+        serde_json::json!([{"group": "a", "count": 1}])
+    );
+
+    let empty_groups = app
+        .clone()
+        .oneshot(
+            Request::post("/api/v1/series/list/alphabetical-groups")
+                .header(header::AUTHORIZATION, &admin)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(r#"{"fullTextSearch":"definitely-not-present"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(body_json(empty_groups).await, serde_json::json!([]));
+
+    for path in [
+        "/api/v1/series/latest?page=0&size=1&sort=name,asc&unknown=ignored",
+        "/api/v1/series/new?page=0&size=1&sort=name,asc",
+        "/api/v1/books/latest?page=0&size=1&sort=name,asc",
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::get(path)
+                    .header(header::AUTHORIZATION, &admin)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let page = body_json(response).await;
+        assert_eq!(page["numberOfElements"], 1);
+        assert_eq!(page["sort"]["sorted"], true);
+    }
+
+    let unpaged = app
+        .clone()
+        .oneshot(
+            Request::get("/api/v1/series/latest?unpaged=true&library_id=missing&library_id=also-missing")
+                .header(header::AUTHORIZATION, &admin)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(body_json(unpaged).await["totalElements"], 0);
+
+    let updated = app
+        .clone()
+        .oneshot(
+            Request::get("/api/v1/series/updated")
+                .header(header::AUTHORIZATION, &admin)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(body_json(updated).await["totalElements"], 0);
+
+    let invalid_boolean = app
+        .clone()
+        .oneshot(
+            Request::get("/api/v1/series/latest?deleted=1")
+                .header(header::AUTHORIZATION, &admin)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(invalid_boolean.status(), StatusCode::BAD_REQUEST);
+
+    let alpha_books = storage.list_books_by_series_id(&series[0].id).await.unwrap();
+    let admin_user = storage.find_user_by_email("admin@example.org").await.unwrap().unwrap();
+    storage
+        .save_read_progress(&komga_core::ReadProgress {
+            book_id: alpha_books[0].id.clone(),
+            user_id: admin_user.id,
+            page: 1,
+            completed: true,
+            read_date: chrono::Utc::now().naive_utc(),
+            device_id: String::new(),
+            device_name: String::new(),
+            locator: None,
+        })
+        .await
+        .unwrap();
+    let on_deck = app
+        .clone()
+        .oneshot(
+            Request::get(format!("/api/v1/books/ondeck?size=1&library_id={}", library.id))
+                .header(header::AUTHORIZATION, &admin)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(on_deck.status(), StatusCode::OK);
+    let on_deck = body_json(on_deck).await;
+    assert_eq!(on_deck["totalElements"], 1);
+    assert_eq!(on_deck["content"][0]["id"], alpha_books[1].id);
+
+    let unauthorized = app
+        .oneshot(Request::get("/api/v1/books/latest").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+}

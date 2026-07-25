@@ -2,7 +2,10 @@ use axum::{
     Json,
     extract::{Extension, Path, RawQuery, State},
 };
-use komga_core::{BookDto, BookSearch, SeriesDto, SeriesSearch, User};
+use komga_core::{
+    BookDto, BookSearch, BooleanOperator, EqualityOperator, GroupCountDto, PageRequest, SeriesCondition, SeriesDto,
+    SeriesSearch, SortDirection, SortOrder, User,
+};
 use komga_search::EntityKind;
 
 use crate::{
@@ -12,10 +15,164 @@ use crate::{
         load_visible_book, load_visible_series, redact_book_source_for_user, redact_series_source_for_user,
     },
     error::ApiError,
-    pagination::{SpringPage, parse_page_request},
+    pagination::{ContentQueryParams, SpringPage, parse_content_query, parse_page_request},
     routes::ApiJson,
     search_query::{non_empty, search_hits},
 };
+
+pub(crate) async fn series_alphabetical_groups(
+    State(state): State<AppState>,
+    Extension(auth): Extension<AuthContext>,
+    ApiJson(search): ApiJson<SeriesSearch>,
+) -> Result<Json<Vec<GroupCountDto>>, ApiError> {
+    let groups = if let Some(query) = non_empty(search.full_text_search.as_deref()) {
+        let hits = search_hits(&state, EntityKind::Series, query).await;
+        let mut database_search = search;
+        database_search.full_text_search = None;
+        state
+            .storage
+            .series_alphabetical_groups(&database_search, &auth.user, Some(&hits))
+            .await?
+    } else {
+        state
+            .storage
+            .series_alphabetical_groups(&search, &auth.user, None)
+            .await?
+    };
+    Ok(Json(groups))
+}
+
+pub(crate) async fn latest_series(
+    State(state): State<AppState>,
+    Extension(auth): Extension<AuthContext>,
+    RawQuery(raw_query): RawQuery,
+) -> Result<Json<SpringPage<SeriesDto>>, ApiError> {
+    series_discovery(&state, &auth.user, raw_query.as_deref(), "lastModified", false).await
+}
+
+pub(crate) async fn new_series(
+    State(state): State<AppState>,
+    Extension(auth): Extension<AuthContext>,
+    RawQuery(raw_query): RawQuery,
+) -> Result<Json<SpringPage<SeriesDto>>, ApiError> {
+    series_discovery(&state, &auth.user, raw_query.as_deref(), "created", false).await
+}
+
+pub(crate) async fn updated_series(
+    State(state): State<AppState>,
+    Extension(auth): Extension<AuthContext>,
+    RawQuery(raw_query): RawQuery,
+) -> Result<Json<SpringPage<SeriesDto>>, ApiError> {
+    series_discovery(&state, &auth.user, raw_query.as_deref(), "lastModified", true).await
+}
+
+async fn series_discovery(
+    state: &AppState,
+    user: &User,
+    raw_query: Option<&str>,
+    sort_property: &str,
+    updated_only: bool,
+) -> Result<Json<SpringPage<SeriesDto>>, ApiError> {
+    let params = parse_content_query(raw_query)?;
+    let search = discovery_series_search(&params);
+    let page = fixed_sort(params.page, sort_property);
+    let mut result = if updated_only {
+        state
+            .storage
+            .query_recently_updated_series(&search, &page, user)
+            .await?
+    } else {
+        state.storage.query_series(&search, &page, user, None).await?
+    };
+    result
+        .content
+        .iter_mut()
+        .for_each(|series| redact_series_source_for_user(series, user));
+    Ok(Json(SpringPage::from_content(result)))
+}
+
+fn discovery_series_search(params: &ContentQueryParams) -> SeriesSearch {
+    let mut conditions = Vec::new();
+    if !params.library_ids.is_empty() {
+        conditions.push(SeriesCondition::AnyOf {
+            conditions: params
+                .library_ids
+                .iter()
+                .map(|library_id| SeriesCondition::LibraryId {
+                    operator: EqualityOperator::Is {
+                        value: library_id.clone(),
+                    },
+                })
+                .collect(),
+        });
+    }
+    if let Some(deleted) = params.deleted {
+        conditions.push(SeriesCondition::Deleted {
+            operator: if deleted {
+                BooleanOperator::IsTrue
+            } else {
+                BooleanOperator::IsFalse
+            },
+        });
+    }
+    if let Some(oneshot) = params.oneshot {
+        conditions.push(SeriesCondition::OneShot {
+            operator: if oneshot {
+                BooleanOperator::IsTrue
+            } else {
+                BooleanOperator::IsFalse
+            },
+        });
+    }
+    SeriesSearch {
+        condition: Some(SeriesCondition::AllOf { conditions }),
+        full_text_search: None,
+    }
+}
+
+fn fixed_sort(mut page: PageRequest, property: &str) -> PageRequest {
+    page.sort = vec![SortOrder {
+        property: property.to_owned(),
+        direction: SortDirection::Descending,
+    }];
+    page
+}
+
+pub(crate) async fn latest_books(
+    State(state): State<AppState>,
+    Extension(auth): Extension<AuthContext>,
+    RawQuery(raw_query): RawQuery,
+) -> Result<Json<SpringPage<BookDto>>, ApiError> {
+    let params = parse_content_query(raw_query.as_deref())?;
+    let page = fixed_sort(params.page, "lastModifiedDate");
+    let mut result = state
+        .storage
+        .query_books(&BookSearch::default(), &page, &auth.user, None)
+        .await?;
+    result
+        .content
+        .iter_mut()
+        .for_each(|book| redact_book_source_for_user(book, &auth.user));
+    Ok(Json(SpringPage::from_content(result)))
+}
+
+pub(crate) async fn books_on_deck(
+    State(state): State<AppState>,
+    Extension(auth): Extension<AuthContext>,
+    RawQuery(raw_query): RawQuery,
+) -> Result<Json<SpringPage<BookDto>>, ApiError> {
+    let mut params = parse_content_query(raw_query.as_deref())?;
+    params.page.sort.clear();
+    let mut result = state
+        .storage
+        .query_books_on_deck(&params.library_ids, &params.page, &auth.user)
+        .await?;
+    result
+        .content
+        .iter_mut()
+        .for_each(|book| redact_book_source_for_user(book, &auth.user));
+    Ok(Json(SpringPage::from_content(result)))
+}
 
 pub(crate) async fn list_series(
     State(state): State<AppState>,

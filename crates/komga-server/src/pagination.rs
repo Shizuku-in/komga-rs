@@ -4,7 +4,22 @@ use serde::Serialize;
 use crate::error::ApiError;
 
 pub(crate) fn parse_page_request(raw_query: Option<&str>) -> Result<PageRequest, ApiError> {
+    Ok(parse_content_query(raw_query)?.page)
+}
+
+#[derive(Debug)]
+pub(crate) struct ContentQueryParams {
+    pub(crate) page: PageRequest,
+    pub(crate) library_ids: Vec<String>,
+    pub(crate) deleted: Option<bool>,
+    pub(crate) oneshot: Option<bool>,
+}
+
+pub(crate) fn parse_content_query(raw_query: Option<&str>) -> Result<ContentQueryParams, ApiError> {
     let mut request = PageRequest::default();
+    let mut library_ids = Vec::new();
+    let mut deleted = None;
+    let mut oneshot = None;
     for (key, value) in url::form_urlencoded::parse(raw_query.unwrap_or_default().as_bytes()) {
         match key.as_ref() {
             "page" => {
@@ -19,13 +34,21 @@ pub(crate) fn parse_page_request(raw_query: Option<&str>) -> Result<PageRequest,
             }
             "unpaged" => request.unpaged = parse_boolean(&value, "unpaged")?,
             "sort" => request.sort.push(parse_sort(&value)?),
+            "library_id" => library_ids.push(value.into_owned()),
+            "deleted" => deleted = Some(parse_boolean(&value, "deleted")?),
+            "oneshot" => oneshot = Some(parse_boolean(&value, "oneshot")?),
             _ => {}
         }
     }
     if !request.unpaged && request.size == 0 {
         return Err(ApiError::bad_request("size must be greater than zero"));
     }
-    Ok(request)
+    Ok(ContentQueryParams {
+        page: request,
+        library_ids,
+        deleted,
+        oneshot,
+    })
 }
 
 fn parse_boolean(value: &str, field: &str) -> Result<bool, ApiError> {
@@ -142,5 +165,17 @@ mod tests {
         assert_eq!(request.sort.len(), 2);
         assert_eq!(request.sort[0].direction, SortDirection::Descending);
         assert_eq!(request.sort[1].direction, SortDirection::Ascending);
+    }
+
+    #[test]
+    fn parses_discovery_filters_and_rejects_loose_booleans() {
+        let query = parse_content_query(Some(
+            "library_id=one&unknown=x&library_id=two&deleted=false&oneshot=true",
+        ))
+        .unwrap();
+        assert_eq!(query.library_ids, ["one", "two"]);
+        assert_eq!(query.deleted, Some(false));
+        assert_eq!(query.oneshot, Some(true));
+        assert!(parse_content_query(Some("deleted=1")).is_err());
     }
 }

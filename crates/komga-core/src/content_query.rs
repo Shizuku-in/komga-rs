@@ -1,10 +1,19 @@
 //! Framework-independent query contracts for library content.
 
 use chrono::{DateTime, FixedOffset};
-use serde::{Deserialize, Deserializer, de::Error as _};
+use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
 use serde_json::Value;
 
 use crate::{MediaProfile, MediaStatus, SeriesStatus};
+
+/// Count of series whose sort title begins with one normalized character.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct GroupCountDto {
+    /// Lowercase first character, or an empty string for an empty sort title.
+    pub group: String,
+    /// Number of matching series in the group.
+    pub count: i64,
+}
 
 /// Read states supported by Komga search conditions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]

@@ -438,6 +438,13 @@ pub fn build_app(state: AppState) -> Router {
         .route("/api/v1/login/set-cookie", get(routes::set_cookie))
         .route("/api/logout", get(routes::logout).post(routes::logout))
         .route("/api/v1/series/list", post(content_routes::list_series))
+        .route(
+            "/api/v1/series/list/alphabetical-groups",
+            post(content_routes::series_alphabetical_groups),
+        )
+        .route("/api/v1/series/latest", get(content_routes::latest_series))
+        .route("/api/v1/series/new", get(content_routes::new_series))
+        .route("/api/v1/series/updated", get(content_routes::updated_series))
         .route("/api/v1/series/{series_id}", get(content_routes::get_series))
         .route(
             "/api/v1/series/{series_id}/collections",
@@ -480,6 +487,8 @@ pub fn build_app(state: AppState) -> Router {
             post(metadata_routes::refresh_series_metadata),
         )
         .route("/api/v1/books/list", post(content_routes::list_books))
+        .route("/api/v1/books/latest", get(content_routes::latest_books))
+        .route("/api/v1/books/ondeck", get(content_routes::books_on_deck))
         .route(
             "/api/v1/books/thumbnails",
             axum::routing::put(thumbnail_routes::regenerate_book_thumbnails),

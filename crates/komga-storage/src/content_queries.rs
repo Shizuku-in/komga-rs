@@ -2,11 +2,11 @@ use std::collections::BTreeSet;
 
 use komga_core::{
     AlternateTitleDto, AuthorDto, AuthorMatch, BookCondition, BookDto, BookMetadataAggregationDto, BookMetadataDto,
-    BookSearch, BooleanOperator, ContentPage, DateOperator, EPUB_MEDIA_TYPE, EqualityOperator, MediaDto, MediaProfile,
-    MediaStatus, NullableEqualityOperator, NullableNumericOperator, NumericOperator, PDF_MEDIA_TYPE, PageRequest,
-    PosterMatch, RAR_MEDIA_TYPE, RAR4_MEDIA_TYPE, RAR5_MEDIA_TYPE, ReadProgressDto, ReadStatus, SeriesCondition,
-    SeriesDto, SeriesMetadataDto, SeriesSearch, SeriesStatus, SortDirection, StringOperator, User, WebLinkDto,
-    ZIP_MEDIA_TYPE,
+    BookSearch, BooleanOperator, ContentPage, DateOperator, EPUB_MEDIA_TYPE, EqualityOperator, GroupCountDto, MediaDto,
+    MediaProfile, MediaStatus, NullableEqualityOperator, NullableNumericOperator, NumericOperator, PDF_MEDIA_TYPE,
+    PageRequest, PosterMatch, RAR_MEDIA_TYPE, RAR4_MEDIA_TYPE, RAR5_MEDIA_TYPE, ReadProgressDto, ReadStatus,
+    SeriesCondition, SeriesDto, SeriesMetadataDto, SeriesSearch, SeriesStatus, SortDirection, StringOperator, User,
+    WebLinkDto, ZIP_MEDIA_TYPE,
 };
 use serde::Deserialize;
 use sqlx::{FromRow, QueryBuilder, Sqlite};
@@ -288,6 +288,88 @@ impl Storage {
         Ok(content_page(content, total, page))
     }
 
+    /// Counts visible series by the first lowercase character of their sort title.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-query error when full-text search has not been resolved
+    /// to ranked IDs, or a database error when grouping fails.
+    pub async fn series_alphabetical_groups(
+        &self,
+        search: &SeriesSearch,
+        user: &User,
+        ranked_ids: Option<&[String]>,
+    ) -> Result<Vec<GroupCountDto>> {
+        reject_full_text(search.full_text_search.as_deref())?;
+        let group = "lower(substr(sm.TITLE_SORT, 1, 1))";
+        let mut query = QueryBuilder::new("SELECT ");
+        query
+            .push(group)
+            .push(" AS group_name, COUNT(*) AS group_count FROM SERIES s ")
+            .push("JOIN SERIES_METADATA sm ON sm.SERIES_ID = s.ID ")
+            .push("JOIN BOOK_METADATA_AGGREGATION bma ON bma.SERIES_ID = s.ID ")
+            .push("LEFT JOIN READ_PROGRESS_SERIES rps ON rps.SERIES_ID = s.ID AND rps.USER_ID = ")
+            .push_bind(user.id.clone());
+        push_ranked_join(&mut query, ranked_ids, "s.ID");
+        query.push(" WHERE 1 = 1");
+        push_series_visibility(&mut query, user);
+        if let Some(condition) = &search.condition {
+            query.push(" AND ");
+            push_series_condition(&mut query, condition);
+        }
+        query
+            .push(" GROUP BY ")
+            .push(group)
+            .push(" ORDER BY ")
+            .push(group)
+            .push(" ASC");
+        let rows = query.build_query_as::<(String, i64)>().fetch_all(&self.pool).await?;
+        Ok(rows
+            .into_iter()
+            .map(|(group, count)| GroupCountDto { group, count })
+            .collect())
+    }
+
+    /// Lists visible series that were modified after their creation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-query error for unsupported sort or paging values, or
+    /// a database error when the query cannot be executed.
+    pub async fn query_recently_updated_series(
+        &self,
+        search: &SeriesSearch,
+        page: &PageRequest,
+        user: &User,
+    ) -> Result<ContentPage<SeriesDto>> {
+        validate_page(page)?;
+        reject_full_text(search.full_text_search.as_deref())?;
+        validate_series_sorts(page, false)?;
+
+        let mut count = series_count_builder(user, None);
+        push_series_visibility(&mut count, user);
+        count.push(" AND s.CREATED_DATE <> s.LAST_MODIFIED_DATE");
+        if let Some(condition) = &search.condition {
+            count.push(" AND ");
+            push_series_condition(&mut count, condition);
+        }
+        let total = count.build_query_scalar::<i64>().fetch_one(&self.pool).await?;
+        let total = u64::try_from(total).map_err(|_| StorageError::InvalidData("negative series count".into()))?;
+
+        let mut query = series_query_builder(user, None);
+        push_series_visibility(&mut query, user);
+        query.push(" AND s.CREATED_DATE <> s.LAST_MODIFIED_DATE");
+        if let Some(condition) = &search.condition {
+            query.push(" AND ");
+            push_series_condition(&mut query, condition);
+        }
+        push_series_order(&mut query, page, false);
+        push_pagination(&mut query, page)?;
+        let rows = query.build_query_as::<SeriesQueryRow>().fetch_all(&self.pool).await?;
+        let content = rows.into_iter().map(SeriesQueryRow::into_dto).collect::<Result<_>>()?;
+        Ok(content_page(content, total, page))
+    }
+
     /// Finds a series by ID without applying user visibility rules.
     ///
     /// The caller uses the returned metadata to distinguish Kotlin's `403`
@@ -347,6 +429,41 @@ impl Storage {
         Ok(content_page(content, total, page))
     }
 
+    /// Lists the first unread book from each eligible on-deck series.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-query error for invalid paging values, or a database
+    /// error when the candidate or hydration query fails.
+    pub async fn query_books_on_deck(
+        &self,
+        library_ids: &[String],
+        page: &PageRequest,
+        user: &User,
+    ) -> Result<ContentPage<BookDto>> {
+        validate_page(page)?;
+        let mut count = on_deck_builder(user, library_ids, true);
+        let total = count.build_query_scalar::<i64>().fetch_one(&self.pool).await?;
+        let total = u64::try_from(total).map_err(|_| StorageError::InvalidData("negative on-deck count".into()))?;
+
+        let mut candidates = on_deck_builder(user, library_ids, false);
+        candidates.push(" ORDER BY most_recent_read_date DESC, book_id ASC");
+        push_pagination(&mut candidates, page)?;
+        let ids = candidates.build_query_scalar::<String>().fetch_all(&self.pool).await?;
+        let hydration = self
+            .query_books(
+                &BookSearch::default(),
+                &PageRequest {
+                    unpaged: true,
+                    ..PageRequest::default()
+                },
+                user,
+                Some(&ids),
+            )
+            .await?;
+        Ok(content_page(hydration.content, total, page))
+    }
+
     /// Finds a book by ID without applying user visibility rules.
     ///
     /// # Errors
@@ -394,6 +511,54 @@ impl Storage {
             None => Ok(None),
         }
     }
+}
+
+fn on_deck_builder(user: &User, library_ids: &[String], count: bool) -> QueryBuilder<'static, Sqlite> {
+    let mut query = QueryBuilder::new(
+        "WITH eligible_series AS MATERIALIZED (\
+         SELECT s.ID AS series_id, rps.MOST_RECENT_READ_DATE AS most_recent_read_date \
+         FROM SERIES s \
+         JOIN SERIES_METADATA sm ON sm.SERIES_ID = s.ID \
+         JOIN READ_PROGRESS_SERIES rps ON rps.SERIES_ID = s.ID AND rps.USER_ID = ",
+    );
+    query.push_bind(user.id.clone()).push(
+        " WHERE rps.READ_COUNT > 0 \
+         AND rps.IN_PROGRESS_COUNT = 0 AND rps.READ_COUNT <> s.BOOK_COUNT",
+    );
+    push_series_visibility(&mut query, user);
+    if !library_ids.is_empty() {
+        query.push(" AND s.LIBRARY_ID IN (");
+        let mut separated = query.separated(",");
+        for library_id in library_ids {
+            separated.push_bind(library_id.clone());
+        }
+        query.push(")");
+    }
+    query
+        .push(
+            "), unread_books AS MATERIALIZED (\
+         SELECT b.ID AS book_id, b.SERIES_ID AS series_id, bm.NUMBER_SORT AS number_sort, \
+                eligible_series.most_recent_read_date AS most_recent_read_date \
+         FROM BOOK b \
+         JOIN BOOK_METADATA bm ON bm.BOOK_ID = b.ID \
+         JOIN eligible_series ON eligible_series.series_id = b.SERIES_ID \
+         LEFT JOIN READ_PROGRESS rp ON rp.BOOK_ID = b.ID AND rp.USER_ID = ",
+        )
+        .push_bind(user.id.clone())
+        .push(
+            " WHERE rp.COMPLETED IS NULL\
+         ), ranked_books AS (\
+         SELECT book_id, most_recent_read_date, \
+                ROW_NUMBER() OVER (PARTITION BY series_id ORDER BY number_sort ASC, book_id ASC) AS book_rank \
+         FROM unread_books) SELECT ",
+        );
+    if count {
+        query.push("COUNT(*)");
+    } else {
+        query.push("book_id");
+    }
+    query.push(" FROM ranked_books WHERE book_rank = 1");
+    query
 }
 
 fn series_query_builder(user: &User, ranked_ids: Option<&[String]>) -> QueryBuilder<'static, Sqlite> {
