@@ -16,9 +16,9 @@ use crate::{
         load_visible_book, load_visible_series, redact_book_source_for_user, redact_series_source_for_user,
     },
     error::ApiError,
-    legacy_content_query::{parse_legacy_book_query, parse_legacy_series_query},
+    legacy_content_query::{parse_duplicate_books_page, parse_legacy_book_query, parse_legacy_series_query},
     pagination::{ContentQueryParams, SpringPage, parse_content_query, parse_page_request},
-    routes::ApiJson,
+    routes::{ApiJson, require_admin},
     search_query::{non_empty, search_hits},
 };
 
@@ -202,6 +202,17 @@ pub(crate) async fn books_on_deck(
         .content
         .iter_mut()
         .for_each(|book| redact_book_source_for_user(book, &auth.user));
+    Ok(Json(SpringPage::from_content(result)))
+}
+
+pub(crate) async fn duplicate_books(
+    State(state): State<AppState>,
+    Extension(auth): Extension<AuthContext>,
+    RawQuery(raw_query): RawQuery,
+) -> Result<Json<SpringPage<BookDto>>, ApiError> {
+    require_admin(&auth)?;
+    let page = parse_duplicate_books_page(raw_query.as_deref())?;
+    let result = state.storage.query_duplicate_books(&page, &auth.user.id).await?;
     Ok(Json(SpringPage::from_content(result)))
 }
 

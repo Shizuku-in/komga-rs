@@ -219,6 +219,16 @@ pub(crate) fn parse_legacy_book_query(raw_query: Option<&str>) -> Result<LegacyB
     })
 }
 
+pub(crate) fn parse_duplicate_books_page(raw_query: Option<&str>) -> Result<PageRequest, ApiError> {
+    RawValues::parse(raw_query).page_request_with_fallback(
+        BOOK_SORTS,
+        Some(SortOrder {
+            property: "fileHash".into(),
+            direction: SortDirection::Ascending,
+        }),
+    )
+}
+
 fn is<T>(value: T) -> EqualityOperator<T> {
     EqualityOperator::Is { value }
 }
@@ -356,6 +366,20 @@ impl RawValues {
     }
 
     fn page_request(&self, allowed_sorts: &[&str], search: Option<&str>) -> Result<PageRequest, ApiError> {
+        let fallback = search
+            .is_some_and(|search| !search.trim().is_empty())
+            .then(|| SortOrder {
+                property: "relevance".into(),
+                direction: SortDirection::Ascending,
+            });
+        self.page_request_with_fallback(allowed_sorts, fallback)
+    }
+
+    fn page_request_with_fallback(
+        &self,
+        allowed_sorts: &[&str],
+        fallback: Option<SortOrder>,
+    ) -> Result<PageRequest, ApiError> {
         let page = self.first("page").and_then(|value| value.parse().ok()).unwrap_or(0);
         let size = self
             .first("size")
@@ -371,16 +395,13 @@ impl RawValues {
                 continue;
             };
             syntactic_sort = true;
-            let relevance = order.property == "relevance" && search.is_some_and(|search| !search.trim().is_empty());
-            if relevance || allowed_sorts.contains(&order.property.as_str()) {
+            let fallback_property = fallback.as_ref().map(|value| value.property.as_str());
+            if allowed_sorts.contains(&order.property.as_str()) || fallback_property == Some(order.property.as_str()) {
                 sort.push(order);
             }
         }
-        if !syntactic_sort && search.is_some_and(|search| !search.trim().is_empty()) {
-            sort.push(SortOrder {
-                property: "relevance".into(),
-                direction: SortDirection::Ascending,
-            });
+        if !syntactic_sort && let Some(fallback) = fallback {
+            sort.push(fallback);
         }
         Ok(PageRequest {
             page,
@@ -482,6 +503,22 @@ mod tests {
 
         let irrelevant = parse_legacy_series_query(Some("sort=relevance,asc")).unwrap();
         assert!(irrelevant.page.sort.is_empty());
+    }
+
+    #[test]
+    fn duplicate_page_defaults_file_hash_and_preserves_syntactic_unknown_sort() {
+        let default = parse_duplicate_books_page(Some("page=bad&size=0&unpaged=yes")).unwrap();
+        assert_eq!(default.page, 0);
+        assert_eq!(default.size, 20);
+        assert!(default.unpaged);
+        assert_eq!(default.sort[0].property, "fileHash");
+
+        let unknown = parse_duplicate_books_page(Some("sort=unknown,desc")).unwrap();
+        assert!(unknown.sort.is_empty());
+
+        let malformed = parse_duplicate_books_page(Some("sort=name,sideways")).unwrap();
+        assert_eq!(malformed.sort[0].property, "fileHash");
+        assert!(parse_duplicate_books_page(Some("unpaged=maybe")).is_err());
     }
 
     #[test]

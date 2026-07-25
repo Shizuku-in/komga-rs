@@ -520,6 +520,7 @@ pub fn build_app(state: AppState) -> Router {
         .route("/api/v1/books", get(content_routes::legacy_list_books))
         .route("/api/v1/books/latest", get(content_routes::latest_books))
         .route("/api/v1/books/ondeck", get(content_routes::books_on_deck))
+        .route("/api/v1/books/duplicates", get(content_routes::duplicate_books))
         .route(
             "/api/v1/books/thumbnails",
             axum::routing::put(thumbnail_routes::regenerate_book_thumbnails),

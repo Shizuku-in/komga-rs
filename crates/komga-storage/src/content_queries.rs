@@ -507,6 +507,42 @@ impl Storage {
         Ok(content_page(content, total, page))
     }
 
+    /// Lists books that share a non-empty source hash and file size with at
+    /// least one other book.
+    ///
+    /// Soft-deleted rows are intentionally included to match Komga's
+    /// administrator duplicate-discovery query. The user identifier is used
+    /// only to hydrate that user's read progress.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-query error for unsupported sort or paging values,
+    /// or a database error when counting or hydrating duplicates fails.
+    pub async fn query_duplicate_books(&self, page: &PageRequest, user_id: &str) -> Result<ContentPage<BookDto>> {
+        validate_page(page)?;
+        validate_book_sorts(page, false)?;
+        const DUPLICATE_CONDITION: &str = r#" AND b.FILE_HASH <> '' AND EXISTS (
+            SELECT 1 FROM BOOK duplicate
+             WHERE duplicate.FILE_HASH = b.FILE_HASH
+               AND duplicate.FILE_SIZE = b.FILE_SIZE
+               AND duplicate.ID <> b.ID)"#;
+
+        let total =
+            sqlx::query_scalar::<_, i64>(&format!("SELECT COUNT(*) FROM BOOK b WHERE 1 = 1{DUPLICATE_CONDITION}"))
+                .fetch_one(&self.pool)
+                .await?;
+        let total =
+            u64::try_from(total).map_err(|_| StorageError::InvalidData("negative duplicate book count".into()))?;
+
+        let mut query = book_query_builder_for_user_id(user_id, None);
+        query.push(DUPLICATE_CONDITION);
+        push_book_order(&mut query, page, false);
+        push_pagination(&mut query, page)?;
+        let rows = query.build_query_as::<BookQueryRow>().fetch_all(&self.pool).await?;
+        let content = rows.into_iter().map(BookQueryRow::into_dto).collect::<Result<_>>()?;
+        Ok(content_page(content, total, page))
+    }
+
     /// Lists the first unread book from each eligible on-deck series.
     ///
     /// # Errors
