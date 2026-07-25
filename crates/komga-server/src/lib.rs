@@ -20,6 +20,7 @@ mod legacy_content_query;
 mod library_routes;
 mod media_routes;
 mod metadata_routes;
+mod opds_v1;
 mod page_hash_routes;
 mod pagination;
 mod read_list_file_routes;
@@ -744,6 +745,37 @@ pub fn build_app(state: AppState) -> Router {
         .route(
             "/api/v1/libraries/{library_id}/empty-trash",
             post(library_routes::empty_trash),
+        )
+        .route("/opds/v1.2/catalog", get(opds_v1::catalog))
+        .route("/opds/v1.2/search", get(opds_v1::search))
+        .route("/opds/v1.2/ondeck", get(opds_v1::on_deck))
+        .route("/opds/v1.2/keep-reading", get(opds_v1::keep_reading))
+        .route("/opds/v1.2/series", get(opds_v1::all_series))
+        .route("/opds/v1.2/series/latest", get(opds_v1::latest_series))
+        .route("/opds/v1.2/books/latest", get(opds_v1::latest_books))
+        .route("/opds/v1.2/libraries", get(opds_v1::libraries))
+        .route("/opds/v1.2/collections", get(opds_v1::collections))
+        .route("/opds/v1.2/readlists", get(opds_v1::read_lists))
+        .route("/opds/v1.2/publishers", get(opds_v1::publishers))
+        .route("/opds/v1.2/series/{id}", get(opds_v1::series))
+        .route("/opds/v1.2/libraries/{id}", get(opds_v1::library))
+        .route("/opds/v1.2/collections/{id}", get(opds_v1::collection))
+        .route("/opds/v1.2/readlists/{id}", get(opds_v1::read_list))
+        .route(
+            "/opds/v1.2/books/{book_id}/thumbnail",
+            get(thumbnail_routes::get_book_thumbnail),
+        )
+        .route(
+            "/opds/v1.2/books/{book_id}/thumbnail/small",
+            get(opds_v1::small_thumbnail),
+        )
+        .route(
+            "/opds/v1.2/books/{book_id}/pages/{page_number}",
+            get(media_routes::get_opds_v1_page),
+        )
+        .route(
+            "/opds/v1.2/books/{book_id}/file/{*file_name}",
+            get(book_file_routes::download_book_file_with_name),
         )
         .route("/api/v1/filesystem", post(filesystem_routes::directory_listing))
         .route(

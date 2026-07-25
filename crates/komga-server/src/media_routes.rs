@@ -154,6 +154,17 @@ pub(crate) async fn get_page(
     ))
 }
 
+pub(crate) async fn get_opds_v1_page(
+    state: State<AppState>,
+    auth: Extension<AuthContext>,
+    path: Path<(String, i32)>,
+    Query(mut query): Query<PageQuery>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    query.zero_based = true;
+    get_page(state, auth, path, Query(query), headers).await
+}
+
 pub(crate) async fn get_page_thumbnail(
     State(state): State<AppState>,
     Extension(auth): Extension<AuthContext>,
