@@ -4,18 +4,19 @@ use std::io::Write;
 
 use chrono::NaiveDateTime;
 use flate2::{Compression, read::GzDecoder, write::GzEncoder};
-use komga_core::{R2Locator, ReadProgress, SeriesReadProgressDto, series_read_progress};
+use komga_core::{R2Locator, ReadProgress, SeriesReadProgressDto, SyncReadProgress, series_read_progress};
 use sqlx::{FromRow, Sqlite, Transaction};
 
 use crate::{Result, Storage, StorageError};
 
 #[derive(Debug, FromRow)]
-struct ReadProgressRow {
+pub(crate) struct ReadProgressRow {
     book_id: String,
     user_id: String,
     page: i32,
     completed: bool,
     read_date: Option<NaiveDateTime>,
+    created_date: NaiveDateTime,
     last_modified_date: NaiveDateTime,
     device_id: Option<String>,
     device_name: Option<String>,
@@ -23,6 +24,22 @@ struct ReadProgressRow {
 }
 
 impl Storage {
+    /// Loads one user's progress together with persistence timestamps for device sync.
+    pub async fn find_sync_read_progress(&self, book_id: &str, user_id: &str) -> Result<Option<SyncReadProgress>> {
+        let row = sqlx::query_as::<_, ReadProgressRow>(
+            r#"SELECT BOOK_ID AS book_id, USER_ID AS user_id, PAGE AS page,
+                      COMPLETED AS completed, READ_DATE AS read_date,
+                      CREATED_DATE AS created_date, LAST_MODIFIED_DATE AS last_modified_date,
+                      DEVICE_ID AS device_id, DEVICE_NAME AS device_name, LOCATOR AS locator
+                 FROM READ_PROGRESS WHERE BOOK_ID = ? AND USER_ID = ?"#,
+        )
+        .bind(book_id)
+        .bind(user_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(ReadProgressRow::into_sync_domain))
+    }
+
     /// Computes one user's progress summary across all books in a series.
     pub async fn find_series_read_progress(&self, series_id: &str, user_id: &str) -> Result<SeriesReadProgressDto> {
         let books = sqlx::query_as::<_, (f64, Option<bool>)>(
@@ -141,6 +158,7 @@ impl Storage {
         let row = sqlx::query_as::<_, ReadProgressRow>(
             r#"SELECT BOOK_ID AS book_id, USER_ID AS user_id, PAGE AS page,
                       COMPLETED AS completed, READ_DATE AS read_date,
+                      CREATED_DATE AS created_date,
                       LAST_MODIFIED_DATE AS last_modified_date,
                       DEVICE_ID AS device_id, DEVICE_NAME AS device_name,
                       LOCATOR AS locator
@@ -217,7 +235,7 @@ impl Storage {
 }
 
 impl ReadProgressRow {
-    fn into_domain(self) -> ReadProgress {
+    pub(crate) fn into_domain(self) -> ReadProgress {
         ReadProgress {
             book_id: self.book_id,
             user_id: self.user_id,
@@ -227,6 +245,16 @@ impl ReadProgressRow {
             device_id: self.device_id.unwrap_or_default(),
             device_name: self.device_name.unwrap_or_default(),
             locator: decode_locator(self.locator.as_deref()),
+        }
+    }
+
+    pub(crate) fn into_sync_domain(self) -> SyncReadProgress {
+        let created_date = self.created_date;
+        let last_modified_date = self.last_modified_date;
+        SyncReadProgress {
+            progress: self.into_domain(),
+            created_date,
+            last_modified_date,
         }
     }
 }

@@ -17,6 +17,7 @@ mod page_hash;
 mod pagination;
 mod progress;
 mod scanner;
+mod sync;
 
 use std::collections::BTreeSet;
 
@@ -62,6 +63,10 @@ pub use progress::{
 };
 pub use scanner::{
     Book, ScanError, ScanResult, ScannedSeries, ScannedSidecar, Series, compare_book_names, scan_library_files,
+};
+pub use sync::{
+    KomgaSyncToken, ON_DECK_READ_LIST_ID, SyncBatch, SyncBookChange, SyncBookProjection, SyncChangeKind, SyncPoint,
+    SyncPointBook, SyncPointReadList, SyncPointReadListBook, SyncReadListChange, SyncReadProgress,
 };
 
 /// Every application role recognized by the current Komga compatibility layer.

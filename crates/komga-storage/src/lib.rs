@@ -22,6 +22,7 @@ mod read_progress;
 mod referential;
 mod schema;
 mod settings;
+mod sync;
 mod tasks;
 
 pub use containers::{ComicInfoContainerUpdate, ContainerThumbnail};
