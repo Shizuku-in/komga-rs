@@ -29,7 +29,7 @@ const KNOWN_SORTS: &[&str] = &[
     "lastModifiedDate",
 ];
 const UNKNOWN_SORTS: &[&str] = &["hash", "fileSize", "matchCount", "totalSize"];
-const MATCH_SORTS: &[&str] = &["fileSize", "url", "bookId", "pageNumber"];
+const MATCH_SORTS: &[&str] = &["hash", "fileSize", "url", "bookId", "pageNumber"];
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -98,7 +98,9 @@ pub(crate) async fn unknown_thumbnail(
 ) -> Result<Response, ApiError> {
     require_admin(&auth)?;
     let resize = parse_resize(raw.as_deref())?;
-    let bytes = preview(&state, &page_hash, resize).await?;
+    let bytes = preview(&state, &page_hash, resize)
+        .await?
+        .ok_or_else(|| ApiError::not_found("Page hash match not found"))?;
     Ok(([(header::CONTENT_TYPE, "image/jpeg")], bytes).into_response())
 }
 
@@ -113,7 +115,7 @@ pub(crate) async fn create_or_update(
     }
     let size = payload.size.filter(|value| *value >= 0);
     let thumbnail = if state.storage.find_known_page_hash(&payload.hash).await?.is_none() {
-        preview(&state, &payload.hash, Some(500)).await.ok()
+        preview(&state, &payload.hash, Some(500)).await?
     } else {
         None
     };
@@ -183,7 +185,7 @@ fn target(page_hash: &str, matched: PageHashMatch) -> HashedPageTarget {
     }
 }
 
-async fn preview(state: &AppState, page_hash: &str, max_edge: Option<u32>) -> Result<Vec<u8>, ApiError> {
+async fn preview(state: &AppState, page_hash: &str, max_edge: Option<u32>) -> Result<Option<Vec<u8>>, ApiError> {
     let matched = state
         .storage
         .list_page_hash_matches(
@@ -196,8 +198,10 @@ async fn preview(state: &AppState, page_hash: &str, max_edge: Option<u32>) -> Re
         .await?
         .content
         .into_iter()
-        .next()
-        .ok_or_else(|| ApiError::not_found("Page hash match not found"))?;
+        .next();
+    let Some(matched) = matched else {
+        return Ok(None);
+    };
     let book = state
         .storage
         .find_book_by_id(&matched.book_id)
@@ -208,13 +212,14 @@ async fn preview(state: &AppState, page_hash: &str, max_edge: Option<u32>) -> Re
         .find_media_by_book_id(&matched.book_id)
         .await?
         .ok_or_else(|| ApiError::not_found("Page hash match not found"))?;
-    tokio::task::spawn_blocking(move || {
+    let bytes = tokio::task::spawn_blocking(move || {
         let page = extract_page(&book, &media, matched.page_number)?;
         convert_image(&page.bytes, ImageOutput::Jpeg, max_edge).map(|value| value.bytes)
     })
     .await
     .map_err(|error| ApiError::internal(format!("Page hash preview task failed: {error}")))?
-    .map_err(|error| ApiError::internal(error.to_string()))
+    .map_err(|error| ApiError::internal(error.to_string()))?;
+    Ok(Some(bytes))
 }
 
 fn parse_resize(raw: Option<&str>) -> Result<Option<u32>, ApiError> {

@@ -3,7 +3,8 @@
 use std::time::Duration;
 
 use komga_core::{
-    MediaStatus, MetadataUpdate, ScanError, SeriesMetadataPatch, ThumbnailBook, new_id, scan_library_files,
+    HashedPageTarget, MediaStatus, MetadataUpdate, ScanError, SeriesMetadataPatch, ThumbnailBook, new_id,
+    scan_library_files,
 };
 use komga_media::{
     FileHashError, MediaAnalysisError, MediaOperationError, analyze_book, extract_comic_info_metadata,
@@ -19,6 +20,7 @@ use tokio_util::sync::CancellationToken;
 use crate::AppState;
 
 mod analysis;
+mod duplicate_pages;
 mod hashing;
 mod lifecycle;
 mod maintenance;
@@ -29,6 +31,7 @@ mod scheduler;
 mod thumbnail;
 
 use analysis::process_analyze_book_task;
+use duplicate_pages::{process_find_duplicate_pages_task, process_remove_hashed_pages_task};
 use hashing::process_hash_book_task;
 use lifecycle::{perform_empty_trash, process_empty_trash_task};
 use maintenance::{process_aggregate_series_metadata_task, process_find_thumbnails_task};
@@ -134,6 +137,13 @@ pub(super) struct BookTaskPayload {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct RemoveHashedPagesPayload {
+    book_id: String,
+    pages: Vec<HashedPageTarget>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub(super) struct SeriesTaskPayload {
     pub(super) series_id: String,
     #[serde(default)]
@@ -187,13 +197,15 @@ pub(super) enum TaskOutcome {
     Retry,
 }
 
-const SUPPORTED_TASK_TYPES: [&str; 13] = [
+const SUPPORTED_TASK_TYPES: [&str; 15] = [
     "ScanLibrary",
     "EmptyTrash",
     "AnalyzeBook",
     "HashBook",
     "FindBooksWithMissingPageHash",
     "HashBookPages",
+    "FindDuplicatePagesToDelete",
+    "RemoveHashedPages",
     "RefreshBookMetadata",
     "RefreshSeriesMetadata",
     "GenerateBookThumbnail",
@@ -253,6 +265,8 @@ async fn process_task(state: &AppState, task: &TaskRecord) -> TaskOutcome {
         "HashBook" => process_hash_book_task(state, task).await,
         "FindBooksWithMissingPageHash" => process_find_missing_page_hashes_task(state, task).await,
         "HashBookPages" => process_hash_book_pages_task(state, task).await,
+        "FindDuplicatePagesToDelete" => process_find_duplicate_pages_task(state, task).await,
+        "RemoveHashedPages" => process_remove_hashed_pages_task(state, task).await,
         "RefreshBookMetadata" => process_refresh_book_metadata_task(state, task).await,
         "RefreshSeriesMetadata" => process_refresh_series_metadata_task(state, task).await,
         "GenerateBookThumbnail" => process_generate_thumbnail_task(state, task).await,

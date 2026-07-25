@@ -14,7 +14,7 @@ The migration matrix currently tracks 13 functional areas: 2 are implemented or 
 | Partial | Process and configuration; SQLite; authentication; libraries and scanner; Series, Books, and progress; media; search; operations |
 | Pending | OPDS; device sync; Web UI packaging |
 
-Recent content work added modern and deprecated Series/Book queries, legacy regex search, duplicate-book discovery, book-file hashing, and configurable ZIP edge-page hashing. The next content slice is PageHash administration, duplicate-page discovery, and safe page removal; OPDS and device synchronization remain later work.
+Recent content work added modern and deprecated Series/Book queries, legacy regex search, duplicate-book discovery, book-file hashing, configurable ZIP edge-page hashing, PageHash administration, and safe duplicate-page removal from CBZ files. OPDS, device synchronization, and content-domain event parity remain later work.
 
 ## Run
 
@@ -88,6 +88,12 @@ Migration `0011_page_hashing` deliberately clears existing `PAGE_HASH` rules and
 - `GET /api/v1/books/{id}/resource/{resource}`
 - `GET /api/v1/books/{id}/manifest`
 - `GET /api/v1/books/{id}/manifest/{divina|pdf|epub}`
+- `GET|PUT /api/v1/page-hashes`
+- `GET /api/v1/page-hashes/unknown`
+- `GET /api/v1/page-hashes/{hash}`
+- `GET /api/v1/page-hashes/{hash}/thumbnail`
+- `GET /api/v1/page-hashes/unknown/{hash}/thumbnail`
+- `POST /api/v1/page-hashes/{hash}/{delete-all|delete-match}`
 - `POST /api/v1/readlists/match/comicrack`
 - `GET /api/v1/readlists/{id}/file`
 - `POST /api/v1/filesystem`
@@ -106,7 +112,7 @@ Authentication is compatible with the current Komga contract: HTTP Basic, `KOMGA
 
 `ScanLibrary` tasks are executed in the background. They discover configured CBX/PDF/EPUB files and persist Kotlin-compatible Series, Book, Media, and initial metadata rows. CBZ, CBR, PDF, and EPUB contents are analyzed and receive generated book thumbnails; fixed-layout EPUB pages, publication resources, navigation, reading positions, and Divina/PDF/EPUB WebPub manifests are available through the REST API. Root-level `ComicInfo.xml`, EPUB OPF, and Mylar `series.json` metadata are imported incrementally after analysis and through the book, series, and library metadata refresh endpoints. Provider updates preserve locked fields, and ComicInfo collection/read-list relationships remain incremental. `EmptyTrash` permanently removes soft-deleted database content, honors automatic cleanup after scans, and never deletes source files. Library deletion cascades through database-owned content and sidecars while also preserving source files. Other unported task types remain queued and unmodified.
 
-Libraries with `hashPages` enabled enqueue Kotlin-compatible discovery and page-hashing tasks at startup, after scans, and when the setting is enabled. Only READY ZIP/CBZ media participates. The first and last configured number of pages are hashed; JPEG pages use a deterministic dimensions-plus-RGB24 representation, while other page types retain raw-byte XXH3-128 hashing. PageHash management, duplicate-page queries, and source-page deletion remain pending.
+Libraries with `hashPages` enabled enqueue Kotlin-compatible discovery and page-hashing tasks at startup, after scans, and when the setting is enabled. Only READY ZIP/CBZ media participates. The first and last configured number of pages are hashed; JPEG pages use a deterministic dimensions-plus-RGB24 representation, while other page types retain raw-byte XXH3-128 hashing. Administrators can classify hashes as `DELETE_AUTO`, `DELETE_MANUAL`, or `IGNORE`, inspect matching pages and previews, and queue all or individual matches for deletion. ZIP removal raw-copies surviving entries in archive order, validates the complete temporary archive and current source snapshot, and then performs a same-directory atomic replacement. It does not create a source backup, so back up real libraries before enabling deletion rules.
 
 The modern Series and Book list endpoints support Spring-style pagination, the complete structured condition trees, ranked multilingual `fullTextSearch`, alphabetical groups, fixed discovery feeds, and On Deck selection. Deprecated GET lists and the legacy alphabetical-groups route translate their query parameters into the same condition trees and search candidates; Series `search_regex` supports case-insensitive Rust regexes over `title` and `title_sort`. Referential filter values preserve Kotlin's scope precedence and data-source differences. Collection and read-list `search` uses the same in-process Tantivy index. Library sharing, age, sharing labels, member restrictions, and structured conditions remain enforced by SQLite before pagination. The Rust index uses `<config-dir>/search/v2`, remains independent of Kotlin's Lucene directory, and queues a priority-8 rebuild task at startup when the file index is empty or incompatible.
 

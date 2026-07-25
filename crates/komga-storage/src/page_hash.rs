@@ -378,6 +378,7 @@ fn unknown_sort_column(property: &str) -> Option<&'static str> {
 
 fn match_sort_column(property: &str) -> Option<&'static str> {
     match property {
+        "hash" => Some("mp.FILE_HASH"),
         "fileSize" => Some("mp.FILE_SIZE"),
         "url" => Some("b.URL"),
         "bookId" => Some("mp.BOOK_ID"),

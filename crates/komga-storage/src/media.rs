@@ -1,8 +1,8 @@
 use chrono::NaiveDateTime;
 use flate2::{Compression, read::GzDecoder, write::GzEncoder};
 use komga_core::{
-    BookPage, Dimension, EPUB_EXTENSION_CLASS, Media, MediaExtension, MediaExtensionEpub, MediaFile, MediaStatus,
-    SeriesCover, ThumbnailBook, ThumbnailSeries,
+    BookPage, Dimension, EPUB_EXTENSION_CLASS, HashedPageTarget, Media, MediaExtension, MediaExtensionEpub, MediaFile,
+    MediaStatus, SeriesCover, ThumbnailBook, ThumbnailSeries,
 };
 use sqlx::{FromRow, Sqlite, Transaction};
 
@@ -30,6 +30,16 @@ struct PageRow {
     width: Option<i32>,
     height: Option<i32>,
     file_hash: String,
+    file_size: Option<i64>,
+}
+
+#[derive(Debug, FromRow)]
+struct PageStateRow {
+    number: i32,
+    file_name: String,
+    media_type: String,
+    file_hash: String,
+    file_hash_algorithm: Option<String>,
     file_size: Option<i64>,
 }
 
@@ -299,6 +309,211 @@ impl Storage {
                 tx.rollback().await?;
                 return Ok(false);
             }
+        }
+        tx.commit().await?;
+        Ok(true)
+    }
+
+    /// Commits a validated ZIP page removal only while the database still
+    /// matches the snapshots used to rewrite the source file.
+    ///
+    /// Surviving page hashes and algorithm markers are retained by exact
+    /// filename, media type, and size. Reading progress is intentionally not
+    /// remapped. Known hash delete counters are incremented by the number of
+    /// pages actually removed.
+    ///
+    /// Returns `false` when the book, media, or page snapshots are stale.
+    ///
+    /// # Errors
+    ///
+    /// Returns a database error when validation or persistence fails.
+    pub async fn apply_zip_page_removal_if_current(
+        &self,
+        original_book: &komga_core::Book,
+        original_media: &Media,
+        updated_book: &komga_core::Book,
+        updated_media: &Media,
+        removed: &[HashedPageTarget],
+    ) -> Result<bool> {
+        let (Some(original_media_type), Some(original_media_modified)) =
+            (original_media.media_type.as_deref(), original_media.last_modified_date)
+        else {
+            return Ok(false);
+        };
+        if original_book.id != updated_book.id
+            || original_media.book_id != original_book.id
+            || updated_media.book_id != original_book.id
+            || removed.is_empty()
+            || original_media.pages.len() != updated_media.pages.len() + removed.len()
+        {
+            return Ok(false);
+        }
+        let mut tx = self.pool.begin().await?;
+        let current = sqlx::query_scalar::<_, bool>(
+            r#"SELECT EXISTS(
+                 SELECT 1 FROM BOOK B JOIN MEDIA M ON M.BOOK_ID = B.ID
+                  WHERE B.ID = ? AND B.URL = ? AND B.FILE_SIZE = ?
+                    AND B.FILE_LAST_MODIFIED = ? AND B.DELETED_DATE IS NULL
+                    AND M.STATUS = ? AND M.MEDIA_TYPE = ? AND M.PAGE_COUNT = ?
+                    AND M.LAST_MODIFIED_DATE = ?)"#,
+        )
+        .bind(&original_book.id)
+        .bind(original_book.url.as_str())
+        .bind(original_book.file_size)
+        .bind(original_book.file_last_modified)
+        .bind(original_media.status.as_str())
+        .bind(original_media_type)
+        .bind(original_media.page_count)
+        .bind(original_media_modified)
+        .fetch_one(&mut *tx)
+        .await?;
+        if !current {
+            tx.rollback().await?;
+            return Ok(false);
+        }
+        let states = sqlx::query_as::<_, PageStateRow>(
+            r#"SELECT NUMBER AS number, FILE_NAME AS file_name, MEDIA_TYPE AS media_type,
+                      FILE_HASH AS file_hash, FILE_HASH_ALGORITHM AS file_hash_algorithm,
+                      FILE_SIZE AS file_size
+                 FROM MEDIA_PAGE WHERE BOOK_ID = ? ORDER BY NUMBER"#,
+        )
+        .bind(&original_book.id)
+        .fetch_all(&mut *tx)
+        .await?;
+        if states.len() != original_media.pages.len()
+            || states
+                .iter()
+                .zip(&original_media.pages)
+                .enumerate()
+                .any(|(number, (state, page))| {
+                    usize::try_from(state.number).ok() != Some(number)
+                        || state.file_name != page.file_name
+                        || state.media_type != page.media_type
+                        || state.file_hash != page.file_hash
+                        || state.file_size != page.file_size
+                })
+        {
+            tx.rollback().await?;
+            return Ok(false);
+        }
+        for target in removed {
+            let Some(index) = target
+                .page_number
+                .checked_sub(1)
+                .and_then(|value| usize::try_from(value).ok())
+            else {
+                tx.rollback().await?;
+                return Ok(false);
+            };
+            let Some(state) = states.get(index) else {
+                tx.rollback().await?;
+                return Ok(false);
+            };
+            if state.file_name != target.file_name
+                || state.media_type != target.media_type
+                || state.file_hash != target.file_hash
+                || state.file_size != Some(target.file_size)
+            {
+                tx.rollback().await?;
+                return Ok(false);
+            }
+        }
+
+        let book_update = sqlx::query(
+            r#"UPDATE BOOK SET FILE_SIZE = ?, FILE_LAST_MODIFIED = ?, FILE_HASH = '',
+                               FILE_HASH_KOREADER = '', LAST_MODIFIED_DATE = CURRENT_TIMESTAMP
+                 WHERE ID = ? AND URL = ? AND FILE_SIZE = ? AND FILE_LAST_MODIFIED = ?
+                   AND DELETED_DATE IS NULL"#,
+        )
+        .bind(updated_book.file_size)
+        .bind(updated_book.file_last_modified)
+        .bind(&original_book.id)
+        .bind(original_book.url.as_str())
+        .bind(original_book.file_size)
+        .bind(original_book.file_last_modified)
+        .execute(&mut *tx)
+        .await?;
+        if book_update.rows_affected() != 1 {
+            tx.rollback().await?;
+            return Ok(false);
+        }
+
+        let (extension_class, extension_value_blob) = encode_media_extension(updated_media.extension.as_ref())?;
+        sqlx::query(
+            r#"UPDATE MEDIA SET STATUS = ?, MEDIA_TYPE = ?, COMMENT = ?, PAGE_COUNT = ?,
+                      EPUB_DIVINA_COMPATIBLE = ?, EPUB_IS_KEPUB = ?,
+                      EXTENSION_CLASS = ?, EXTENSION_VALUE_BLOB = ?,
+                      LAST_MODIFIED_DATE = CURRENT_TIMESTAMP
+                 WHERE BOOK_ID = ?"#,
+        )
+        .bind(updated_media.status.as_str())
+        .bind(&updated_media.media_type)
+        .bind(&updated_media.comment)
+        .bind(updated_media.page_count)
+        .bind(updated_media.epub_divina_compatible)
+        .bind(updated_media.epub_is_kepub)
+        .bind(extension_class)
+        .bind(extension_value_blob)
+        .bind(&original_book.id)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query("DELETE FROM MEDIA_PAGE WHERE BOOK_ID = ?")
+            .bind(&original_book.id)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("DELETE FROM MEDIA_FILE WHERE BOOK_ID = ?")
+            .bind(&original_book.id)
+            .execute(&mut *tx)
+            .await?;
+        for (number, page) in updated_media.pages.iter().enumerate() {
+            let Some(previous) = states.iter().find(|state| {
+                state.file_name == page.file_name
+                    && state.media_type == page.media_type
+                    && state.file_size == page.file_size
+                    && state.file_hash == page.file_hash
+            }) else {
+                tx.rollback().await?;
+                return Ok(false);
+            };
+            sqlx::query(
+                r#"INSERT INTO MEDIA_PAGE
+                     (BOOK_ID, FILE_NAME, MEDIA_TYPE, NUMBER, WIDTH, HEIGHT,
+                      FILE_HASH, FILE_SIZE, FILE_HASH_ALGORITHM)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
+            )
+            .bind(&original_book.id)
+            .bind(&page.file_name)
+            .bind(&page.media_type)
+            .bind(i32::try_from(number).unwrap_or(i32::MAX))
+            .bind(page.dimension.map(|value| value.width))
+            .bind(page.dimension.map(|value| value.height))
+            .bind(&page.file_hash)
+            .bind(page.file_size)
+            .bind(&previous.file_hash_algorithm)
+            .execute(&mut *tx)
+            .await?;
+        }
+        for file in &updated_media.files {
+            sqlx::query(
+                "INSERT INTO MEDIA_FILE (BOOK_ID, FILE_NAME, MEDIA_TYPE, SUB_TYPE, FILE_SIZE) VALUES (?, ?, ?, ?, ?)",
+            )
+            .bind(&original_book.id)
+            .bind(&file.file_name)
+            .bind(&file.media_type)
+            .bind(&file.sub_type)
+            .bind(file.file_size)
+            .execute(&mut *tx)
+            .await?;
+        }
+        for target in removed {
+            sqlx::query(
+                r#"UPDATE PAGE_HASH SET DELETE_COUNT = DELETE_COUNT + 1,
+                                      LAST_MODIFIED_DATE = CURRENT_TIMESTAMP
+                     WHERE HASH = ?"#,
+            )
+            .bind(&target.file_hash)
+            .execute(&mut *tx)
+            .await?;
         }
         tx.commit().await?;
         Ok(true)
@@ -1168,6 +1383,121 @@ mod tests {
                 .await
                 .unwrap()
                 .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn zip_page_removal_transaction_preserves_hash_algorithms_and_progress_and_rejects_stale_snapshots() {
+        let storage = Storage::connect_memory().await.unwrap();
+        let temporary = tempfile::tempdir().unwrap();
+        let book = scanned_book(&storage, temporary.path()).await;
+        let mut media = ready_media(&book.id);
+        media.pages[0].file_hash = "remove-hash".into();
+        media.pages[1].file_hash = "keep-hash".into();
+        storage.replace_media_analysis(&media).await.unwrap();
+        sqlx::query("UPDATE MEDIA_PAGE SET FILE_HASH_ALGORITHM='RAW_XXH3_128_V1' WHERE BOOK_ID=?")
+            .bind(&book.id)
+            .execute(&storage.pool)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE BOOK SET FILE_HASH='book-hash',FILE_HASH_KOREADER='koreader-hash' WHERE ID=?")
+            .bind(&book.id)
+            .execute(&storage.pool)
+            .await
+            .unwrap();
+        storage
+            .create_or_update_page_hash("remove-hash", Some(100), komga_core::PageHashAction::DeleteManual, None)
+            .await
+            .unwrap();
+        let user = User::new("reader@example.org".into(), "hash".into());
+        storage.create_user(&user).await.unwrap();
+        sqlx::query("INSERT INTO READ_PROGRESS (BOOK_ID,USER_ID,PAGE,COMPLETED) VALUES (?,?,2,0)")
+            .bind(&book.id)
+            .bind(&user.id)
+            .execute(&storage.pool)
+            .await
+            .unwrap();
+
+        let original_book = storage.find_book_by_id(&book.id).await.unwrap().unwrap();
+        let original_media = storage.find_media_by_book_id(&book.id).await.unwrap().unwrap();
+        let mut updated_book = original_book.clone();
+        updated_book.file_size += 10;
+        updated_book.file_last_modified += chrono::Duration::seconds(1);
+        let mut updated_media = original_media.clone();
+        updated_media.pages.remove(0);
+        updated_media.page_count = 1;
+        let removed = HashedPageTarget {
+            file_name: original_media.pages[0].file_name.clone(),
+            media_type: original_media.pages[0].media_type.clone(),
+            file_hash: original_media.pages[0].file_hash.clone(),
+            file_size: original_media.pages[0].file_size.unwrap(),
+            page_number: 1,
+        };
+        assert!(
+            storage
+                .apply_zip_page_removal_if_current(
+                    &original_book,
+                    &original_media,
+                    &updated_book,
+                    &updated_media,
+                    std::slice::from_ref(&removed),
+                )
+                .await
+                .unwrap()
+        );
+
+        let saved_book = storage.find_book_by_id(&book.id).await.unwrap().unwrap();
+        assert_eq!(saved_book.file_size, updated_book.file_size);
+        assert!(saved_book.file_hash.is_empty() && saved_book.file_hash_koreader.is_empty());
+        let saved_media = storage.find_media_by_book_id(&book.id).await.unwrap().unwrap();
+        assert_eq!(saved_media.pages.len(), 1);
+        assert_eq!(saved_media.pages[0].file_hash, "keep-hash");
+        assert_eq!(
+            sqlx::query_scalar::<_, String>("SELECT FILE_HASH_ALGORITHM FROM MEDIA_PAGE WHERE BOOK_ID=? AND NUMBER=0",)
+                .bind(&book.id)
+                .fetch_one(&storage.pool)
+                .await
+                .unwrap(),
+            "RAW_XXH3_128_V1"
+        );
+        assert_eq!(
+            storage
+                .find_read_progress(&book.id, &user.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .page,
+            2
+        );
+        assert_eq!(
+            storage
+                .find_known_page_hash("remove-hash")
+                .await
+                .unwrap()
+                .unwrap()
+                .delete_count,
+            1
+        );
+        assert!(
+            !storage
+                .apply_zip_page_removal_if_current(
+                    &original_book,
+                    &original_media,
+                    &updated_book,
+                    &updated_media,
+                    &[removed],
+                )
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            storage
+                .find_known_page_hash("remove-hash")
+                .await
+                .unwrap()
+                .unwrap()
+                .delete_count,
+            1
         );
     }
 

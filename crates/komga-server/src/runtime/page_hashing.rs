@@ -106,7 +106,16 @@ pub(super) async fn process_hash_book_pages_task(state: &AppState, task: &TaskRe
         .list_page_hash_targets(&book.id, state.page_hashing.get(), RGB_PAGE_HASH_ALGORITHM)
         .await
     {
-        Ok(targets) if targets.is_empty() => return TaskOutcome::Completed,
+        Ok(targets) if targets.is_empty() => {
+            if let Err(error) = state
+                .enqueue_task(&TaskRecord::find_duplicate_pages_to_delete(&book.library_id, 0))
+                .await
+            {
+                tracing::error!(%error, book_id = %book.id, "could not enqueue duplicate-page discovery");
+                return TaskOutcome::Retry;
+            }
+            return TaskOutcome::Completed;
+        }
         Ok(targets) => targets,
         Err(error) => {
             tracing::error!(%error, book_id = %book.id, "could not load page hash targets");
@@ -197,7 +206,16 @@ pub(super) async fn process_hash_book_pages_task(state: &AppState, task: &TaskRe
     {
         Ok(true) => {
             tracing::info!(book_id = %book.id, pages = updates.len(), "book page hashes updated");
-            TaskOutcome::Completed
+            match state
+                .enqueue_task(&TaskRecord::find_duplicate_pages_to_delete(&book.library_id, 0))
+                .await
+            {
+                Ok(()) => TaskOutcome::Completed,
+                Err(error) => {
+                    tracing::error!(%error, book_id = %book.id, "could not enqueue duplicate-page discovery");
+                    TaskOutcome::Retry
+                }
+            }
         }
         Ok(false) => TaskOutcome::Retry,
         Err(error) => {
@@ -306,7 +324,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn scan_always_enqueues_deduplicated_page_hash_discovery() {
+    async fn scan_always_enqueues_deduplicated_page_hash_discoveries() {
         let storage = Storage::connect_memory().await.unwrap();
         let tasks = TaskStorage::connect_memory().await.unwrap();
         let temporary = tempfile::tempdir().unwrap();
@@ -326,11 +344,17 @@ mod tests {
             TaskOutcome::Completed
         );
         let queued = tasks.list().await.unwrap();
-        assert_eq!(queued.len(), 1);
-        assert_eq!(
-            queued[0].id,
-            format!("FIND_BOOKS_WITH_MISSING_PAGE_HASH_{}", library.id)
+        assert_eq!(queued.len(), 2);
+        assert!(queued.iter().all(|task| task.priority == 0));
+        assert!(
+            queued
+                .iter()
+                .any(|task| task.id == format!("FIND_BOOKS_WITH_MISSING_PAGE_HASH_{}", library.id))
         );
-        assert_eq!(queued[0].priority, 0);
+        assert!(
+            queued
+                .iter()
+                .any(|task| task.id == format!("FIND_DUPLICATE_PAGES_TO_DELETE_{}", library.id))
+        );
     }
 }

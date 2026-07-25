@@ -908,6 +908,44 @@ mod tests {
                 "uniqueId": "HASH_BOOK_PAGES_book",
             })
         );
+
+        let discovery = TaskRecord::find_duplicate_pages_to_delete("library", 0);
+        assert_eq!(discovery.id, "FIND_DUPLICATE_PAGES_TO_DELETE_library");
+        assert_eq!(
+            discovery.class,
+            "org.gotson.komga.application.tasks.Task$FindDuplicatePagesToDelete"
+        );
+        assert_eq!(discovery.simple_type, "FindDuplicatePagesToDelete");
+        let target = komga_core::HashedPageTarget {
+            file_name: "1.png".into(),
+            media_type: "image/png".into(),
+            file_hash: "hash".into(),
+            file_size: 42,
+            page_number: 1,
+        };
+        let removal = TaskRecord::remove_hashed_pages("book", std::slice::from_ref(&target), 1);
+        assert_eq!(removal.id, "REMOVE_HASHED_PAGES_book");
+        assert_eq!(
+            removal.class,
+            "org.gotson.komga.application.tasks.Task$RemoveHashedPages"
+        );
+        assert_eq!(removal.simple_type, "RemoveHashedPages");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&removal.payload).unwrap(),
+            serde_json::json!({
+                "bookId": "book",
+                "pages": [{
+                    "fileName": "1.png",
+                    "mediaType": "image/png",
+                    "fileHash": "hash",
+                    "fileSize": 42,
+                    "pageNumber": 1,
+                }],
+                "priority": 1,
+                "groupId": null,
+                "uniqueId": "REMOVE_HASHED_PAGES_book",
+            })
+        );
     }
 
     #[tokio::test]
