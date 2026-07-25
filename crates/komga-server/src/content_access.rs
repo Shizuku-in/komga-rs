@@ -55,9 +55,20 @@ fn ensure_series_visible(user: &User, series: &SeriesDto) -> Result<(), ApiError
     Ok(())
 }
 
-pub(crate) fn restrict_book_url(book: &mut BookDto) {
+/// Redacts the persisted book path before exposing it to a non-admin user.
+pub(crate) fn redact_book_source_for_user(book: &mut BookDto, user: &User) {
+    if user.is_admin() {
+        return;
+    }
     book.url = FilePath::new(&book.url)
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_default();
+}
+
+/// Redacts the persisted series path before exposing it to a non-admin user.
+pub(crate) fn redact_series_source_for_user(series: &mut SeriesDto, user: &User) {
+    if !user.is_admin() {
+        series.url.clear();
+    }
 }

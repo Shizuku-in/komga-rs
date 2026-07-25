@@ -3,7 +3,9 @@
 use crate::{
     AppState,
     auth::AuthContext,
-    content_access::{load_visible_book, load_visible_series, restrict_book_url},
+    content_access::{
+        load_visible_book, load_visible_series, redact_book_source_for_user, redact_series_source_for_user,
+    },
     dto::{CollectionPatchDto, ReadListPatchDto, preserving},
     error::ApiError,
     pagination::{SpringPage, parse_page_request},
@@ -126,9 +128,10 @@ pub(crate) async fn collection_series(
         .storage
         .collection_series(&id, &auth.user, parse_page_request(raw.as_deref())?)
         .await?;
-    if !auth.user.is_admin() {
-        result.content.iter_mut().for_each(|s| s.url.clear())
-    }
+    result
+        .content
+        .iter_mut()
+        .for_each(|series| redact_series_source_for_user(series, &auth.user));
     Ok(Json(SpringPage::from_content(result)))
 }
 pub(crate) async fn series_collections(
@@ -241,9 +244,10 @@ pub(crate) async fn read_list_books(
         .storage
         .read_list_books(&id, &auth.user, parse_page_request(raw.as_deref())?)
         .await?;
-    if !auth.user.is_admin() {
-        result.content.iter_mut().for_each(restrict_book_url)
-    }
+    result
+        .content
+        .iter_mut()
+        .for_each(|book| redact_book_source_for_user(book, &auth.user));
     Ok(Json(SpringPage::from_content(result)))
 }
 pub(crate) async fn book_read_lists(
@@ -271,9 +275,7 @@ async fn sibling(
         .read_list_sibling(list, book, &auth.user, next)
         .await?
         .ok_or_else(|| ApiError::not_found("Book not found"))?;
-    if !auth.user.is_admin() {
-        restrict_book_url(&mut result)
-    }
+    redact_book_source_for_user(&mut result, &auth.user);
     Ok(Json(result))
 }
 pub(crate) async fn previous(

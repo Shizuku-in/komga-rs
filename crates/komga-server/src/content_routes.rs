@@ -8,7 +8,9 @@ use komga_search::EntityKind;
 use crate::{
     AppState,
     auth::AuthContext,
-    content_access::{load_visible_book, load_visible_series, restrict_book_url},
+    content_access::{
+        load_visible_book, load_visible_series, redact_book_source_for_user, redact_series_source_for_user,
+    },
     error::ApiError,
     pagination::{SpringPage, parse_page_request},
     routes::ApiJson,
@@ -33,9 +35,10 @@ pub(crate) async fn list_series(
     } else {
         state.storage.query_series(&search, &page, &auth.user, None).await?
     };
-    if !auth.user.is_admin() {
-        result.content.iter_mut().for_each(|series| series.url.clear());
-    }
+    result
+        .content
+        .iter_mut()
+        .for_each(|series| redact_series_source_for_user(series, &auth.user));
     Ok(Json(SpringPage::from_content(result)))
 }
 
@@ -45,9 +48,7 @@ pub(crate) async fn get_series(
     Path(series_id): Path<String>,
 ) -> Result<Json<SeriesDto>, ApiError> {
     let mut series = load_visible_series(&state, &auth.user, &series_id).await?;
-    if !auth.user.is_admin() {
-        series.url.clear();
-    }
+    redact_series_source_for_user(&mut series, &auth.user);
     Ok(Json(series))
 }
 
@@ -69,9 +70,10 @@ pub(crate) async fn list_books(
     } else {
         state.storage.query_books(&search, &page, &auth.user, None).await?
     };
-    if !auth.user.is_admin() {
-        result.content.iter_mut().for_each(restrict_book_url);
-    }
+    result
+        .content
+        .iter_mut()
+        .for_each(|book| redact_book_source_for_user(book, &auth.user));
     Ok(Json(SpringPage::from_content(result)))
 }
 
@@ -81,9 +83,7 @@ pub(crate) async fn get_book(
     Path(book_id): Path<String>,
 ) -> Result<Json<BookDto>, ApiError> {
     let mut book = load_visible_book(&state, &auth.user, &book_id).await?;
-    if !auth.user.is_admin() {
-        restrict_book_url(&mut book);
-    }
+    redact_book_source_for_user(&mut book, &auth.user);
     Ok(Json(book))
 }
 
@@ -110,8 +110,6 @@ async fn get_sibling(state: &AppState, user: &User, book_id: &str, next: bool) -
         .find_book_sibling_dto(book_id, &user.id, next)
         .await?
         .ok_or_else(|| ApiError::not_found("Book not found"))?;
-    if !user.is_admin() {
-        restrict_book_url(&mut sibling);
-    }
+    redact_book_source_for_user(&mut sibling, user);
     Ok(sibling)
 }
