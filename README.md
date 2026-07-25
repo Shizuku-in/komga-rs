@@ -6,15 +6,15 @@ An incremental Rust port of the [Komga](https://github.com/gotson/komga) backend
 
 ## Port status
 
-The migration matrix currently tracks 13 functional areas: 2 are implemented or core-complete, 8 are partially implemented, and 3 are pending.
+The migration matrix currently tracks 13 functional areas: 3 are implemented or core-complete, 8 are partially implemented, and 2 are pending.
 
 | Status | Areas |
 | --- | --- |
-| Implemented / core-complete | Claim and users; collections and read lists |
+| Implemented / core-complete | Claim and users; collections and read lists; OPDS |
 | Partial | Process and configuration; SQLite; authentication; libraries and scanner; Series, Books, and progress; media; search; operations |
-| Pending | OPDS; device sync; Web UI packaging |
+| Pending | Device sync; Web UI packaging |
 
-Recent content work added modern and deprecated Series/Book queries, legacy regex search, duplicate-book discovery, book-file hashing, configurable ZIP edge-page hashing, PageHash administration, and safe duplicate-page removal from CBZ files. OPDS, device synchronization, and content-domain event parity remain later work.
+Recent content work added modern and deprecated Series/Book queries, legacy regex search, duplicate-book discovery, book-file hashing, configurable ZIP edge-page hashing, PageHash administration, safe duplicate-page removal from CBZ files, and authenticated OPDS 1.2 and OPDS 2 catalogs. Device synchronization and content-domain event parity remain later work.
 
 ## Run
 
@@ -102,19 +102,27 @@ Migration `0011_page_hashing` deliberately clears existing `PAGE_HASH` rules and
 - `GET /api/v1/client-settings/user/list`
 - `PATCH|DELETE /api/v1/client-settings/user`
 - `GET /api/v1/oauth2/providers`
+- `GET /opds/v1.2/{catalog|search|ondeck|keep-reading|series|books/latest|libraries|collections|readlists|publishers}` and their detail/resource routes
+- `GET /opds/v2/auth`
+- `GET /opds/v2/{catalog|libraries|search|collections/{id}|readlists/{id}|series/{id}}`
+- `GET /opds/v2/libraries[/{id}]/{keep-reading|on-deck|books/latest|series/latest|browse|collections|readlists}`
+- `GET /opds/v2/books/{id}/{manifest|manifest/{divina|pdf|epub}|thumbnail|pages/{number}|pages/{number}/raw|file|resource/{resource}|progression}`
+- `PUT /opds/v2/books/{id}/progression`
 - `GET /api/v1|v2/authors` and `GET /api/v1/authors/{names|roles}`
 - `GET /api/v1/{genres|sharing-labels|languages|publishers|age-ratings}`
 - `GET /api/v1/tags`, `/api/v1/tags/{book|series}`, and `/api/v1/series/release-dates`
 - `DELETE /api/v1/tasks`
 - `GET /sse/v1/events`
 
-Authentication is compatible with the current Komga contract: HTTP Basic, `KOMGA-SESSION`, `X-Auth-Token`, and SHA-512-backed `X-API-Key`. Existing Spring BCrypt `$2a$` password hashes are accepted.
+Authentication is compatible with the current Komga contract: HTTP Basic, `KOMGA-SESSION`, `X-Auth-Token`, and SHA-512-backed `X-API-Key`. Existing Spring BCrypt `$2a$` password hashes are accepted. OPDS 2 also exposes the public authentication document and returns its media type, Basic challenge, and discovery link on authentication failures.
 
 `ScanLibrary` tasks are executed in the background. They discover configured CBX/PDF/EPUB files and persist Kotlin-compatible Series, Book, Media, and initial metadata rows. CBZ, CBR, PDF, and EPUB contents are analyzed and receive generated book thumbnails; fixed-layout EPUB pages, publication resources, navigation, reading positions, and Divina/PDF/EPUB WebPub manifests are available through the REST API. Root-level `ComicInfo.xml`, EPUB OPF, and Mylar `series.json` metadata are imported incrementally after analysis and through the book, series, and library metadata refresh endpoints. Provider updates preserve locked fields, and ComicInfo collection/read-list relationships remain incremental. `EmptyTrash` permanently removes soft-deleted database content, honors automatic cleanup after scans, and never deletes source files. Library deletion cascades through database-owned content and sidecars while also preserving source files. Other unported task types remain queued and unmodified.
 
 Libraries with `hashPages` enabled enqueue Kotlin-compatible discovery and page-hashing tasks at startup, after scans, and when the setting is enabled. Only READY ZIP/CBZ media participates. The first and last configured number of pages are hashed; JPEG pages use a deterministic dimensions-plus-RGB24 representation, while other page types retain raw-byte XXH3-128 hashing. Administrators can classify hashes as `DELETE_AUTO`, `DELETE_MANUAL`, or `IGNORE`, inspect matching pages and previews, and queue all or individual matches for deletion. ZIP removal raw-copies surviving entries in archive order, validates the complete temporary archive and current source snapshot, and then performs a same-directory atomic replacement. It does not create a source backup, so back up real libraries before enabling deletion rules.
 
 The modern Series and Book list endpoints support Spring-style pagination, the complete structured condition trees, ranked multilingual `fullTextSearch`, alphabetical groups, fixed discovery feeds, and On Deck selection. Deprecated GET lists and the legacy alphabetical-groups route translate their query parameters into the same condition trees and search candidates; Series `search_regex` supports case-insensitive Rust regexes over `title` and `title_sort`. Referential filter values preserve Kotlin's scope precedence and data-source differences. Collection and read-list `search` uses the same in-process Tantivy index. Library sharing, age, sharing labels, member restrictions, and structured conditions remain enforced by SQLite before pagination. The Rust index uses `<config-dir>/search/v2`, remains independent of Kotlin's Lucene directory, and queues a priority-8 rebuild task at startup when the file index is empty or incompatible.
+
+OPDS 1.2 serves Atom navigation and acquisition feeds, OpenSearch discovery, PSE page streaming, thumbnails, and original files. OPDS 2 serves recommended and paged library feeds, browse facets, grouped search, publications, profile manifests, reading resources, and Readium progression. Both generations enforce the same library and content restrictions as REST, generate proxy-aware absolute links, and reuse the existing media and search implementations.
 
 ## Develop
 

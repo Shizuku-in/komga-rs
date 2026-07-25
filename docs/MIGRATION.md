@@ -13,7 +13,7 @@ The reference baseline is Komga commit `4ef86df`. Porting is organized as vertic
 | Collections/read lists | Core complete | CRUD, visible membership, reverse lookup, navigation, Mihon progress, ComicRack matching, streamed ZIP downloads, uploads, dynamic collage posters, and scanner-driven ComicInfo relationship import. |
 | Media | Partial | ZIP/CBZ, RAR4/RAR5/CBR (including solid archives), PDF, and EPUB analysis are implemented without external runtime commands. PDF supports rendered and raw pages; EPUB supports OPF/NAV/NCX discovery, resources, Readium positions, native KEPUB detection, fixed-layout pages, and package covers. Divina, PDF, and EPUB WebPub manifests are available. Kotlin-compatible XXH3-128 book file hashing, configurable ZIP edge-page hashing, PageHash administration, automatic/manual duplicate-page discovery, and validated atomic ZIP page removal are implemented. KOReader hashes, uncommon image codecs, and page removal from RAR/PDF/EPUB remain pending. |
 | Search | Partial | Tantivy schema v2 covers ranked Book/Series `fullTextSearch` and Collection/ReadList `search`, with SQLite visibility filtering, explicit post-commit synchronization, and streamed asynchronous rebuilds. Kotlin Lucene index interoperability, the full Classic QueryParser grammar, and domain-event integration remain pending. |
-| OPDS | Pending | OPDS 1 XML and OPDS 2 JSON catalogs. |
+| OPDS | Implemented | OPDS 1.2 Atom/OpenSearch catalogs with PSE acquisition links and OPDS 2 catalogs, authentication, publications, manifests, resources, browse facets, grouped search, and progression aliases. |
 | Device sync | Pending | Kobo, KOReader, sync points, and KEPUB conversion. |
 | Operations | Partial | Persistent task storage, atomic worker ownership, startup recovery, scan/media/file-hash/page-hash/duplicate-page-removal/thumbnail/metadata-refresh/metadata-aggregation workers, library scheduling, task-status SSE, task clearing, client settings, and selected server settings are implemented. Metrics, announcements, full server settings, fonts, and release checks are pending. |
 | Web UI packaging | Pending | Static asset build/embedding and SPA fallback. |
@@ -33,12 +33,13 @@ The reference baseline is Komga commit `4ef86df`. Porting is organized as vertic
 - Unknown Kotlin tasks remain queued and are not claimed by Rust workers.
 - READY ZIP books can hash their configured first and last pages through Kotlin-compatible `FindBooksWithMissingPageHash` and `HashBookPages` tasks. JPEG hashes use Rust's versioned RGB24 representation and intentionally differ from Java ImageIO hashes; migration `0011` clears existing PageHash rules, thumbnails, and JPEG page hashes before regeneration.
 - PageHash administration and the Kotlin-compatible `FindDuplicatePagesToDelete` and `RemoveHashedPages` tasks are implemented for local READY ZIP/CBZ books. Removal rejects stale snapshots, duplicate entry names, and deleting every page; raw-copies all survivors and validates the temporary ZIP before atomic replacement. No source backup or `DuplicatePageDeleted` historical event is created, and content-domain SSE is not emitted.
+- OPDS 1.2 and OPDS 2 use proxy-aware absolute links and enforce library sharing, age, and sharing-label visibility before returning catalogs or reading resources. OPDS 2 authentication exposes only the Basic flow until OAuth authentication is implemented.
 - The OAuth provider endpoint intentionally returns an empty list until OAuth authentication is implemented.
 - `SERVER_SETTINGS` is read only for remember-me duration and task-pool size; the server-settings API is not implemented.
 
 ## Next slice
 
-The next content work can address OPDS or content historical-event/domain-SSE parity. Device synchronization and page removal for non-ZIP formats remain later work.
+The next content work can address historical-event and content-domain SSE parity. Device synchronization and page removal for non-ZIP formats remain later work.
 
 Book and series metadata can be patched through the Kotlin-compatible administrator routes. The HTTP boundary preserves
 each field's distinct omitted-versus-null behavior, while `komga-core` owns normalization and validation. Bulk book
