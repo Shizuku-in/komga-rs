@@ -162,5 +162,12 @@ pub(super) async fn process_scan_task(state: &AppState, task: &TaskRecord) -> Ta
         tracing::error!(%error, library_id = %payload.library_id, "could not enqueue missing book hashes");
         return TaskOutcome::Retry;
     }
+    if let Err(error) = state
+        .enqueue_task(&TaskRecord::find_books_with_missing_page_hash(&payload.library_id, 0))
+        .await
+    {
+        tracing::error!(%error, library_id = %payload.library_id, "could not enqueue page hash discovery");
+        return TaskOutcome::Retry;
+    }
     TaskOutcome::Completed
 }

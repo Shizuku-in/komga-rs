@@ -1,6 +1,6 @@
 //! Resolution of process settings from CLI flags and environment variables.
 
-use std::{net::IpAddr, path::PathBuf};
+use std::{net::IpAddr, num::NonZeroUsize, path::PathBuf};
 
 use clap::Parser;
 
@@ -27,6 +27,10 @@ pub struct Config {
     /// Override the Tantivy search index directory.
     #[arg(long, env = "KOMGA_SEARCH_DIRECTORY")]
     pub search_directory: Option<PathBuf>,
+
+    /// Number of pages hashed from both the start and end of ZIP books.
+    #[arg(long, env = "KOMGA_PAGE_HASHING", default_value = "3")]
+    pub page_hashing: NonZeroUsize,
 
     /// Address on which the HTTP server listens.
     #[arg(long, env = "KOMGA_HOST", default_value = "0.0.0.0")]
@@ -70,5 +74,16 @@ impl Config {
         self.search_directory
             .clone()
             .unwrap_or_else(|| self.config_dir().join("search"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn page_hashing_defaults_to_three_and_rejects_zero() {
+        assert_eq!(Config::try_parse_from(["komga-server"]).unwrap().page_hashing.get(), 3);
+        assert!(Config::try_parse_from(["komga-server", "--page-hashing", "0"]).is_err());
     }
 }

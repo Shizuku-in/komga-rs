@@ -143,6 +143,46 @@ impl TaskRecord {
         }
     }
 
+    /// Builds a Kotlin-compatible missing-page-hash discovery task.
+    pub fn find_books_with_missing_page_hash(library_id: &str, priority: i32) -> Self {
+        let id = format!("FIND_BOOKS_WITH_MISSING_PAGE_HASH_{library_id}");
+        Self {
+            id: id.clone(),
+            priority,
+            group_id: None,
+            class: "org.gotson.komga.application.tasks.Task$FindBooksWithMissingPageHash".into(),
+            simple_type: "FindBooksWithMissingPageHash".into(),
+            payload: serde_json::json!({
+                "libraryId": library_id,
+                "priority": priority,
+                "groupId": null,
+                "uniqueId": id,
+            })
+            .to_string(),
+            owner: None,
+        }
+    }
+
+    /// Builds a Kotlin-compatible edge-page hashing task.
+    pub fn hash_book_pages(book_id: &str, priority: i32) -> Self {
+        let id = format!("HASH_BOOK_PAGES_{book_id}");
+        Self {
+            id: id.clone(),
+            priority,
+            group_id: None,
+            class: "org.gotson.komga.application.tasks.Task$HashBookPages".into(),
+            simple_type: "HashBookPages".into(),
+            payload: serde_json::json!({
+                "bookId": book_id,
+                "priority": priority,
+                "groupId": null,
+                "uniqueId": id,
+            })
+            .to_string(),
+            owner: None,
+        }
+    }
+
     /// Builds a Kotlin-compatible book metadata refresh task.
     pub fn refresh_book_metadata(book_id: &str, series_id: &str, priority: i32) -> Self {
         Self::refresh_book_metadata_with_capabilities(

@@ -27,6 +27,7 @@ pub use content::ScanApplyStats;
 pub use content_queries::{LegacySeriesRegex, LegacySeriesRegexField, ReadListFile};
 pub use library::DeleteLibraryResult;
 pub use lifecycle::{EmptyTrashResult, NumberingRefreshTarget};
+pub use media::{PageHashTarget, PageHashUpdate};
 pub use referential::{ReferentialScope, author_page_request};
 pub use settings::ClientSetting;
 pub use tasks::{RebuildIndexEntity, TaskRecord, TaskStorage};
@@ -857,7 +858,7 @@ mod tests {
     }
 
     #[test]
-    fn hash_book_task_matches_kotlin_payload() {
+    fn hashing_tasks_match_kotlin_payloads() {
         let task = TaskRecord::hash_book("book", 0);
         assert_eq!(task.id, "HASH_BOOK_book");
         assert_eq!(task.priority, 0);
@@ -871,6 +872,39 @@ mod tests {
                 "priority": 0,
                 "groupId": null,
                 "uniqueId": "HASH_BOOK_book",
+            })
+        );
+
+        let discovery = TaskRecord::find_books_with_missing_page_hash("library", 0);
+        assert_eq!(discovery.id, "FIND_BOOKS_WITH_MISSING_PAGE_HASH_library");
+        assert_eq!(discovery.group_id, None);
+        assert_eq!(
+            discovery.class,
+            "org.gotson.komga.application.tasks.Task$FindBooksWithMissingPageHash"
+        );
+        assert_eq!(discovery.simple_type, "FindBooksWithMissingPageHash");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&discovery.payload).unwrap(),
+            serde_json::json!({
+                "libraryId": "library",
+                "priority": 0,
+                "groupId": null,
+                "uniqueId": "FIND_BOOKS_WITH_MISSING_PAGE_HASH_library",
+            })
+        );
+
+        let pages = TaskRecord::hash_book_pages("book", 1);
+        assert_eq!(pages.id, "HASH_BOOK_PAGES_book");
+        assert_eq!(pages.group_id, None);
+        assert_eq!(pages.class, "org.gotson.komga.application.tasks.Task$HashBookPages");
+        assert_eq!(pages.simple_type, "HashBookPages");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&pages.payload).unwrap(),
+            serde_json::json!({
+                "bookId": "book",
+                "priority": 1,
+                "groupId": null,
+                "uniqueId": "HASH_BOOK_PAGES_book",
             })
         );
     }

@@ -11,11 +11,11 @@ The reference baseline is Komga commit `4ef86df`. Porting is organized as vertic
 | Libraries and scanner | Partial | Library CRUD with database cascade deletion, filesystem browsing, scan workers, startup/periodic scheduling, Series/Book discovery, change reconciliation, soft deletion, EmptyTrash/automatic cleanup, automatic CBZ/CBR/PDF/EPUB analysis, ComicInfo/EPUB metadata import, and Mylar `series.json` sidecars are implemented. Artwork sidecars and source-file deletion tasks are pending. |
 | Series/books/read progress | Partial | Skeleton persistence, natural ordering, modern and deprecated list/detail APIs, complete structured filtering, legacy Series regex search, modern and legacy alphabetical groups, latest/new/updated and On Deck feeds, Referential filter lookups, Spring pagination, sibling navigation, access restrictions, progress hydration, per-book and series-level writes, REST Readium progression, Mihon/Tachiyomi series synchronization, administrator book/series metadata mutations, duplicate Book discovery, book/series thumbnail management and regeneration, CBZ/CBR/PDF and fixed-layout EPUB pages, EPUB resources/positions, WebPub manifests, and streaming original-file downloads are implemented. Duplicate Page discovery remains pending. |
 | Collections/read lists | Core complete | CRUD, visible membership, reverse lookup, navigation, Mihon progress, ComicRack matching, streamed ZIP downloads, uploads, dynamic collage posters, and scanner-driven ComicInfo relationship import. |
-| Media | Partial | ZIP/CBZ, RAR4/RAR5/CBR (including solid archives), PDF, and EPUB analysis are implemented without external runtime commands. PDF supports rendered and raw pages; EPUB supports OPF/NAV/NCX discovery, resources, Readium positions, native KEPUB detection, fixed-layout pages, and package covers. Divina, PDF, and EPUB WebPub manifests are available. Kotlin-compatible XXH3-128 book file hashing is implemented; KOReader hashes, page hashes, uncommon image codecs, and duplicate pages are pending. |
+| Media | Partial | ZIP/CBZ, RAR4/RAR5/CBR (including solid archives), PDF, and EPUB analysis are implemented without external runtime commands. PDF supports rendered and raw pages; EPUB supports OPF/NAV/NCX discovery, resources, Readium positions, native KEPUB detection, fixed-layout pages, and package covers. Divina, PDF, and EPUB WebPub manifests are available. Kotlin-compatible XXH3-128 book file hashing and configurable ZIP edge-page hashing are implemented; KOReader hashes, uncommon image codecs, and duplicate-page management are pending. |
 | Search | Partial | Tantivy schema v2 covers ranked Book/Series `fullTextSearch` and Collection/ReadList `search`, with SQLite visibility filtering, explicit post-commit synchronization, and streamed asynchronous rebuilds. Kotlin Lucene index interoperability, the full Classic QueryParser grammar, and domain-event integration remain pending. |
 | OPDS | Pending | OPDS 1 XML and OPDS 2 JSON catalogs. |
 | Device sync | Pending | Kobo, KOReader, sync points, and KEPUB conversion. |
-| Operations | Partial | Persistent task storage, atomic worker ownership, startup recovery, scan/media/thumbnail/metadata-refresh/metadata-aggregation workers, library scheduling, task-status SSE, task clearing, client settings, and selected server settings are implemented. Metrics, announcements, full server settings, fonts, and release checks are pending. |
+| Operations | Partial | Persistent task storage, atomic worker ownership, startup recovery, scan/media/file-hash/page-hash/thumbnail/metadata-refresh/metadata-aggregation workers, library scheduling, task-status SSE, task clearing, client settings, and selected server settings are implemented. Metrics, announcements, full server settings, fonts, and release checks are pending. |
 | Web UI packaging | Pending | Static asset build/embedding and SPA fallback. |
 
 ## Compatibility rules
@@ -24,19 +24,20 @@ The reference baseline is Komga commit `4ef86df`. Porting is organized as vertic
 2. Read the current Kotlin schema directly. Rust migrations must be additive and safe when Flyway tables already exist.
 3. Keep domain policy independent from Axum and SQLx so Kotlin unit cases can be ported without HTTP or database setup.
 4. Add HTTP contract tests for each controller before marking a row implemented.
-5. Never require an irreversible database conversion until full feature parity is available.
+5. Do not perform irreversible database conversions without an explicitly accepted and documented compatibility reset; `0011_page_hashing` is the current exception and requires a backup.
 
 ## Current limitations
 
-- Scan workers analyze ZIP/CBZ, RAR/CBR, PDF, and EPUB files, hash book files, import EPUB metadata, and generate book covers. Encrypted and multi-volume RAR archives, password-protected PDFs, DRM-protected or obfuscated EPUB resources, page hashes, duplicate Page detection, and KEPUB conversion remain unsupported.
+- Scan workers analyze ZIP/CBZ, RAR/CBR, PDF, and EPUB files, hash book files and ZIP edge pages, import EPUB metadata, and generate book covers. Encrypted and multi-volume RAR archives, password-protected PDFs, DRM-protected or obfuscated EPUB resources, RAR/PDF/EPUB page hashes, duplicate Page detection, and KEPUB conversion remain unsupported.
 - Series/Book queries support ranked multilingual `fullTextSearch`, the complete modern condition trees, deprecated GET parameter translation, legacy Series `search_regex`, discovery feeds, modern and legacy alphabetical groups, On Deck, and Referential filter values. Unsupported modern request bodies and sort fields return `400 Bad Request`; deprecated queries retain Kotlin's lenient unknown-parameter and unknown-sort behavior. Legacy regexes use Rust regex syntax, which intentionally does not support Java look-around or backreferences.
 - Unknown Kotlin tasks remain queued and are not claimed by Rust workers.
+- READY ZIP books can hash their configured first and last pages through Kotlin-compatible `FindBooksWithMissingPageHash` and `HashBookPages` tasks. JPEG hashes use Rust's versioned RGB24 representation and intentionally differ from Java ImageIO hashes; migration `0011` clears existing PageHash rules, thumbnails, and JPEG page hashes before regeneration.
 - The OAuth provider endpoint intentionally returns an empty list until OAuth authentication is implemented.
 - `SERVER_SETTINGS` is read only for remember-me duration and task-pool size; the server-settings API is not implemented.
 
 ## Next slice
 
-The next content work can focus on explicitly deferred compatibility surfaces such as Page duplicate discovery and OPDS. Domain-event/SSE integration remains later work.
+The next content work can build PageHash administration, duplicate-page discovery, and safe page removal on the page-hashing foundation. OPDS and domain-event/SSE integration remain later work.
 
 Book and series metadata can be patched through the Kotlin-compatible administrator routes. The HTTP boundary preserves
 each field's distinct omitted-versus-null behavior, while `komga-core` owns normalization and validation. Bulk book

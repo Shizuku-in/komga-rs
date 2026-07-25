@@ -207,6 +207,40 @@ async fn enabling_file_hashing_enqueues_missing_books_without_rescanning() {
 }
 
 #[tokio::test]
+async fn enabling_page_hashing_enqueues_kotlin_discovery_without_rescanning() {
+    let storage = Storage::connect_memory().await.unwrap();
+    let tasks = TaskStorage::connect_memory().await.unwrap();
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path().join("library");
+    fs::create_dir_all(&root).unwrap();
+    let mut library = Library::new("Library".into(), Url::from_directory_path(&root).unwrap());
+    library.hash_pages = false;
+    storage.create_library(&library).await.unwrap();
+    let app = build_app(AppState::new(storage, tasks.clone()).await.unwrap());
+    claim(&app).await;
+
+    let response = app
+        .oneshot(
+            Request::patch(format!("/api/v1/libraries/{}", library.id))
+                .header(header::AUTHORIZATION, basic("admin@example.org", "password"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(r#"{"hashPages":true}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    let queued = tasks.list().await.unwrap();
+    assert_eq!(queued.len(), 1);
+    assert_eq!(
+        queued[0].id,
+        format!("FIND_BOOKS_WITH_MISSING_PAGE_HASH_{}", library.id)
+    );
+    assert_eq!(queued[0].priority, 0);
+}
+
+#[tokio::test]
 async fn content_queries_page_filter_restrict_and_navigate_books() {
     let storage = Storage::connect_memory().await.unwrap();
     let temporary = tempfile::tempdir().unwrap();

@@ -11,6 +11,64 @@ fn fixture(name: &str) -> PathBuf {
 }
 
 #[tokio::test]
+async fn page_hash_migration_resets_kotlin_jpeg_hashes_and_rules() {
+    let temporary = tempfile::tempdir().unwrap();
+    let main_database = temporary.path().join("database.sqlite");
+    std::fs::copy(fixture("database.sqlite"), &main_database).unwrap();
+    let url = format!("sqlite://{}", main_database.display());
+    let pool = sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(
+            sqlx::sqlite::SqliteConnectOptions::new()
+                .filename(&main_database)
+                .foreign_keys(false),
+        )
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO PAGE_HASH (HASH,SIZE,ACTION) VALUES ('legacy',10,'DELETE')")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO PAGE_HASH_THUMBNAIL (HASH,THUMBNAIL) VALUES ('legacy',X'01')")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO MEDIA_PAGE (BOOK_ID,NUMBER,FILE_NAME,MEDIA_TYPE,FILE_HASH) VALUES ('orphan',0,'page.jpg','image/jpeg','legacy')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    pool.close().await;
+
+    let _storage = Storage::connect_path(&main_database).await.unwrap();
+    let pool = sqlx::SqlitePool::connect(&url).await.unwrap();
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM PAGE_HASH")
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM PAGE_HASH_THUMBNAIL")
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        sqlx::query_as::<_, (String, Option<String>)>(
+            "SELECT FILE_HASH,FILE_HASH_ALGORITHM FROM MEDIA_PAGE WHERE BOOK_ID='orphan'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        (String::new(), None)
+    );
+}
+
+#[tokio::test]
 async fn opens_kotlin_flyway_databases_and_maps_current_rows() {
     let temporary = tempfile::tempdir().unwrap();
     let main_database = temporary.path().join("database.sqlite");

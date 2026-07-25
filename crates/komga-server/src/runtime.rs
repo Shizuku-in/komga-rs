@@ -23,6 +23,7 @@ mod hashing;
 mod lifecycle;
 mod maintenance;
 mod metadata;
+mod page_hashing;
 mod scan;
 mod scheduler;
 mod thumbnail;
@@ -32,6 +33,7 @@ use hashing::process_hash_book_task;
 use lifecycle::{perform_empty_trash, process_empty_trash_task};
 use maintenance::{process_aggregate_series_metadata_task, process_find_thumbnails_task};
 use metadata::{process_refresh_book_metadata_task, process_refresh_series_metadata_task};
+use page_hashing::{process_find_missing_page_hashes_task, process_hash_book_pages_task};
 use scan::process_scan_task;
 use scheduler::scheduler_loop;
 use thumbnail::process_generate_thumbnail_task;
@@ -185,11 +187,13 @@ pub(super) enum TaskOutcome {
     Retry,
 }
 
-const SUPPORTED_TASK_TYPES: [&str; 11] = [
+const SUPPORTED_TASK_TYPES: [&str; 13] = [
     "ScanLibrary",
     "EmptyTrash",
     "AnalyzeBook",
     "HashBook",
+    "FindBooksWithMissingPageHash",
+    "HashBookPages",
     "RefreshBookMetadata",
     "RefreshSeriesMetadata",
     "GenerateBookThumbnail",
@@ -247,6 +251,8 @@ async fn process_task(state: &AppState, task: &TaskRecord) -> TaskOutcome {
         "EmptyTrash" => process_empty_trash_task(state, task).await,
         "AnalyzeBook" => process_analyze_book_task(state, task).await,
         "HashBook" => process_hash_book_task(state, task).await,
+        "FindBooksWithMissingPageHash" => process_find_missing_page_hashes_task(state, task).await,
+        "HashBookPages" => process_hash_book_pages_task(state, task).await,
         "RefreshBookMetadata" => process_refresh_book_metadata_task(state, task).await,
         "RefreshSeriesMetadata" => process_refresh_series_metadata_task(state, task).await,
         "GenerateBookThumbnail" => process_generate_thumbnail_task(state, task).await,

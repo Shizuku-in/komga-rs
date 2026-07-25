@@ -24,6 +24,13 @@ pub(super) async fn scheduler_loop(state: AppState) {
                 {
                     tracing::error!(%error, library_id = %library.id, "could not enqueue startup scan");
                 }
+                if library.hash_pages
+                    && let Err(error) = state
+                        .enqueue_task(&TaskRecord::find_books_with_missing_page_hash(&library.id, 0))
+                        .await
+                {
+                    tracing::error!(%error, library_id = %library.id, "could not enqueue startup page hash discovery");
+                }
             }
             reconcile_schedules(&mut schedules, &libraries);
         }
@@ -107,6 +114,11 @@ fn scan_interval_duration(interval: ScanInterval) -> Duration {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
+    use komga_storage::{Storage, TaskStorage};
+    use url::Url;
+
     use super::*;
 
     #[test]
@@ -124,6 +136,36 @@ mod tests {
         assert_eq!(
             scan_interval_duration(ScanInterval::Weekly),
             Duration::from_secs(604800)
+        );
+    }
+
+    #[tokio::test]
+    async fn startup_enqueues_page_hash_discovery_for_enabled_libraries() {
+        let storage = Storage::connect_memory().await.unwrap();
+        let tasks = TaskStorage::connect_memory().await.unwrap();
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("library");
+        fs::create_dir_all(&root).unwrap();
+        let mut library = komga_core::Library::new("Library".into(), Url::from_directory_path(&root).unwrap());
+        library.hash_pages = true;
+        library.scan_interval = ScanInterval::Disabled;
+        storage.create_library(&library).await.unwrap();
+        let state = AppState::new(storage, tasks.clone()).await.unwrap();
+        let scheduler = tokio::spawn(scheduler_loop(state.clone()));
+
+        for _ in 0..20 {
+            if !tasks.list().await.unwrap().is_empty() {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        state.shutdown.cancel();
+        scheduler.await.unwrap();
+        let queued = tasks.list().await.unwrap();
+        assert_eq!(queued.len(), 1);
+        assert_eq!(
+            queued[0].id,
+            format!("FIND_BOOKS_WITH_MISSING_PAGE_HASH_{}", library.id)
         );
     }
 }

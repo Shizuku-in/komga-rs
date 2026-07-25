@@ -33,6 +33,32 @@ struct PageRow {
     file_size: Option<i64>,
 }
 
+/// One persisted edge page that requires a new or upgraded hash.
+#[derive(Debug, Clone, PartialEq, Eq, FromRow)]
+pub struct PageHashTarget {
+    /// Zero-based page number stored by Komga.
+    pub number: i32,
+    /// Exact entry name used to reject stale writes.
+    pub file_name: String,
+    /// Detected page media type.
+    pub media_type: String,
+}
+
+/// One computed page hash ready for conditional persistence.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PageHashUpdate {
+    /// Zero-based page number stored by Komga.
+    pub number: i32,
+    /// Exact entry name from the analyzed-media snapshot.
+    pub file_name: String,
+    /// Detected page media type from the analyzed-media snapshot.
+    pub media_type: String,
+    /// Seeded XXH3-128 digest.
+    pub file_hash: String,
+    /// Stable identifier for the bytes supplied to XXH3-128.
+    pub algorithm: String,
+}
+
 #[derive(Debug, FromRow)]
 struct FileRow {
     file_name: String,
@@ -139,6 +165,143 @@ impl Storage {
         .bind(library_id)
         .fetch_all(&self.pool)
         .await?)
+    }
+
+    /// Lists active ready ZIP books whose configured edge pages require hashes.
+    ///
+    /// Existing non-JPEG hashes are compatible with Kotlin and remain valid.
+    /// JPEG hashes are valid only when their algorithm marker matches
+    /// `jpeg_algorithm`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a database error when candidates cannot be queried.
+    pub async fn list_books_with_incomplete_page_hashes(
+        &self,
+        library_id: &str,
+        edge_size: usize,
+        jpeg_algorithm: &str,
+    ) -> Result<Vec<String>> {
+        let edge_size = i64::try_from(edge_size).unwrap_or(i64::MAX);
+        Ok(sqlx::query_scalar(
+            r#"SELECT DISTINCT B.ID
+                 FROM BOOK B
+                 JOIN MEDIA M ON M.BOOK_ID = B.ID
+                 JOIN MEDIA_PAGE P ON P.BOOK_ID = B.ID
+                WHERE B.LIBRARY_ID = ? AND B.DELETED_DATE IS NULL
+                  AND M.STATUS = 'READY' AND M.MEDIA_TYPE = 'application/zip'
+                  AND (P.NUMBER < ? OR P.NUMBER >= MAX(M.PAGE_COUNT - ?, 0))
+                  AND (P.FILE_HASH = '' OR
+                       (P.MEDIA_TYPE = 'image/jpeg' AND
+                        COALESCE(P.FILE_HASH_ALGORITHM, '') <> ?))
+                ORDER BY B.ID"#,
+        )
+        .bind(library_id)
+        .bind(edge_size)
+        .bind(edge_size)
+        .bind(jpeg_algorithm)
+        .fetch_all(&self.pool)
+        .await?)
+    }
+
+    /// Lists edge pages that currently need hashing for one ready ZIP book.
+    ///
+    /// # Errors
+    ///
+    /// Returns a database error when targets cannot be queried.
+    pub async fn list_page_hash_targets(
+        &self,
+        book_id: &str,
+        edge_size: usize,
+        jpeg_algorithm: &str,
+    ) -> Result<Vec<PageHashTarget>> {
+        let edge_size = i64::try_from(edge_size).unwrap_or(i64::MAX);
+        Ok(sqlx::query_as(
+            r#"SELECT P.NUMBER AS number, P.FILE_NAME AS file_name, P.MEDIA_TYPE AS media_type
+                 FROM MEDIA M
+                 JOIN MEDIA_PAGE P ON P.BOOK_ID = M.BOOK_ID
+                WHERE M.BOOK_ID = ? AND M.STATUS = 'READY' AND M.MEDIA_TYPE = 'application/zip'
+                  AND (P.NUMBER < ? OR P.NUMBER >= MAX(M.PAGE_COUNT - ?, 0))
+                  AND (P.FILE_HASH = '' OR
+                       (P.MEDIA_TYPE = 'image/jpeg' AND
+                        COALESCE(P.FILE_HASH_ALGORITHM, '') <> ?))
+                ORDER BY P.NUMBER"#,
+        )
+        .bind(book_id)
+        .bind(edge_size)
+        .bind(edge_size)
+        .bind(jpeg_algorithm)
+        .fetch_all(&self.pool)
+        .await?)
+    }
+
+    /// Stores selected page hashes only while the source and media snapshots
+    /// used to compute them are still current.
+    ///
+    /// Returns `false` when the book, media, or any target page changed. An
+    /// empty update collection succeeds without writing.
+    ///
+    /// # Errors
+    ///
+    /// Returns a database error when snapshot validation or persistence fails.
+    pub async fn update_page_hashes_if_current(
+        &self,
+        book: &komga_core::Book,
+        media: &Media,
+        updates: &[PageHashUpdate],
+    ) -> Result<bool> {
+        if updates.is_empty() {
+            return Ok(true);
+        }
+        let Some(media_type) = media.media_type.as_deref() else {
+            return Ok(false);
+        };
+        let Some(media_last_modified) = media.last_modified_date else {
+            return Ok(false);
+        };
+        let mut tx = self.pool.begin().await?;
+        let current = sqlx::query_scalar::<_, bool>(
+            r#"SELECT EXISTS(
+                 SELECT 1 FROM BOOK B JOIN MEDIA M ON M.BOOK_ID = B.ID
+                  WHERE B.ID = ? AND B.URL = ? AND B.FILE_SIZE = ?
+                    AND B.FILE_LAST_MODIFIED = ? AND B.DELETED_DATE IS NULL
+                    AND M.STATUS = ? AND M.MEDIA_TYPE = ? AND M.PAGE_COUNT = ?
+                    AND M.LAST_MODIFIED_DATE = ?)"#,
+        )
+        .bind(&book.id)
+        .bind(book.url.as_str())
+        .bind(book.file_size)
+        .bind(book.file_last_modified)
+        .bind(media.status.as_str())
+        .bind(media_type)
+        .bind(media.page_count)
+        .bind(media_last_modified)
+        .fetch_one(&mut *tx)
+        .await?;
+        if !current {
+            tx.rollback().await?;
+            return Ok(false);
+        }
+        for update in updates {
+            let result = sqlx::query(
+                r#"UPDATE MEDIA_PAGE SET FILE_HASH = ?, FILE_HASH_ALGORITHM = ?
+                    WHERE BOOK_ID = ? AND NUMBER = ? AND FILE_NAME = ? AND MEDIA_TYPE = ?"#,
+            )
+            .bind(&update.file_hash)
+            .bind(&update.algorithm)
+            .bind(&book.id)
+            .bind(update.number)
+            .bind(&update.file_name)
+            .bind(&update.media_type)
+            .execute(&mut *tx)
+            .await?;
+            if result.rows_affected() != 1 {
+                tx.rollback().await?;
+                return Ok(false);
+            }
+        }
+        tx.commit().await?;
+        Ok(true)
     }
 
     /// Atomically replaces media, pages, files, and affected reading progress.
@@ -886,6 +1049,126 @@ mod tests {
         .unwrap();
         assert!(progress.contains(&(completed.id, 2)));
         assert!(progress.contains(&(reading.id, 1)));
+    }
+
+    #[tokio::test]
+    async fn page_hash_targets_cover_only_missing_or_stale_edge_pages() {
+        const RGB_ALGORITHM: &str = "RGB24_XXH3_128_V1";
+
+        let storage = Storage::connect_memory().await.unwrap();
+        let temporary = tempfile::tempdir().unwrap();
+        let book = scanned_book(&storage, temporary.path()).await;
+        let mut media = ready_media(&book.id);
+        media.pages = (0..8)
+            .map(|number| BookPage {
+                file_name: format!("{number}.jpg"),
+                media_type: if number == 6 { "image/png" } else { "image/jpeg" }.into(),
+                dimension: None,
+                file_hash: if matches!(number, 3 | 6) {
+                    String::new()
+                } else {
+                    "legacy".into()
+                },
+                file_size: Some(100 + i64::from(number)),
+            })
+            .collect();
+        media.page_count = 8;
+        storage.replace_media_analysis(&media).await.unwrap();
+        sqlx::query("UPDATE MEDIA_PAGE SET FILE_HASH_ALGORITHM = ? WHERE BOOK_ID = ? AND NUMBER = 7")
+            .bind(RGB_ALGORITHM)
+            .bind(&book.id)
+            .execute(&storage.pool)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            storage
+                .list_books_with_incomplete_page_hashes(&book.library_id, 2, RGB_ALGORITHM)
+                .await
+                .unwrap(),
+            std::slice::from_ref(&book.id)
+        );
+        let targets = storage
+            .list_page_hash_targets(&book.id, 2, RGB_ALGORITHM)
+            .await
+            .unwrap();
+        assert_eq!(
+            targets.iter().map(|target| target.number).collect::<Vec<_>>(),
+            [0, 1, 6]
+        );
+
+        let current_book = storage.find_book_by_id(&book.id).await.unwrap().unwrap();
+        let current_media = storage.find_media_by_book_id(&book.id).await.unwrap().unwrap();
+        let updates = targets
+            .iter()
+            .map(|target| PageHashUpdate {
+                number: target.number,
+                file_name: target.file_name.clone(),
+                media_type: target.media_type.clone(),
+                file_hash: format!("hash-{}", target.number),
+                algorithm: if target.media_type == "image/jpeg" {
+                    RGB_ALGORITHM.into()
+                } else {
+                    "RAW_XXH3_128_V1".into()
+                },
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            storage
+                .update_page_hashes_if_current(&current_book, &current_media, &updates)
+                .await
+                .unwrap()
+        );
+        assert!(
+            storage
+                .list_page_hash_targets(&book.id, 2, RGB_ALGORITHM)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            sqlx::query_as::<_, (String, String)>(
+                "SELECT FILE_HASH,FILE_HASH_ALGORITHM FROM MEDIA_PAGE WHERE BOOK_ID=? AND NUMBER=6",
+            )
+            .bind(&book.id)
+            .fetch_one(&storage.pool)
+            .await
+            .unwrap(),
+            ("hash-6".into(), "RAW_XXH3_128_V1".into())
+        );
+
+        let mut stale_updates = updates;
+        stale_updates[0].file_name = "changed.jpg".into();
+        assert!(
+            !storage
+                .update_page_hashes_if_current(&current_book, &current_media, &stale_updates)
+                .await
+                .unwrap()
+        );
+        sqlx::query("UPDATE MEDIA SET STATUS='OUTDATED' WHERE BOOK_ID=?")
+            .bind(&book.id)
+            .execute(&storage.pool)
+            .await
+            .unwrap();
+        assert!(
+            storage
+                .list_books_with_incomplete_page_hashes(&book.library_id, 2, RGB_ALGORITHM)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        sqlx::query("UPDATE MEDIA SET STATUS='READY',MEDIA_TYPE='application/pdf' WHERE BOOK_ID=?")
+            .bind(&book.id)
+            .execute(&storage.pool)
+            .await
+            .unwrap();
+        assert!(
+            storage
+                .list_books_with_incomplete_page_hashes(&book.library_id, 2, RGB_ALGORITHM)
+                .await
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[tokio::test]

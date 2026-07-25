@@ -18,22 +18,25 @@ The defaults match Komga:
 - keep state in `$HOME/.komga`;
 - use `$HOME/.komga/database.sqlite`.
 - use `$HOME/.komga/tasks.sqlite` for the persistent task queue.
+- hash the first and last 3 pages of eligible ZIP books when a library enables page hashing.
 
 Configuration can be supplied through arguments or environment variables:
 
 ```bash
 cargo run -p komga-server -- \
   --config-dir /srv/komga \
+  --page-hashing 3 \
   --host 127.0.0.1 \
   --port 25600
 
 KOMGA_DATABASE_FILE=/srv/komga/database.sqlite \
 KOMGA_TASKS_DATABASE_FILE=/srv/komga/tasks.sqlite \
-KOMGA_SEARCH_DIRECTORY=/srv/komga/search KOMGA_PORT=25601 \
+KOMGA_SEARCH_DIRECTORY=/srv/komga/search KOMGA_PAGE_HASHING=3 KOMGA_PORT=25601 \
   cargo run -p komga-server
 ```
 
 Do not run the Kotlin and Rust servers against the same SQLite file at the same time. Back up an existing database before the first Rust start.
+Migration `0011_page_hashing` deliberately clears existing `PAGE_HASH` rules and thumbnails and resets JPEG page hashes because Rust uses a versioned RGB24 pixel hash instead of Java ImageIO's encoder-dependent bytes.
 
 ## Implemented API
 
@@ -90,6 +93,8 @@ Do not run the Kotlin and Rust servers against the same SQLite file at the same 
 Authentication is compatible with the current Komga contract: HTTP Basic, `KOMGA-SESSION`, `X-Auth-Token`, and SHA-512-backed `X-API-Key`. Existing Spring BCrypt `$2a$` password hashes are accepted.
 
 `ScanLibrary` tasks are executed in the background. They discover configured CBX/PDF/EPUB files and persist Kotlin-compatible Series, Book, Media, and initial metadata rows. CBZ, CBR, PDF, and EPUB contents are analyzed and receive generated book thumbnails; fixed-layout EPUB pages, publication resources, navigation, reading positions, and Divina/PDF/EPUB WebPub manifests are available through the REST API. Root-level `ComicInfo.xml`, EPUB OPF, and Mylar `series.json` metadata are imported incrementally after analysis and through the book, series, and library metadata refresh endpoints. Provider updates preserve locked fields, and ComicInfo collection/read-list relationships remain incremental. `EmptyTrash` permanently removes soft-deleted database content, honors automatic cleanup after scans, and never deletes source files. Library deletion cascades through database-owned content and sidecars while also preserving source files. Other unported task types remain queued and unmodified.
+
+Libraries with `hashPages` enabled enqueue Kotlin-compatible discovery and page-hashing tasks at startup, after scans, and when the setting is enabled. Only READY ZIP/CBZ media participates. The first and last configured number of pages are hashed; JPEG pages use a deterministic dimensions-plus-RGB24 representation, while other page types retain raw-byte XXH3-128 hashing. PageHash management, duplicate-page queries, and source-page deletion remain pending.
 
 The modern Series and Book list endpoints support Spring-style pagination, the complete structured condition trees, ranked multilingual `fullTextSearch`, alphabetical groups, fixed discovery feeds, and On Deck selection. Deprecated GET lists and the legacy alphabetical-groups route translate their query parameters into the same condition trees and search candidates; Series `search_regex` supports case-insensitive Rust regexes over `title` and `title_sort`. Referential filter values preserve Kotlin's scope precedence and data-source differences. Collection and read-list `search` uses the same in-process Tantivy index. Library sharing, age, sharing labels, member restrictions, and structured conditions remain enforced by SQLite before pagination. The Rust index uses `<config-dir>/search/v2`, remains independent of Kotlin's Lucene directory, and queues a priority-8 rebuild task at startup when the file index is empty or incompatible.
 

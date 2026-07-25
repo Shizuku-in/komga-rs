@@ -36,7 +36,7 @@ mod webpub_routes;
 pub use auth::{REMEMBER_ME_COOKIE, SESSION_COOKIE, SESSION_HEADER};
 pub use runtime::{AppRuntime, ShutdownHandle};
 
-use std::sync::Arc;
+use std::{num::NonZeroUsize, sync::Arc};
 
 use auth::SessionStore;
 use axum::{
@@ -73,6 +73,7 @@ pub struct AppState {
     task_notify: Arc<Notify>,
     schedule_notify: Arc<Notify>,
     shutdown: CancellationToken,
+    page_hashing: NonZeroUsize,
 }
 
 impl AppState {
@@ -122,7 +123,15 @@ impl AppState {
             task_notify: Arc::new(Notify::new()),
             schedule_notify: Arc::new(Notify::new()),
             shutdown: CancellationToken::new(),
+            page_hashing: NonZeroUsize::new(3).expect("page hashing default is nonzero"),
         })
+    }
+
+    /// Overrides the number of pages hashed at each edge of ZIP books.
+    #[must_use]
+    pub fn with_page_hashing(mut self, page_hashing: NonZeroUsize) -> Self {
+        self.page_hashing = page_hashing;
+        self
     }
 
     pub(crate) async fn rebuild_search(&self, kinds: &[EntityKind]) -> bool {
