@@ -623,6 +623,31 @@ impl TaskStorage {
         Ok(())
     }
 
+    /// Inserts a task only when its unique identifier is not already queued.
+    ///
+    /// This is used for low-priority maintenance discovery so an existing task's
+    /// priority, payload, group, and owner remain unchanged.
+    ///
+    /// # Errors
+    ///
+    /// Returns a database error when the task cannot be inserted.
+    pub async fn save_if_absent(&self, task: &TaskRecord) -> Result<bool> {
+        Ok(sqlx::query(
+            r#"INSERT OR IGNORE INTO TASK (ID, PRIORITY, GROUP_ID, CLASS, SIMPLE_TYPE, PAYLOAD)
+               VALUES (?, ?, ?, ?, ?, ?)"#,
+        )
+        .bind(&task.id)
+        .bind(task.priority)
+        .bind(&task.group_id)
+        .bind(&task.class)
+        .bind(&task.simple_type)
+        .bind(&task.payload)
+        .execute(&self.pool)
+        .await?
+        .rows_affected()
+            == 1)
+    }
+
     /// Lists queue rows in scheduling order.
     ///
     /// # Errors

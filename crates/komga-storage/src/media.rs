@@ -1,8 +1,8 @@
 use chrono::NaiveDateTime;
 use flate2::{Compression, read::GzDecoder, write::GzEncoder};
 use komga_core::{
-    BookPage, Dimension, EPUB_EXTENSION_CLASS, HashedPageTarget, HistoricalEvent, Media, MediaExtension,
-    MediaExtensionEpub, MediaFile, MediaStatus, SeriesCover, ThumbnailBook, ThumbnailSeries,
+    BookPage, Dimension, EPUB_EXTENSION_CLASS, EPUB_MEDIA_TYPE, HashedPageTarget, HistoricalEvent, Media,
+    MediaExtension, MediaExtensionEpub, MediaFile, MediaStatus, SeriesCover, ThumbnailBook, ThumbnailSeries,
 };
 use sqlx::{FromRow, Sqlite, Transaction};
 
@@ -78,6 +78,23 @@ struct FileRow {
 }
 
 #[derive(Debug, FromRow)]
+struct EpubKoboSpanBackfillRow {
+    book_id: String,
+    series_id: String,
+    extension_class: Option<String>,
+    extension_value_blob: Option<Vec<u8>>,
+}
+
+/// One ready reflowable EPUB whose persisted positions all lack Kobo spans.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EpubKoboSpanBackfillTarget {
+    /// Book to reanalyze.
+    pub book_id: String,
+    /// Series task group used by `AnalyzeBook`.
+    pub series_id: String,
+}
+
+#[derive(Debug, FromRow)]
 struct ThumbnailRow {
     id: String,
     thumbnail: Option<Vec<u8>>,
@@ -106,6 +123,44 @@ struct SeriesThumbnailRow {
 }
 
 impl Storage {
+    /// Lists historical EPUB analyses which need in-process Kobo span enrichment.
+    ///
+    /// Only non-deleted, ready, reflowable, non-native EPUBs with at least one
+    /// position are returned. A partially enriched analysis is intentionally
+    /// excluded so startup backfill never overwrites newer mixed state.
+    ///
+    /// # Errors
+    ///
+    /// Returns a database error when candidates cannot be queried.
+    pub async fn list_epub_kobo_span_backfill_targets(&self) -> Result<Vec<EpubKoboSpanBackfillTarget>> {
+        let rows = sqlx::query_as::<_, EpubKoboSpanBackfillRow>(
+            r#"SELECT B.ID AS book_id, B.SERIES_ID AS series_id,
+                      M.EXTENSION_CLASS AS extension_class,
+                      M.EXTENSION_VALUE_BLOB AS extension_value_blob
+                 FROM BOOK B JOIN MEDIA M ON M.BOOK_ID = B.ID
+                WHERE B.DELETED_DATE IS NULL AND M.STATUS = 'READY'
+                  AND M.MEDIA_TYPE = ? AND M.EPUB_IS_KEPUB = 0
+                ORDER BY B.ID"#,
+        )
+        .bind(EPUB_MEDIA_TYPE)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .filter_map(|row| {
+                let MediaExtension::Epub(extension) =
+                    decode_media_extension(row.extension_class.as_deref(), row.extension_value_blob.as_deref())?;
+                (!extension.is_fixed_layout
+                    && !extension.positions.is_empty()
+                    && extension.positions.iter().all(|position| position.kobo_span.is_none()))
+                .then_some(EpubKoboSpanBackfillTarget {
+                    book_id: row.book_id,
+                    series_id: row.series_id,
+                })
+            })
+            .collect())
+    }
+
     /// Loads analyzed media together with naturally ordered pages and files.
     ///
     /// `MEDIA_FILE` has no explicit ordinal in Kotlin's schema. Its insertion
@@ -1703,6 +1758,77 @@ mod tests {
         .unwrap();
         assert_eq!(class_name, EPUB_EXTENSION_CLASS);
         assert!(blob.starts_with(&[0x1f, 0x8b]));
+    }
+
+    #[tokio::test]
+    async fn kobo_span_backfill_targets_only_unenriched_reflowable_epubs() {
+        let storage = Storage::connect_memory().await.unwrap();
+        let temporary = tempfile::tempdir().unwrap();
+        let book = scanned_book(&storage, temporary.path()).await;
+        let position = R2Locator {
+            href: "chapter.xhtml".into(),
+            media_type: "application/xhtml+xml".into(),
+            title: None,
+            locations: Some(R2Location {
+                progression: Some(0.0),
+                position: Some(1),
+                ..Default::default()
+            }),
+            text: None,
+            kobo_span: None,
+        };
+        let mut media = ready_media(&book.id);
+        media.media_type = Some(EPUB_MEDIA_TYPE.into());
+        media.extension = Some(MediaExtension::Epub(MediaExtensionEpub {
+            positions: vec![position.clone()],
+            ..Default::default()
+        }));
+        storage.replace_media_analysis(&media).await.unwrap();
+
+        assert_eq!(
+            storage.list_epub_kobo_span_backfill_targets().await.unwrap(),
+            [EpubKoboSpanBackfillTarget {
+                book_id: book.id.clone(),
+                series_id: book.series_id.clone(),
+            }]
+        );
+
+        for extension in [
+            MediaExtensionEpub {
+                is_fixed_layout: true,
+                positions: vec![position.clone()],
+                ..Default::default()
+            },
+            MediaExtensionEpub::default(),
+            MediaExtensionEpub {
+                positions: vec![R2Locator {
+                    kobo_span: Some("kobo.1.1".into()),
+                    ..position.clone()
+                }],
+                ..Default::default()
+            },
+        ] {
+            media.extension = Some(MediaExtension::Epub(extension));
+            storage.replace_media_analysis(&media).await.unwrap();
+            assert!(storage.list_epub_kobo_span_backfill_targets().await.unwrap().is_empty());
+        }
+
+        media.extension = Some(MediaExtension::Epub(MediaExtensionEpub {
+            positions: vec![position],
+            ..Default::default()
+        }));
+        media.epub_is_kepub = true;
+        storage.replace_media_analysis(&media).await.unwrap();
+        assert!(storage.list_epub_kobo_span_backfill_targets().await.unwrap().is_empty());
+
+        media.epub_is_kepub = false;
+        storage.replace_media_analysis(&media).await.unwrap();
+        sqlx::query("UPDATE BOOK SET DELETED_DATE = CURRENT_TIMESTAMP WHERE ID = ?")
+            .bind(&book.id)
+            .execute(&storage.pool)
+            .await
+            .unwrap();
+        assert!(storage.list_epub_kobo_span_backfill_targets().await.unwrap().is_empty());
     }
 
     #[tokio::test]

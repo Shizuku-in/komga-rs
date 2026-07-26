@@ -1273,6 +1273,39 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn insert_if_absent_preserves_existing_priority_payload_and_owner() {
+        let tasks = TaskStorage::connect_memory().await.unwrap();
+        let existing = TaskRecord::analyze_book("book", "series", 8);
+        tasks.save(&existing).await.unwrap();
+        let claimed = tasks
+            .take_first_of_type("worker", "AnalyzeBook")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(claimed.id, existing.id);
+
+        assert!(
+            !tasks
+                .save_if_absent(&TaskRecord::analyze_book("book", "other-series", 0))
+                .await
+                .unwrap()
+        );
+        let queued = tasks.list().await.unwrap();
+        assert_eq!(queued.len(), 1);
+        assert_eq!(queued[0].priority, 8);
+        assert_eq!(queued[0].group_id.as_deref(), Some("series"));
+        assert_eq!(queued[0].owner.as_deref(), Some("worker"));
+        assert_eq!(queued[0].payload, existing.payload);
+
+        assert!(
+            tasks
+                .save_if_absent(&TaskRecord::analyze_book("new-book", "series", 0))
+                .await
+                .unwrap()
+        );
+    }
+
     #[test]
     fn conversion_tasks_match_kotlin_payloads_and_groups() {
         let discovery = TaskRecord::find_books_to_convert("library", 0);
