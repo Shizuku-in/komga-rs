@@ -18,7 +18,7 @@ use crate::{
     AppState, auth, book_file_routes, container_routes, content_routes, filesystem_routes, history_routes, kobo,
     koreader_routes, library_routes, media_routes, metadata_routes, opds_router, page_hash_routes,
     read_list_file_routes, read_list_match_routes, read_progress_routes, referential_routes, routes, settings_routes,
-    sse_routes, thumbnail_routes, webpub_routes,
+    source_file_routes, sse_routes, thumbnail_routes, webpub_routes,
 };
 
 pub(crate) fn build(state: AppState) -> Router {
@@ -110,6 +110,10 @@ fn protected_api() -> Router<AppState> {
         .route("/api/v1/series/new", get(content_routes::new_series))
         .route("/api/v1/series/updated", get(content_routes::updated_series))
         .route("/api/v1/series/{series_id}", get(content_routes::get_series))
+        .route(
+            "/api/v1/series/{series_id}/file",
+            axum::routing::delete(source_file_routes::delete_series_files),
+        )
         .route(
             "/api/v1/series/{series_id}/collections",
             get(container_routes::series_collections),
@@ -290,7 +294,7 @@ fn protected_api() -> Router<AppState> {
         )
         .route(
             "/api/v1/books/{book_id}/file",
-            get(book_file_routes::download_book_file),
+            get(book_file_routes::download_book_file).delete(source_file_routes::delete_book_file),
         )
         .route(
             "/api/v1/books/{book_id}/file/{*file_name}",

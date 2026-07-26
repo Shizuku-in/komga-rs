@@ -29,6 +29,7 @@ mod metadata;
 mod page_hashing;
 mod scan;
 mod scheduler;
+mod source_deletion;
 mod thumbnail;
 
 use analysis::process_analyze_book_task;
@@ -41,6 +42,7 @@ use metadata::{process_refresh_book_metadata_task, process_refresh_series_metada
 use page_hashing::{process_find_missing_page_hashes_task, process_hash_book_pages_task};
 use scan::process_scan_task;
 use scheduler::scheduler_loop;
+use source_deletion::{process_delete_book_task, process_delete_series_task};
 use thumbnail::process_generate_thumbnail_task;
 
 /// Cloneable control used to coordinate HTTP and background-service shutdown.
@@ -199,7 +201,7 @@ pub(super) enum TaskOutcome {
     Retry,
 }
 
-const SUPPORTED_TASK_TYPES: [&str; 16] = [
+const SUPPORTED_TASK_TYPES: [&str; 18] = [
     "ScanLibrary",
     "EmptyTrash",
     "AnalyzeBook",
@@ -216,6 +218,8 @@ const SUPPORTED_TASK_TYPES: [&str; 16] = [
     "FindBookThumbnailsToRegenerate",
     "RebuildIndex",
     "UpgradeIndex",
+    "DeleteBook",
+    "DeleteSeries",
 ];
 
 async fn worker_loop(state: AppState, index: usize) {
@@ -276,6 +280,8 @@ async fn process_task(state: &AppState, task: &TaskRecord) -> TaskOutcome {
         "GenerateBookThumbnail" => process_generate_thumbnail_task(state, task).await,
         "AggregateSeriesMetadata" => process_aggregate_series_metadata_task(state, task).await,
         "FindBookThumbnailsToRegenerate" => process_find_thumbnails_task(state, task).await,
+        "DeleteBook" => process_delete_book_task(state, task).await,
+        "DeleteSeries" => process_delete_series_task(state, task).await,
         "RebuildIndex" => {
             let payload = match serde_json::from_str::<RebuildIndexPayload>(&task.payload) {
                 Ok(payload) => payload,

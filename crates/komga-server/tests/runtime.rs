@@ -91,6 +91,59 @@ async fn empty_trash_tasks_permanently_delete_soft_deleted_content_and_missing_l
 }
 
 #[tokio::test]
+async fn owned_source_deletion_tasks_resume_after_task_storage_reconnect() {
+    let storage = Storage::connect_memory().await.unwrap();
+    let task_directory = tempfile::tempdir().unwrap();
+    let task_path = task_directory.path().join("tasks.sqlite");
+    let tasks = TaskStorage::connect_path(&task_path).await.unwrap();
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path().join("library");
+    fs::create_dir_all(root.join("Series")).unwrap();
+    fs::write(root.join("Series/Book.cbz"), [1]).unwrap();
+    let library = Library::new("Deletion".into(), Url::from_directory_path(&root).unwrap());
+    storage.create_library(&library).await.unwrap();
+    storage
+        .apply_library_scan(&library.id, &scan_library_files(&library, || false).unwrap(), false)
+        .await
+        .unwrap();
+    let series = storage.list_series_by_library_id(&library.id).await.unwrap().remove(0);
+    let book = storage.list_books_by_series_id(&series.id).await.unwrap().remove(0);
+    tasks.save(&TaskRecord::delete_book(&book.id)).await.unwrap();
+    assert!(
+        tasks
+            .take_first_of_type("stopped-worker", "DeleteBook")
+            .await
+            .unwrap()
+            .is_some()
+    );
+    drop(tasks);
+
+    let tasks = TaskStorage::connect_path(&task_path).await.unwrap();
+    assert_eq!(tasks.list().await.unwrap()[0].owner, None);
+    let state = AppState::new(storage.clone(), tasks.clone()).await.unwrap();
+    let runtime = state.start_runtime().await.unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !tasks.list().await.unwrap().is_empty() {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("source-deletion task did not resume");
+
+    assert!(!book.url.to_file_path().unwrap().exists());
+    assert!(
+        storage
+            .find_book_by_id(&book.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .deleted_date
+            .is_some()
+    );
+    runtime.shutdown().await;
+}
+
+#[tokio::test]
 async fn scan_tasks_honor_empty_trash_after_scan() {
     let storage = Storage::connect_memory().await.unwrap();
     let tasks = TaskStorage::connect_memory().await.unwrap();
