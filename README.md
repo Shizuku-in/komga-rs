@@ -6,15 +6,15 @@ An incremental Rust port of the [Komga](https://github.com/gotson/komga) backend
 
 ## Port status
 
-The migration matrix currently tracks 13 functional areas: 3 are implemented or core-complete, 9 are partially implemented, and 1 is pending.
+The migration matrix currently tracks 13 functional areas: 5 are implemented or core-complete, 7 are partially implemented, and 1 is pending.
 
 | Status | Areas |
 | --- | --- |
-| Implemented / core-complete | Claim and users; collections and read lists; OPDS |
-| Partial | Process and configuration; SQLite; authentication; libraries and scanner; Series, Books, and progress; media; search; device sync; operations |
+| Implemented / core-complete | Claim and users; collections and read lists; OPDS; device sync; operations |
+| Partial | Process and configuration; SQLite; authentication; libraries and scanner; Series, Books, and progress; media; search |
 | Pending | Web UI packaging |
 
-Recent content work added modern and deprecated Series/Book queries, legacy regex search, duplicate-book discovery, book-file hashing, configurable ZIP edge-page hashing, PageHash administration, safe duplicate-page removal from CBZ files with historical auditing, RAR/CBR-to-CBZ conversion, source-extension repair, authenticated OPDS 1.2 and OPDS 2 catalogs, Kotlin-compatible content-domain SSE, KOReader progress synchronization, and Kobo synchronization with optional KEPUB conversion and Kobo Store proxying.
+Recent content work added modern and deprecated Series/Book queries, legacy regex search, duplicate-book discovery, book-file hashing, configurable ZIP edge-page hashing, PageHash administration, safe duplicate-page removal from CBZ files with historical auditing, RAR/CBR-to-CBZ conversion, source-extension repair, authenticated OPDS 1.2 and OPDS 2 catalogs, Kotlin-compatible content-domain SSE, KOReader and Kobo synchronization, application metrics, announcements, release checks, and bundled and local reader fonts.
 
 ## Run
 
@@ -30,6 +30,7 @@ The defaults match Komga:
 - keep state in `$HOME/.komga`;
 - use `$HOME/.komga/database.sqlite`.
 - use `$HOME/.komga/tasks.sqlite` for the persistent task queue.
+- load additional reader fonts from `$HOME/.komga/fonts`, alongside bundled OpenDyslexic files.
 - hash the first and last 3 pages of eligible ZIP books when a library enables page hashing.
 - return at most 100 source books or tags in each Kobo synchronization page.
 - leave KEPUB conversion and Kobo Store proxying disabled until explicitly configured.
@@ -39,6 +40,7 @@ Configuration can be supplied through arguments or environment variables:
 ```bash
 cargo run -p komga-server -- \
   --config-dir /srv/komga \
+  --fonts-directory /srv/komga/fonts \
   --page-hashing 3 \
   --kobo-sync-item-limit 100 \
   --kobo-kepubify-path /usr/local/bin/kepubify \
@@ -49,7 +51,8 @@ cargo run -p komga-server -- \
 
 KOMGA_DATABASE_FILE=/srv/komga/database.sqlite \
 KOMGA_TASKS_DATABASE_FILE=/srv/komga/tasks.sqlite \
-KOMGA_SEARCH_DIRECTORY=/srv/komga/search KOMGA_PAGE_HASHING=3 \
+KOMGA_SEARCH_DIRECTORY=/srv/komga/search \
+KOMGA_FONTS_DIRECTORY=/srv/komga/fonts KOMGA_PAGE_HASHING=3 \
 KOMGA_KOBO_SYNC_ITEM_LIMIT=100 \
 KOMGA_KOBO_KEPUBIFY_PATH=/usr/local/bin/kepubify KOMGA_KOBO_PROXY=true \
 KOMGA_PORT=25601 KOMGA_CONTEXT_PATH=/komga \
@@ -62,6 +65,8 @@ Migration `0011_page_hashing` deliberately clears existing `PAGE_HASH` rules and
 ## Implemented API
 
 - `GET /actuator/health`
+- `GET /actuator/metrics`
+- `GET /actuator/metrics/{metric}`
 - `GET|POST /api/v1/claim`
 - `GET /api/v2/users/me`
 - `PATCH /api/v2/users/me/password`
@@ -129,6 +134,11 @@ Migration `0011_page_hashing` deliberately clears existing `PAGE_HASH` rules and
 - `GET /api/v1/client-settings/user/list`
 - `PATCH|DELETE /api/v1/client-settings/user`
 - `GET /api/v1/oauth2/providers`
+- `GET|PUT /api/v1/announcements`
+- `GET /api/v1/releases`
+- `GET /api/v1/fonts/families`
+- `GET /api/v1/fonts/resource/{family}/css`
+- `GET /api/v1/fonts/resource/{family}/{file}`
 - `GET /opds/v1.2/{catalog|search|ondeck|keep-reading|series|books/latest|libraries|collections|readlists|publishers}` and their detail/resource routes
 - `GET /opds/v2/auth`
 - `GET /opds/v2/{catalog|libraries|search|collections/{id}|readlists/{id}|series/{id}}`
@@ -145,6 +155,10 @@ Migration `0011_page_hashing` deliberately clears existing `PAGE_HASH` rules and
 Authentication is compatible with the current Komga contract: HTTP Basic, `KOMGA-SESSION`, `X-Auth-Token`, and SHA-512-backed `X-API-Key`. Existing Spring BCrypt `$2a$` password hashes are accepted. KOReader routes exclusively accept a plaintext API key in `X-Auth-User` and require the `KOREADER_SYNC` role. Kobo routes exclusively accept a plaintext API key in the `/kobo/{apiKey}` path and require `KOBO_SYNC`; original-file delivery also requires `FILE_DOWNLOAD`. Kobo keys are redacted from request tracing. OPDS 2 also exposes the public authentication document and returns its media type, Basic challenge, and discovery link on authentication failures.
 
 Administrators can retrieve and patch Kotlin-compatible server settings through `/api/v1/settings`. Empty-container cleanup, thumbnail size, task-pool size, remember-me policy, Kobo Store proxying/public URL port, and `kepubify` selection update live after a committed PATCH. `serverPort` and `serverContextPath` are persisted as database overrides and take effect on the next process start; the response reports configuration, database, and current effective values separately. Database values override CLI/environment values, and clearing nullable overrides restores the configured fallback.
+
+Administrators can inspect nine Komga application metrics through the actuator endpoints. Content gauges query SQLite on each request; task execution and failure measurements are process-local and reset after restart. Announcement and release endpoints read the fixed Komga feed and GitHub release API, cache successful upstream responses for one idle hour, and never cache failures. Announcement read state is persisted per user. These outbound requests are read-only but disclose the server's network address and request metadata to Komga's website or GitHub.
+
+OpenDyslexic WOFF and WOFF2 files are bundled with the server. Additional font families are discovered from immediate subdirectories of the configured fonts directory at startup; a local family with the same name replaces its bundled counterpart. Font catalogs require authentication, while CSS and font resources are public so the EPUB reader can load them without forwarding credentials. Symlinked directories and files, unsupported extensions, nested files, and paths outside the configured root are rejected.
 
 `ScanLibrary` tasks are executed in the background. They discover configured CBX/PDF/EPUB files and persist Kotlin-compatible Series, Book, Media, and initial metadata rows. CBZ, CBR, PDF, and EPUB contents are analyzed and receive generated book thumbnails; fixed-layout EPUB pages, publication resources, navigation, reading positions, and Divina/PDF/EPUB WebPub manifests are available through the REST API. Root-level `ComicInfo.xml`, EPUB OPF, Mylar `series.json`, adjacent Book artwork, and Series artwork sidecars are imported incrementally. Provider updates preserve locked fields, and ComicInfo collection/read-list relationships remain incremental. Libraries with `convertToCbz` enqueue persistent RAR4/RAR5 conversion tasks after scans and when the setting is enabled; `repairExtensions` likewise queues repairs for analyzed CBR/CBZ/PDF/EPUB files. `EmptyTrash` permanently removes soft-deleted database content, honors automatic cleanup after scans, and never deletes source files. Library deletion cascades through database-owned content and sidecars while also preserving source files. Administrators can enqueue deduplicated Kotlin-compatible Book/Series source deletion and batch Book import tasks. Imports support COPY, MOVE, and HARDLINK with copy fallback, destination renaming, one-shot upgrades, sidecars, relation transfer, `BookImported`/upgrade deletion history, analysis follow-up, SSE, and search synchronization. Other unported task types remain queued and unmodified.
 
