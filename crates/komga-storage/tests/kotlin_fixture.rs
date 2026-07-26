@@ -89,6 +89,13 @@ async fn opens_kotlin_flyway_databases_and_maps_current_rows() {
     let fixture_setting = &settings["komga.fixture"];
     assert_eq!(fixture_setting.value, "kotlin");
     assert_eq!(fixture_setting.allow_unauthorized, Some(true));
+
+    let server_settings = storage.server_settings().await.unwrap();
+    assert!(server_settings.delete_empty_collections);
+    assert!(server_settings.delete_empty_read_lists);
+    assert_eq!(server_settings.remember_me_duration_days, 365);
+    assert_eq!(server_settings.thumbnail_size, komga_core::ThumbnailSize::Default);
+    assert_eq!(server_settings.task_pool_size, 1);
     assert_eq!(storage.remember_me_duration_days().await.unwrap(), 365);
 
     let content_root = temporary.path().join("library-root");

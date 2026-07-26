@@ -17,6 +17,7 @@ mod page_hash;
 mod pagination;
 mod progress;
 mod scanner;
+mod settings;
 mod source_import;
 mod sync;
 
@@ -66,6 +67,7 @@ pub use scanner::{
     Book, ScanError, ScanResult, ScannedSeries, ScannedSidecar, Series, SidecarSource, SidecarType, compare_book_names,
     scan_book_file, scan_book_sidecars, scan_library_files, scan_series_sidecars,
 };
+pub use settings::{ThumbnailSize, valid_server_context_path};
 pub use source_import::CopyMode;
 pub use sync::{
     KomgaSyncToken, ON_DECK_READ_LIST_ID, SyncBatch, SyncBookChange, SyncBookProjection, SyncChangeKind, SyncPoint,

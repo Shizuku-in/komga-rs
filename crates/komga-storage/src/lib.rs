@@ -35,7 +35,7 @@ pub use library::DeleteLibraryResult;
 pub use lifecycle::{EmptyTrashResult, NumberingRefreshTarget};
 pub use media::{PageHashTarget, PageHashUpdate};
 pub use referential::{ReferentialScope, author_page_request};
-pub use settings::ClientSetting;
+pub use settings::{ClientSetting, ServerSettings, ServerSettingsPatch, SettingUpdate};
 pub use source_import::BookImportCommitResult;
 pub use tasks::{RebuildIndexEntity, TaskRecord, TaskStorage};
 
