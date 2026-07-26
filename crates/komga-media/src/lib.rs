@@ -15,6 +15,7 @@ mod comicrack;
 mod epub;
 mod hashing;
 mod image_ops;
+mod kepub;
 mod metadata;
 mod pdf;
 mod rar_conversion;
@@ -25,6 +26,7 @@ pub use hashing::{
     ComputedPageHash, FileHashError, PageHashError, RAW_PAGE_HASH_ALGORITHM, RGB_PAGE_HASH_ALGORITHM, hash_file,
     hash_file_koreader, hash_page, reconcile_scan_hashes,
 };
+pub use kepub::{KepubConversionError, convert_epub_to_kepub, validate_kepub_conversion};
 pub use metadata::{
     ComicInfoContainers, ComicInfoReadList, EmbeddedMetadata, extract_comic_info_containers,
     extract_comic_info_metadata, extract_epub_metadata, extract_mylar_metadata,

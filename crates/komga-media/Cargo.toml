@@ -7,8 +7,10 @@ rust-version.workspace = true
 
 [dependencies]
 chrono.workspace = true
+ego-tree.workspace = true
 hayro.workspace = true
 hayro-write.workspace = true
+html5ever.workspace = true
 image.workspace = true
 infer.workspace = true
 komga-core = { path = "../komga-core" }
@@ -16,6 +18,7 @@ md-5.workspace = true
 natord.workspace = true
 pdf-writer.workspace = true
 percent-encoding.workspace = true
+quick-xml.workspace = true
 rars.workspace = true
 roxmltree.workspace = true
 scraper.workspace = true

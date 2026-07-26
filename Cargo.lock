@@ -2051,8 +2051,10 @@ name = "komga-media"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "ego-tree",
  "hayro",
  "hayro-write",
+ "html5ever",
  "image",
  "infer",
  "komga-core",
@@ -2060,6 +2062,7 @@ dependencies = [
  "natord",
  "pdf-writer",
  "percent-encoding",
+ "quick-xml",
  "rars",
  "roxmltree",
  "scraper",
