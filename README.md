@@ -14,7 +14,7 @@ The migration matrix currently tracks 13 functional areas: 3 are implemented or 
 | Partial | Process and configuration; SQLite; authentication; libraries and scanner; Series, Books, and progress; media; search; device sync; operations |
 | Pending | Web UI packaging |
 
-Recent content work added modern and deprecated Series/Book queries, legacy regex search, duplicate-book discovery, book-file hashing, configurable ZIP edge-page hashing, PageHash administration, safe duplicate-page removal from CBZ files with historical auditing, authenticated OPDS 1.2 and OPDS 2 catalogs, Kotlin-compatible content-domain SSE, KOReader progress synchronization, and the core Kobo SyncPoint protocol. KEPUB conversion and Kobo Store proxying remain later work.
+Recent content work added modern and deprecated Series/Book queries, legacy regex search, duplicate-book discovery, book-file hashing, configurable ZIP edge-page hashing, PageHash administration, safe duplicate-page removal from CBZ files with historical auditing, authenticated OPDS 1.2 and OPDS 2 catalogs, Kotlin-compatible content-domain SSE, KOReader progress synchronization, and Kobo synchronization with optional KEPUB conversion and Kobo Store proxying.
 
 ## Run
 
@@ -32,6 +32,7 @@ The defaults match Komga:
 - use `$HOME/.komga/tasks.sqlite` for the persistent task queue.
 - hash the first and last 3 pages of eligible ZIP books when a library enables page hashing.
 - return at most 100 source books or tags in each Kobo synchronization page.
+- leave KEPUB conversion and Kobo Store proxying disabled until explicitly configured.
 
 Configuration can be supplied through arguments or environment variables:
 
@@ -40,13 +41,17 @@ cargo run -p komga-server -- \
   --config-dir /srv/komga \
   --page-hashing 3 \
   --kobo-sync-item-limit 100 \
+  --kobo-kepubify-path /usr/local/bin/kepubify \
+  --kobo-proxy \
   --host 127.0.0.1 \
   --port 25600
 
 KOMGA_DATABASE_FILE=/srv/komga/database.sqlite \
 KOMGA_TASKS_DATABASE_FILE=/srv/komga/tasks.sqlite \
 KOMGA_SEARCH_DIRECTORY=/srv/komga/search KOMGA_PAGE_HASHING=3 \
-KOMGA_KOBO_SYNC_ITEM_LIMIT=100 KOMGA_PORT=25601 \
+KOMGA_KOBO_SYNC_ITEM_LIMIT=100 \
+KOMGA_KOBO_KEPUBIFY_PATH=/usr/local/bin/kepubify KOMGA_KOBO_PROXY=true \
+KOMGA_PORT=25601 \
   cargo run -p komga-server
 ```
 
@@ -111,6 +116,7 @@ Migration `0011_page_hashing` deliberately clears existing `PAGE_HASH` rules and
 - `GET|PUT /kobo/{apiKey}/v1/library/{bookId}/state`
 - `GET /kobo/{apiKey}/v1/books/{bookId}/file/epub`
 - `GET /kobo/{apiKey}/v1/books/{thumbnailId}/thumbnail/.../image.jpg`
+- `GET|PUT|POST|DELETE|PATCH /kobo/{apiKey}/{*path}` when Store proxying is enabled
 - `POST /api/v1/readlists/match/comicrack`
 - `GET /api/v1/readlists/{id}/file`
 - `POST /api/v1/filesystem`
@@ -137,7 +143,7 @@ Authentication is compatible with the current Komga contract: HTTP Basic, `KOMGA
 
 Libraries with `hashKoreader` enabled enqueue Kotlin-compatible `HashBookKoreader` tasks after scans, when the setting is enabled, and after ZIP page removal. The worker computes KOReader's partial MD5 against a source snapshot and conditionally persists it to `FILE_HASH_KOREADER`. KOReader clients can then authenticate, pull, and push Divina/PDF page progress or EPUB resource progress. Hash resolution applies the user's library, age, and sharing-label restrictions before reporting collisions.
 
-Kobo synchronization captures Kotlin-compatible SyncPoint snapshots of each user's visible READY EPUB books and virtual On Deck tag. First and incremental synchronization are transactionally paged with Komga, Calibre Web, and official dotted sync-token compatibility. Metadata, reading state, original EPUB/native KEPUB files, and JPEG covers are delivered through path-authenticated routes. Download URLs always request the original file; `convert_kepub=true` returns `503` until conversion and caching are implemented. Unknown Kobo endpoints return an empty JSON object while store proxying is disabled.
+Kobo synchronization captures Kotlin-compatible SyncPoint snapshots of each user's visible READY EPUB books and virtual On Deck tag. First and incremental synchronization are transactionally paged with Komga, Calibre Web, and official dotted sync-token compatibility. Metadata, reading state, EPUB/native KEPUB files, and JPEG covers are delivered through path-authenticated routes. When `kepubify` is configured, ordinary reflowable EPUBs advertise and stream a temporary KEPUB from a five-minute idle cache; analysis also records converted KoboSpan positions for newly analyzed or manually reanalyzed books. Enabling `KOMGA_KOBO_PROXY` forwards only the official authorization/content headers and `x-kobo-*` protocol headers to the fixed Kobo Store endpoint, merges official sync pages after local pages, and redirects unknown covers to Kobo's CDN. Store proxying may disclose device and Kobo account tokens to Kobo; it never forwards the local path API key. Unknown routes still return an empty JSON object while proxying is disabled.
 
 Libraries with `hashPages` enabled enqueue Kotlin-compatible discovery and page-hashing tasks at startup, after scans, and when the setting is enabled. Only READY ZIP/CBZ media participates. The first and last configured number of pages are hashed; JPEG pages use a deterministic dimensions-plus-RGB24 representation, while other page types retain raw-byte XXH3-128 hashing. Administrators can classify hashes as `DELETE_AUTO`, `DELETE_MANUAL`, or `IGNORE`, inspect matching pages and previews, and queue all or individual matches for deletion. ZIP removal raw-copies surviving entries in archive order, validates the complete temporary archive and current source snapshot, and then performs a same-directory atomic replacement. Each removed page creates a `DuplicatePageDeleted` historical event in the same database transaction. It does not create a source backup, so back up real libraries before enabling deletion rules.
 

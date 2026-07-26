@@ -74,6 +74,7 @@ pub struct AppState {
     page_hashing: NonZeroUsize,
     kobo_sync_item_limit: NonZeroUsize,
     kobo_kepub: kobo::kepub::KepubService,
+    kobo_proxy: kobo::proxy::KoboProxy,
 }
 
 impl AppState {
@@ -128,6 +129,7 @@ impl AppState {
             page_hashing: NonZeroUsize::new(3).expect("page hashing default is nonzero"),
             kobo_sync_item_limit: NonZeroUsize::new(100).expect("Kobo sync default is nonzero"),
             kobo_kepub: kobo::kepub::KepubService::disabled(),
+            kobo_proxy: kobo::proxy::KoboProxy::new(false),
         })
     }
 
@@ -152,6 +154,13 @@ impl AppState {
     #[must_use]
     pub async fn with_kobo_kepubify_path(mut self, path: Option<PathBuf>) -> Self {
         self.kobo_kepub = kobo::kepub::KepubService::configure(path).await;
+        self
+    }
+
+    /// Enables or disables forwarding unsupported Kobo requests to the official store.
+    #[must_use]
+    pub fn with_kobo_proxy(mut self, enabled: bool) -> Self {
+        self.kobo_proxy = kobo::proxy::KoboProxy::new(enabled);
         self
     }
 

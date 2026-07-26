@@ -3,6 +3,7 @@
 mod auth;
 mod dto;
 pub(crate) mod kepub;
+pub(crate) mod proxy;
 mod resources;
 mod sync;
 mod token;

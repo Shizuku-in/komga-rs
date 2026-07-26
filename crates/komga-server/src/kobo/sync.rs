@@ -1,10 +1,11 @@
 use axum::{
     Json,
     extract::{Extension, State},
-    http::{HeaderMap, HeaderValue, Uri},
+    http::{HeaderMap, HeaderValue, Method, Uri},
     response::{IntoResponse, Response},
 };
-use komga_core::{KomgaSyncToken, SyncBookChange, SyncChangeKind};
+use komga_core::SyncBookChange;
+use komga_core::SyncChangeKind;
 
 use crate::{AppState, error::ApiError};
 
@@ -49,29 +50,59 @@ pub(super) async fn library_sync(
         )
         .await?;
     let conversion_available = state.kobo_kepub.is_available();
-    let mut results = if from_point.is_some() {
+    let mut local_results = if from_point.is_some() {
         incremental_results(&headers, &uri, &auth, &batch.books, conversion_available)?
     } else {
         initial_results(&headers, &uri, &auth, &batch.books, conversion_available)?
     };
-    append_tag_results(&mut results, &batch.read_lists);
+    append_tag_results(&mut local_results, &batch.read_lists);
+    let mut results = local_results
+        .into_iter()
+        .map(|result| {
+            serde_json::to_value(result).map_err(|error| {
+                tracing::error!(%error, "could not serialize local Kobo sync result");
+                ApiError::internal("Could not serialize Kobo sync result")
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
 
-    let updated = if batch.has_more {
-        KomgaSyncToken {
-            ongoing_sync_point_id: Some(to_point.id.clone()),
-            ..received
+    let mut merged_token = received.clone();
+    let mut should_continue = batch.has_more;
+    if !batch.has_more && state.kobo_proxy.is_enabled() {
+        match state
+            .kobo_proxy
+            .forward(&Method::GET, &uri, &headers, None, Some(&received.raw_kobo_sync_token))
+            .await
+        {
+            Ok(response) => match response.json_value().ok().and_then(|value| value.as_array().cloned()) {
+                Some(mut official_results) => {
+                    results.append(&mut official_results);
+                    if let Some(raw_token) = response.header(X_KOBO_SYNC_TOKEN).and_then(|value| value.to_str().ok()) {
+                        merged_token.raw_kobo_sync_token = raw_token.to_owned();
+                    }
+                    should_continue = response
+                        .header(X_KOBO_SYNC)
+                        .and_then(|value| value.to_str().ok())
+                        .is_some_and(|value| value.eq_ignore_ascii_case("continue"));
+                }
+                None => tracing::error!("Kobo Store sync returned an invalid result array; completing local sync"),
+            },
+            Err(error) => tracing::error!(%error, "Kobo Store sync failed; completing local sync"),
         }
+    }
+
+    let updated = if should_continue {
+        merged_token.ongoing_sync_point_id = Some(to_point.id.clone());
+        merged_token
     } else {
         if let Some(point) = from_point.as_ref()
             && point.id != to_point.id
         {
             state.storage.delete_sync_point(&point.id).await?;
         }
-        KomgaSyncToken {
-            ongoing_sync_point_id: None,
-            last_successful_sync_point_id: Some(to_point.id),
-            ..received
-        }
+        merged_token.ongoing_sync_point_id = None;
+        merged_token.last_successful_sync_point_id = Some(to_point.id);
+        merged_token
     };
     let mut response = Json(results).into_response();
     response.headers_mut().insert(
@@ -79,7 +110,7 @@ pub(super) async fn library_sync(
         HeaderValue::from_str(&token::encode(&updated))
             .map_err(|_| ApiError::internal("Could not encode Kobo sync token"))?,
     );
-    if batch.has_more {
+    if should_continue {
         response
             .headers_mut()
             .insert(X_KOBO_SYNC, HeaderValue::from_static("continue"));
@@ -258,4 +289,146 @@ fn projection(change: &SyncBookChange) -> Result<&komga_core::SyncBookProjection
         .projection
         .as_ref()
         .ok_or_else(|| ApiError::internal("Kobo book projection is missing"))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    use axum::{
+        Json, Router,
+        body::Body,
+        extract::State as AxumState,
+        http::{Request, StatusCode},
+        routing::get,
+    };
+    use http_body_util::BodyExt;
+    use komga_core::{User, UserRole};
+    use komga_storage::{Storage, TaskStorage};
+    use serde_json::json;
+    use sha2::{Digest, Sha512};
+    use tokio::net::TcpListener;
+    use tower::ServiceExt;
+
+    use super::*;
+    use crate::{build_app, kobo::proxy::KoboProxy};
+
+    async fn official_sync(AxumState(calls): AxumState<Arc<AtomicUsize>>, headers: HeaderMap) -> Response {
+        let call = calls.fetch_add(1, Ordering::SeqCst);
+        let expected = if call == 0 { "official.old" } else { "official.next" };
+        if headers.get(X_KOBO_SYNC_TOKEN).and_then(|value| value.to_str().ok()) != Some(expected) {
+            return StatusCode::BAD_REQUEST.into_response();
+        }
+        let mut response = Json(json!([{"StoreResult": call + 1}])).into_response();
+        response.headers_mut().insert(
+            X_KOBO_SYNC_TOKEN,
+            HeaderValue::from_static(if call == 0 { "official.next" } else { "official.done" }),
+        );
+        if call == 0 {
+            response
+                .headers_mut()
+                .insert(X_KOBO_SYNC, HeaderValue::from_static("continue"));
+        }
+        response
+    }
+
+    #[tokio::test]
+    async fn official_sync_pages_are_merged_before_local_snapshot_finalization() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let calls = Arc::new(AtomicUsize::new(0));
+        let upstream_calls = calls.clone();
+        let upstream = tokio::spawn(async move {
+            axum::serve(
+                listener,
+                Router::new()
+                    .route("/v1/library/sync", get(official_sync))
+                    .with_state(upstream_calls),
+            )
+            .await
+            .unwrap();
+        });
+        let storage = Storage::connect_memory().await.unwrap();
+        let tasks = TaskStorage::connect_memory().await.unwrap();
+        let mut user = User::new("sync-proxy@example.org".into(), "unused".into());
+        user.roles.insert(UserRole::KoboSync);
+        storage.create_user(&user).await.unwrap();
+        let key = "sync-proxy-key";
+        storage
+            .create_api_key(
+                "sync-proxy-key-id",
+                &user.id,
+                &hex::encode(Sha512::digest(key.as_bytes())),
+                "Kobo",
+            )
+            .await
+            .unwrap();
+        let mut state = AppState::new(storage.clone(), tasks).await.unwrap();
+        state.kobo_proxy = KoboProxy::with_base_url(true, &base_url);
+        let app = build_app(state);
+
+        let first = app
+            .clone()
+            .oneshot(
+                Request::get(format!("/kobo/{key}/v1/library/sync"))
+                    .header(X_KOBO_SYNC_TOKEN, "official.old")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(first.status(), StatusCode::OK);
+        assert_eq!(first.headers()[X_KOBO_SYNC], "continue");
+        let first_token = first.headers()[X_KOBO_SYNC_TOKEN].to_str().unwrap().to_owned();
+        let decoded = token::decode(Some(&first_token));
+        assert_eq!(decoded.raw_kobo_sync_token, "official.next");
+        assert!(decoded.ongoing_sync_point_id.is_some());
+        assert!(decoded.last_successful_sync_point_id.is_none());
+        let first_body = first.into_body().collect().await.unwrap().to_bytes();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&first_body).unwrap()[0]["StoreResult"],
+            1
+        );
+
+        let second = app
+            .clone()
+            .oneshot(
+                Request::get(format!("/kobo/{key}/v1/library/sync"))
+                    .header(X_KOBO_SYNC_TOKEN, first_token)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(second.status(), StatusCode::OK);
+        assert!(!second.headers().contains_key(X_KOBO_SYNC));
+        let decoded = token::decode(second.headers()[X_KOBO_SYNC_TOKEN].to_str().ok());
+        assert_eq!(decoded.raw_kobo_sync_token, "official.done");
+        assert!(decoded.ongoing_sync_point_id.is_none());
+        let successful = decoded.last_successful_sync_point_id.unwrap();
+        assert!(
+            storage
+                .find_sync_point_for_user(&successful, &user.id)
+                .await
+                .unwrap()
+                .is_some()
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+
+        let local_only = app
+            .oneshot(
+                Request::get(format!("/kobo/{key}/v1/library/sync"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(local_only.status(), StatusCode::OK);
+        assert!(!local_only.headers().contains_key(X_KOBO_SYNC));
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        upstream.abort();
+    }
 }

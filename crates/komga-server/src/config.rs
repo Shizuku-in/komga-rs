@@ -40,6 +40,10 @@ pub struct Config {
     #[arg(long, env = "KOMGA_KOBO_KEPUBIFY_PATH")]
     pub kobo_kepubify_path: Option<PathBuf>,
 
+    /// Forward unsupported Kobo device API requests to the official Kobo Store.
+    #[arg(long, env = "KOMGA_KOBO_PROXY", default_value_t = false)]
+    pub kobo_proxy: bool,
+
     /// Address on which the HTTP server listens.
     #[arg(long, env = "KOMGA_HOST", default_value = "0.0.0.0")]
     pub host: IpAddr,
@@ -95,6 +99,19 @@ mod tests {
         assert_eq!(config.page_hashing.get(), 3);
         assert_eq!(config.kobo_sync_item_limit.get(), 100);
         assert!(config.kobo_kepubify_path.is_none());
+        assert!(!config.kobo_proxy);
+        let kobo = Config::try_parse_from([
+            "komga-server",
+            "--kobo-kepubify-path",
+            "/usr/local/bin/kepubify",
+            "--kobo-proxy",
+        ])
+        .unwrap();
+        assert_eq!(
+            kobo.kobo_kepubify_path.as_deref(),
+            Some(std::path::Path::new("/usr/local/bin/kepubify"))
+        );
+        assert!(kobo.kobo_proxy);
         assert!(Config::try_parse_from(["komga-server", "--page-hashing", "0"]).is_err());
         assert!(Config::try_parse_from(["komga-server", "--kobo-sync-item-limit", "0"]).is_err());
     }

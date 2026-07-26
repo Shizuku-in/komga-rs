@@ -48,6 +48,7 @@ async fn main() -> anyhow::Result<()> {
         .await?
         .with_page_hashing(config.page_hashing)
         .with_kobo_sync_item_limit(config.kobo_sync_item_limit)
+        .with_kobo_proxy(config.kobo_proxy)
         .with_kobo_kepubify_path(config.kobo_kepubify_path)
         .await;
     let runtime = state.start_runtime().await?;

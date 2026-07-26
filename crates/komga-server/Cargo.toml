@@ -29,6 +29,7 @@ moka.workspace = true
 rand.workspace = true
 quick-xml.workspace = true
 regex.workspace = true
+reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
