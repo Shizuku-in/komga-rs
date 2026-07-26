@@ -51,6 +51,16 @@ pub struct Config {
     /// TCP port on which the HTTP server listens.
     #[arg(long, env = "KOMGA_PORT", default_value_t = 25600)]
     pub port: u16,
+
+    /// Optional servlet-style prefix under which every HTTP route is mounted.
+    #[arg(long, env = "KOMGA_CONTEXT_PATH", value_parser = parse_context_path)]
+    pub context_path: Option<String>,
+}
+
+fn parse_context_path(value: &str) -> Result<String, String> {
+    komga_core::valid_server_context_path(value)
+        .then(|| value.to_owned())
+        .ok_or_else(|| "context path must start with '/' and end with an ASCII letter or digit".to_owned())
 }
 
 impl Config {
@@ -100,6 +110,7 @@ mod tests {
         assert_eq!(config.kobo_sync_item_limit.get(), 100);
         assert!(config.kobo_kepubify_path.is_none());
         assert!(!config.kobo_proxy);
+        assert!(config.context_path.is_none());
         let kobo = Config::try_parse_from([
             "komga-server",
             "--kobo-kepubify-path",
@@ -114,5 +125,13 @@ mod tests {
         assert!(kobo.kobo_proxy);
         assert!(Config::try_parse_from(["komga-server", "--page-hashing", "0"]).is_err());
         assert!(Config::try_parse_from(["komga-server", "--kobo-sync-item-limit", "0"]).is_err());
+        assert_eq!(
+            Config::try_parse_from(["komga-server", "--context-path", "/komga/sub-path"])
+                .unwrap()
+                .context_path
+                .as_deref(),
+            Some("/komga/sub-path")
+        );
+        assert!(Config::try_parse_from(["komga-server", "--context-path", "/bad/"]).is_err());
     }
 }

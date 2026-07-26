@@ -5,7 +5,7 @@ use std::net::SocketAddr;
 use anyhow::Context;
 use clap::Parser;
 use komga_search::SearchIndex;
-use komga_server::{AppState, build_app, config::Config};
+use komga_server::{AppState, ServerBindSettings, build_app, config::Config};
 use komga_storage::{Storage, TaskStorage};
 use tracing_subscriber::EnvFilter;
 
@@ -37,10 +37,16 @@ async fn main() -> anyhow::Result<()> {
     let tasks = TaskStorage::connect_path(&tasks_database_file)
         .await
         .with_context(|| format!("failed to open task database {}", tasks_database_file.display()))?;
-    let address = SocketAddr::new(config.host, config.port);
+    let database_settings = storage.server_settings().await?;
+    let effective_context_path = resolve_context_path(&config.context_path, &database_settings.server_context_path);
+    let address = SocketAddr::new(
+        config.host,
+        resolve_server_port(config.port, database_settings.server_port),
+    );
     let listener = tokio::net::TcpListener::bind(address)
         .await
         .with_context(|| format!("failed to bind {address}"))?;
+    let effective_address = listener.local_addr().context("failed to read bound server address")?;
 
     let search = SearchIndex::open(&search_directory)
         .with_context(|| format!("failed to open search index {}", search_directory.display()))?;
@@ -50,7 +56,13 @@ async fn main() -> anyhow::Result<()> {
         .with_kobo_sync_item_limit(config.kobo_sync_item_limit)
         .with_kobo_proxy(config.kobo_proxy)
         .with_kobo_kepubify_path(config.kobo_kepubify_path)
-        .await;
+        .await
+        .with_server_bind_settings(ServerBindSettings {
+            configuration_port: config.port,
+            configuration_context_path: config.context_path,
+            effective_port: Some(effective_address.port()),
+            effective_context_path,
+        });
     let runtime = state.start_runtime().await?;
     let signal_shutdown = runtime.shutdown_handle();
     let server_shutdown = runtime.shutdown_handle();
@@ -59,7 +71,7 @@ async fn main() -> anyhow::Result<()> {
         signal_shutdown.cancel();
     });
 
-    tracing::info!(%address, database = %database_file.display(), tasks_database = %tasks_database_file.display(), "Komga Rust backend listening");
+    tracing::info!(address = %effective_address, database = %database_file.display(), tasks_database = %tasks_database_file.display(), "Komga Rust backend listening");
     let result = axum::serve(listener, build_app(state))
         .with_graceful_shutdown(server_shutdown.cancelled_owned())
         .await;
@@ -86,5 +98,30 @@ async fn shutdown_signal() {
     tokio::select! {
         () = ctrl_c => {},
         () = terminate => {},
+    }
+}
+
+fn resolve_server_port(configuration: u16, database: Option<u16>) -> u16 {
+    database.unwrap_or(configuration)
+}
+
+fn resolve_context_path(configuration: &Option<String>, database: &Option<String>) -> String {
+    database.clone().or_else(|| configuration.clone()).unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn database_bindings_override_configuration_and_clear_back_to_it() {
+        assert_eq!(resolve_server_port(25_600, Some(12_345)), 12_345);
+        assert_eq!(resolve_server_port(25_600, None), 25_600);
+        assert_eq!(
+            resolve_context_path(&Some("/config".into()), &Some("/database".into())),
+            "/database"
+        );
+        assert_eq!(resolve_context_path(&Some("/config".into()), &None), "/config");
+        assert_eq!(resolve_context_path(&None, &None), "");
     }
 }
