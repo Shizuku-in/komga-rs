@@ -48,6 +48,8 @@ mod media_cases;
 mod metrics_cases;
 #[path = "api_cases/opds.rs"]
 mod opds_cases;
+#[path = "api_cases/operations.rs"]
+mod operations_cases;
 #[path = "api_cases/page_hashes.rs"]
 mod page_hash_cases;
 #[path = "api_cases/progress.rs"]
