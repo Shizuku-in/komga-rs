@@ -2,7 +2,7 @@
 
 #![warn(missing_docs)]
 
-use std::io;
+use std::{fs::File, io, path::Path};
 use thiserror::Error;
 
 use komga_core::{
@@ -68,6 +68,17 @@ pub enum MediaAnalysisError {
     /// Server shutdown was requested between archive entries.
     #[error("media analysis cancelled")]
     Cancelled,
+}
+
+/// Errors produced while adding converted KEPUB positions to analyzed EPUB media.
+#[derive(Debug, Error)]
+pub enum KepubSpanError {
+    /// Server shutdown was requested while reading converted resources.
+    #[error("KEPUB span enrichment cancelled")]
+    Cancelled,
+    /// The converted file is not a readable KEPUB archive with matching resources.
+    #[error("could not read converted KEPUB positions")]
+    Invalid,
 }
 
 /// Errors produced while reading or converting an already analyzed page.
@@ -233,6 +244,45 @@ pub fn analyze_book(
         Some(detected),
         Some("ERR_1001"),
     ))
+}
+
+/// Adds Kobo span identifiers from a converted KEPUB to an ordinary reflowable EPUB analysis.
+///
+/// Fixed-layout publications, native KEPUB files, non-EPUB media, and unsuccessful
+/// analyses are left unchanged. The converted archive is read only and all other
+/// metadata continues to come from the original EPUB.
+///
+/// # Errors
+///
+/// Returns [`KepubSpanError::Cancelled`] when the callback requests stop, or
+/// [`KepubSpanError::Invalid`] when the converted archive or a spine resource
+/// cannot be read.
+pub fn enrich_kobo_spans(
+    media: &mut Media,
+    kepub_path: &Path,
+    cancelled: impl Fn() -> bool,
+) -> Result<(), KepubSpanError> {
+    if media.status != MediaStatus::Ready || media.media_type.as_deref() != Some(EPUB_MEDIA_TYPE) || media.epub_is_kepub
+    {
+        return Ok(());
+    }
+    let Some(komga_core::MediaExtension::Epub(extension)) = media.extension.as_mut() else {
+        return Ok(());
+    };
+    if extension.is_fixed_layout {
+        return Ok(());
+    }
+    if cancelled() {
+        return Err(KepubSpanError::Cancelled);
+    }
+    let file = File::open(kepub_path).map_err(|_| KepubSpanError::Invalid)?;
+    let mut archive = zip::ZipArchive::new(file).map_err(|_| KepubSpanError::Invalid)?;
+    epub::positions::enrich_from_kepub(&mut archive, &media.files, &mut extension.positions, &cancelled).map_err(
+        |error| match error {
+            epub::positions::PositionError::Cancelled => KepubSpanError::Cancelled,
+            epub::positions::PositionError::Invalid => KepubSpanError::Invalid,
+        },
+    )
 }
 
 /// Returns the media type produced when a stored page is delivered.
@@ -796,6 +846,55 @@ mod tests {
         assert_eq!(extension.positions.len(), 2);
         assert_eq!(extension.positions[0].kobo_span.as_deref(), Some("kobo.1.1"));
         assert!(extension.positions[1].kobo_span.is_some());
+    }
+
+    #[test]
+    fn enriches_ordinary_epub_positions_from_a_converted_kepub() {
+        let temporary = tempfile::tempdir().unwrap();
+        let source_path = temporary.path().join("ordinary.epub");
+        let converted_path = temporary.path().join("ordinary.kepub.epub");
+        let opf = r#"<?xml version="1.0"?>
+            <package xmlns="http://www.idpf.org/2007/opf" version="3.0">
+              <metadata/>
+              <manifest><item id="page" href="page.xhtml" media-type="application/xhtml+xml"/></manifest>
+              <spine><itemref idref="page"/></spine>
+            </package>"#;
+        let ordinary = format!("<html><body>{}</body></html>", "x".repeat(1600));
+        let converted = format!(
+            "<html><body><span class=\"koboSpan\" id=\"kobo.1.1\">start</span>{}<span class=\"koboSpan\" id=\"kobo.1.2\">end</span></body></html>",
+            "x".repeat(1400)
+        );
+        write_epub(&source_path, opf, &[("page.xhtml", ordinary.as_bytes())]);
+        write_epub(&converted_path, opf, &[("page.xhtml", converted.as_bytes())]);
+
+        let mut media = analyze_book(&book(&source_path), false, || false).unwrap();
+        let Some(komga_core::MediaExtension::Epub(extension)) = media.extension.as_ref() else {
+            panic!("expected EPUB extension");
+        };
+        assert!(extension.positions.len() >= 2);
+        assert!(extension.positions.iter().all(|position| position.kobo_span.is_none()));
+
+        enrich_kobo_spans(&mut media, &converted_path, || false).unwrap();
+        let Some(komga_core::MediaExtension::Epub(extension)) = media.extension.as_ref() else {
+            panic!("expected EPUB extension");
+        };
+        assert_eq!(extension.positions[0].kobo_span.as_deref(), Some("kobo.1.1"));
+        assert!(
+            extension.positions[1..]
+                .iter()
+                .any(|position| position.kobo_span.is_some())
+        );
+    }
+
+    #[test]
+    fn skips_kepub_enrichment_for_fixed_layout_media() {
+        let source = book(&kotlin_archive("epub3.epub"));
+        let mut media = analyze_book(&source, false, || false).unwrap();
+        let before = media.clone();
+
+        enrich_kobo_spans(&mut media, Path::new("missing.kepub.epub"), || false).unwrap();
+
+        assert_eq!(media, before);
     }
 
     #[test]

@@ -8,7 +8,7 @@
 
 mod navigation;
 pub(crate) mod package;
-mod positions;
+pub(crate) mod positions;
 
 use std::{collections::BTreeSet, path::Path};
 

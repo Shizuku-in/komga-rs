@@ -15,7 +15,7 @@ use zip::ZipArchive;
 use super::package::read_entry_text;
 
 /// Failures surfaced separately so analysis can preserve Kotlin error codes.
-pub(super) enum PositionError {
+pub(crate) enum PositionError {
     /// Server shutdown was requested during resource traversal.
     Cancelled,
     /// A required XHTML resource could not be parsed or read.
@@ -120,6 +120,56 @@ pub(super) fn compute(
         }
     }
     Ok(positions)
+}
+
+/// Adds Kobo span identifiers from a converted KEPUB to existing Readium locators.
+pub(crate) fn enrich_from_kepub(
+    archive: &mut ZipArchive<File>,
+    resources: &[MediaFile],
+    locators: &mut [R2Locator],
+    cancelled: &impl Fn() -> bool,
+) -> Result<(), PositionError> {
+    let reading_order = resources
+        .iter()
+        .filter(|file| file.sub_type.as_deref() == Some(EPUB_PAGE_SUBTYPE))
+        .collect::<Vec<_>>();
+    let kobo_positions = reading_order
+        .iter()
+        .map(|file| {
+            if cancelled() {
+                return Err(PositionError::Cancelled);
+            }
+            let content = read_entry_text(archive, &file.file_name).map_err(|_| PositionError::Invalid)?;
+            Ok((
+                file.file_name.as_str(),
+                positions_from_kobo_spans(&content, file.file_size),
+            ))
+        })
+        .collect::<Result<HashMap<_, _>, PositionError>>()?;
+    let counts = locators
+        .iter()
+        .fold(HashMap::<String, usize>::new(), |mut counts, locator| {
+            *counts.entry(locator.href.clone()).or_default() += 1;
+            counts
+        });
+
+    for locator in locators.iter_mut() {
+        if cancelled() {
+            return Err(PositionError::Cancelled);
+        }
+        let progression = locator
+            .locations
+            .as_ref()
+            .and_then(|location| location.progression)
+            .unwrap_or_default();
+        locator.kobo_span = if counts.get(locator.href.as_str()).copied().unwrap_or_default() == 1 || progression == 0.0
+        {
+            Some("kobo.1.1".to_owned())
+        } else {
+            nearest_kobo_span(kobo_positions.get(locator.href.as_str()), progression)
+        };
+    }
+    Ok(())
 }
 
 fn locator(file: &MediaFile, progression: f32, position: i32, kobo_span: Option<String>) -> R2Locator {
