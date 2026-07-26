@@ -104,6 +104,48 @@ impl TaskRecord {
         }
     }
 
+    /// Builds a Kotlin-compatible user-requested book source-file deletion task.
+    pub fn delete_book(book_id: &str) -> Self {
+        let priority = 8;
+        let id = format!("DELETE_BOOK_{book_id}");
+        Self {
+            id: id.clone(),
+            priority,
+            group_id: None,
+            class: "org.gotson.komga.application.tasks.Task$DeleteBook".into(),
+            simple_type: "DeleteBook".into(),
+            payload: serde_json::json!({
+                "bookId": book_id,
+                "priority": priority,
+                "groupId": null,
+                "uniqueId": id,
+            })
+            .to_string(),
+            owner: None,
+        }
+    }
+
+    /// Builds a Kotlin-compatible user-requested series source-file deletion task.
+    pub fn delete_series(series_id: &str) -> Self {
+        let priority = 8;
+        let id = format!("DELETE_SERIES_{series_id}");
+        Self {
+            id: id.clone(),
+            priority,
+            group_id: None,
+            class: "org.gotson.komga.application.tasks.Task$DeleteSeries".into(),
+            simple_type: "DeleteSeries".into(),
+            payload: serde_json::json!({
+                "seriesId": series_id,
+                "priority": priority,
+                "groupId": null,
+                "uniqueId": id,
+            })
+            .to_string(),
+            owner: None,
+        }
+    }
+
     /// Builds a Kotlin-compatible book analysis task.
     pub fn analyze_book(book_id: &str, series_id: &str, priority: i32) -> Self {
         let id = format!("ANALYZE_BOOK_{book_id}");

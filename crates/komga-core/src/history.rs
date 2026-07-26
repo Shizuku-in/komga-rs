@@ -1,6 +1,6 @@
 //! Durable administrative history records.
 
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, path::Path};
 
 use chrono::{Local, NaiveDateTime};
 use serde::Serialize;
@@ -66,5 +66,85 @@ impl HistoricalEvent {
                 ("page media type".into(), page.media_type.clone()),
             ]),
         )
+    }
+
+    /// Creates the Kotlin-compatible audit record for a user-requested source-file deletion.
+    #[must_use]
+    pub fn book_file_deleted(book: &Book) -> Self {
+        let name = book
+            .url
+            .to_file_path()
+            .map(|path| path.to_string_lossy().into_owned())
+            .unwrap_or_else(|()| book.url.to_string());
+        Self::new(
+            "BookFileDeleted",
+            Some(book.id.clone()),
+            Some(book.series_id.clone()),
+            BTreeMap::from([
+                ("reason".into(), "File was deleted by user request".into()),
+                ("name".into(), name),
+            ]),
+        )
+    }
+
+    /// Creates the Kotlin-compatible audit record for an empty series directory deletion.
+    #[must_use]
+    pub fn series_folder_deleted(series_id: &str, path: &Path) -> Self {
+        Self::new(
+            "SeriesFolderDeleted",
+            None,
+            Some(series_id.to_owned()),
+            BTreeMap::from([
+                ("reason".into(), "Folder was deleted because it was empty".into()),
+                ("name".into(), path.to_string_lossy().into_owned()),
+            ]),
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use chrono::Local;
+    use url::Url;
+
+    use super::*;
+
+    fn book() -> Book {
+        let now = Local::now().naive_local();
+        Book {
+            id: "book".into(),
+            name: "Volume".into(),
+            url: Url::from_file_path("/library/Series/Volume.cbz").unwrap(),
+            file_last_modified: now,
+            file_size: 42,
+            file_hash: String::new(),
+            file_hash_koreader: String::new(),
+            number: 1,
+            series_id: "series".into(),
+            library_id: "library".into(),
+            deleted_date: None,
+            oneshot: false,
+            created_date: None,
+            last_modified_date: None,
+        }
+    }
+
+    #[test]
+    fn source_deletion_events_match_kotlin_fields() {
+        let event = HistoricalEvent::book_file_deleted(&book());
+        assert_eq!(event.event_type, "BookFileDeleted");
+        assert_eq!(event.book_id.as_deref(), Some("book"));
+        assert_eq!(event.series_id.as_deref(), Some("series"));
+        assert_eq!(event.properties["reason"], "File was deleted by user request");
+        assert_eq!(event.properties["name"], "/library/Series/Volume.cbz");
+
+        let event = HistoricalEvent::series_folder_deleted("series", Path::new("/library/Series"));
+        assert_eq!(event.event_type, "SeriesFolderDeleted");
+        assert_eq!(event.book_id, None);
+        assert_eq!(event.series_id.as_deref(), Some("series"));
+        assert_eq!(event.properties["reason"], "Folder was deleted because it was empty");
+        assert_eq!(event.properties["name"], "/library/Series");
     }
 }

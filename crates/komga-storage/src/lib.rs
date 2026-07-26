@@ -22,6 +22,7 @@ mod read_progress;
 mod referential;
 mod schema;
 mod settings;
+mod source_deletion;
 mod sync;
 mod tasks;
 
@@ -1153,6 +1154,41 @@ mod tests {
                 "priority": 1,
                 "groupId": null,
                 "uniqueId": "REMOVE_HASHED_PAGES_book",
+            })
+        );
+    }
+
+    #[test]
+    fn source_deletion_tasks_match_kotlin_payloads() {
+        let book = TaskRecord::delete_book("book");
+        assert_eq!(book.id, "DELETE_BOOK_book");
+        assert_eq!(book.priority, 8);
+        assert_eq!(book.group_id, None);
+        assert_eq!(book.class, "org.gotson.komga.application.tasks.Task$DeleteBook");
+        assert_eq!(book.simple_type, "DeleteBook");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&book.payload).unwrap(),
+            serde_json::json!({
+                "bookId": "book",
+                "priority": 8,
+                "groupId": null,
+                "uniqueId": "DELETE_BOOK_book",
+            })
+        );
+
+        let series = TaskRecord::delete_series("series");
+        assert_eq!(series.id, "DELETE_SERIES_series");
+        assert_eq!(series.priority, 8);
+        assert_eq!(series.group_id, None);
+        assert_eq!(series.class, "org.gotson.komga.application.tasks.Task$DeleteSeries");
+        assert_eq!(series.simple_type, "DeleteSeries");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&series.payload).unwrap(),
+            serde_json::json!({
+                "seriesId": "series",
+                "priority": 8,
+                "groupId": null,
+                "uniqueId": "DELETE_SERIES_series",
             })
         );
     }
