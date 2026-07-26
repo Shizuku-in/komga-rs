@@ -110,6 +110,27 @@ impl HistoricalEvent {
         )
     }
 
+    /// Creates the Kotlin-compatible audit record for a completed CBZ conversion.
+    #[must_use]
+    pub fn book_converted(book: &Book, previous: &Book) -> Self {
+        let name = book
+            .url
+            .to_file_path()
+            .map(|path| path.to_string_lossy().into_owned())
+            .unwrap_or_else(|()| book.url.to_string());
+        let former_file = previous
+            .url
+            .to_file_path()
+            .map(|path| path.to_string_lossy().into_owned())
+            .unwrap_or_else(|()| previous.url.to_string());
+        Self::new(
+            "BookConverted",
+            Some(book.id.clone()),
+            Some(book.series_id.clone()),
+            BTreeMap::from([("name".into(), name), ("former file".into(), former_file)]),
+        )
+    }
+
     /// Creates the Kotlin-compatible audit record for an empty series directory deletion.
     #[must_use]
     pub fn series_folder_deleted(series_id: &str, path: &Path) -> Self {
@@ -180,5 +201,16 @@ mod tests {
 
         let event = HistoricalEvent::book_file_deleted_for_reason(&book(), "File was deleted to import an upgrade");
         assert_eq!(event.properties["reason"], "File was deleted to import an upgrade");
+
+        let mut previous = book();
+        previous.url = Url::from_file_path("/library/Series/Volume.cbr").unwrap();
+        let mut converted = previous.clone();
+        converted.url = Url::from_file_path("/library/Series/Volume.cbz").unwrap();
+        let event = HistoricalEvent::book_converted(&converted, &previous);
+        assert_eq!(event.event_type, "BookConverted");
+        assert_eq!(event.book_id.as_deref(), Some("book"));
+        assert_eq!(event.series_id.as_deref(), Some("series"));
+        assert_eq!(event.properties["name"], "/library/Series/Volume.cbz");
+        assert_eq!(event.properties["former file"], "/library/Series/Volume.cbr");
     }
 }

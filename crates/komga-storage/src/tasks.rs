@@ -84,6 +84,66 @@ impl TaskRecord {
         }
     }
 
+    /// Builds a Kotlin-compatible discovery task for RAR books awaiting CBZ conversion.
+    pub fn find_books_to_convert(library_id: &str, priority: i32) -> Self {
+        let id = format!("FIND_BOOKS_TO_CONVERT_{library_id}");
+        Self {
+            id: id.clone(),
+            priority,
+            group_id: None,
+            class: "org.gotson.komga.application.tasks.Task$FindBooksToConvert".into(),
+            simple_type: "FindBooksToConvert".into(),
+            payload: serde_json::json!({
+                "libraryId": library_id,
+                "priority": priority,
+                "groupId": null,
+                "uniqueId": id,
+            })
+            .to_string(),
+            owner: None,
+        }
+    }
+
+    /// Builds a Kotlin-compatible task that converts one RAR book to CBZ.
+    pub fn convert_book(book_id: &str, series_id: &str, priority: i32) -> Self {
+        let id = format!("CONVERT_BOOK_{book_id}");
+        Self {
+            id: id.clone(),
+            priority,
+            group_id: Some(series_id.to_owned()),
+            class: "org.gotson.komga.application.tasks.Task$ConvertBook".into(),
+            simple_type: "ConvertBook".into(),
+            payload: serde_json::json!({
+                "bookId": book_id,
+                "priority": priority,
+                "groupId": series_id,
+                "uniqueId": id,
+            })
+            .to_string(),
+            owner: None,
+        }
+    }
+
+    /// Builds a Kotlin-compatible task that repairs one book filename extension.
+    pub fn repair_extension(book_id: &str, series_id: &str, priority: i32) -> Self {
+        let id = format!("REPAIR_EXTENSION_{book_id}");
+        Self {
+            id: id.clone(),
+            priority,
+            group_id: Some(series_id.to_owned()),
+            class: "org.gotson.komga.application.tasks.Task$RepairExtension".into(),
+            simple_type: "RepairExtension".into(),
+            payload: serde_json::json!({
+                "bookId": book_id,
+                "priority": priority,
+                "groupId": series_id,
+                "uniqueId": id,
+            })
+            .to_string(),
+            owner: None,
+        }
+    }
+
     /// Builds a Kotlin-compatible empty-trash task.
     pub fn empty_trash(library_id: &str, priority: i32) -> Self {
         let id = format!("EMPTY_TRASH_{library_id}");

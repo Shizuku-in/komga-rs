@@ -22,6 +22,7 @@ mod read_progress;
 mod referential;
 mod schema;
 mod settings;
+mod source_conversion;
 mod source_deletion;
 mod source_import;
 mod sync;
@@ -1227,6 +1228,48 @@ mod tests {
         assert_eq!(artwork.id, "REFRESH_BOOK_LOCAL_ARTWORK_book");
         assert_eq!(artwork.group_id, None);
         assert_eq!(artwork.simple_type, "RefreshBookLocalArtwork");
+    }
+
+    #[test]
+    fn conversion_tasks_match_kotlin_payloads_and_groups() {
+        let discovery = TaskRecord::find_books_to_convert("library", 0);
+        assert_eq!(discovery.id, "FIND_BOOKS_TO_CONVERT_library");
+        assert_eq!(discovery.group_id, None);
+        assert_eq!(
+            discovery.class,
+            "org.gotson.komga.application.tasks.Task$FindBooksToConvert"
+        );
+        assert_eq!(discovery.simple_type, "FindBooksToConvert");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&discovery.payload).unwrap(),
+            serde_json::json!({
+                "libraryId": "library",
+                "priority": 0,
+                "groupId": null,
+                "uniqueId": "FIND_BOOKS_TO_CONVERT_library",
+            })
+        );
+
+        let conversion = TaskRecord::convert_book("book", "series", 1);
+        assert_eq!(conversion.id, "CONVERT_BOOK_book");
+        assert_eq!(conversion.group_id.as_deref(), Some("series"));
+        assert_eq!(conversion.class, "org.gotson.komga.application.tasks.Task$ConvertBook");
+        assert_eq!(conversion.simple_type, "ConvertBook");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&conversion.payload).unwrap(),
+            serde_json::json!({
+                "bookId": "book",
+                "priority": 1,
+                "groupId": "series",
+                "uniqueId": "CONVERT_BOOK_book",
+            })
+        );
+
+        let repair = TaskRecord::repair_extension("book", "series", 2);
+        assert_eq!(repair.id, "REPAIR_EXTENSION_book");
+        assert_eq!(repair.group_id.as_deref(), Some("series"));
+        assert_eq!(repair.class, "org.gotson.komga.application.tasks.Task$RepairExtension");
+        assert_eq!(repair.simple_type, "RepairExtension");
     }
 
     #[tokio::test]
