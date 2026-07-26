@@ -1,4 +1,3 @@
-komga/
 target/
 .komga/
 *.sqlite-shm

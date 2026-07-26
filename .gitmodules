@@ -1,0 +1,3 @@
+[submodule "komga"]
+	path = komga
+	url = https://github.com/gotson/komga
