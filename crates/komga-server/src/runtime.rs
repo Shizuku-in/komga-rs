@@ -105,9 +105,14 @@ impl AppState {
     ///
     /// # Errors
     ///
-    /// The result remains fallible for API compatibility with embedders; current
-    /// startup work does not perform an additional database query.
+    /// Historical reflowable EPUBs without Kobo spans are submitted at the
+    /// lowest priority before workers begin claiming tasks.
     pub async fn start_runtime(&self) -> Result<AppRuntime, StorageError> {
+        for target in self.storage.list_epub_kobo_span_backfill_targets().await? {
+            self.tasks
+                .save_if_absent(&TaskRecord::analyze_book(&target.book_id, &target.series_id, 0))
+                .await?;
+        }
         let handles = vec![
             tokio::spawn(worker_supervisor(self.clone(), self.task_pool_size.subscribe())),
             tokio::spawn(scheduler_loop(self.clone())),

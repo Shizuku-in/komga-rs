@@ -5,9 +5,6 @@ use komga_core::{MediaExtension, ThumbnailBook};
 
 use super::*;
 
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
-
 #[tokio::test]
 async fn kobo_core_sync_progress_and_resources_form_a_complete_device_loop() {
     let (_temporary, storage, tasks, book, media) =
@@ -418,24 +415,13 @@ async fn kobo_core_sync_progress_and_resources_form_a_complete_device_loop() {
     );
 }
 
-#[cfg(unix)]
 #[tokio::test]
-async fn kobo_converts_and_caches_reflowable_epub_delivery() {
-    let (temporary, storage, tasks, book, _media) = analyzed_media_fixture(
+async fn kobo_converts_and_caches_reflowable_epub_delivery_without_external_program() {
+    let (_temporary, storage, tasks, book, _media) = analyzed_media_fixture(
         "epub/The Incomplete Theft - Ralph Burke.epub",
         "The Incomplete Theft.epub",
     )
     .await;
-    let executable = temporary.path().join("kepubify");
-    let count = temporary.path().join("kepubify-count");
-    fs::write(
-        &executable,
-        format!("#!/bin/sh\necho run >> '{}'\ncp \"$1\" \"$3\"\n", count.display()),
-    )
-    .unwrap();
-    let mut permissions = fs::metadata(&executable).unwrap().permissions();
-    permissions.set_mode(0o755);
-    fs::set_permissions(&executable, permissions).unwrap();
 
     let mut user = User::new("kepub@example.org".into(), "unused".into());
     user.roles.insert(UserRole::KoboSync);
@@ -451,11 +437,7 @@ async fn kobo_converts_and_caches_reflowable_epub_delivery() {
         )
         .await
         .unwrap();
-    let state = AppState::new(storage, tasks)
-        .await
-        .unwrap()
-        .with_kobo_kepubify_path(Some(executable))
-        .await;
+    let state = AppState::new(storage, tasks).await.unwrap();
     let app = build_app(state);
 
     let metadata = app
@@ -496,7 +478,77 @@ async fn kobo_converts_and_caches_reflowable_epub_delivery() {
                 .unwrap()
                 .contains(".kepub.epub")
         );
-        assert!(body_bytes(response).await.starts_with(b"PK"));
+        let bytes = body_bytes(response).await;
+        assert!(bytes.starts_with(b"PK"));
+        let mut archive = ZipArchive::new(Cursor::new(bytes)).unwrap();
+        let chapter = (0..archive.len()).find_map(|index| {
+            let mut entry = archive.by_index(index).ok()?;
+            if !entry.name().ends_with(".xhtml") || entry.name().contains("titlepage-dummy") {
+                return None;
+            }
+            let mut content = String::new();
+            entry.read_to_string(&mut content).ok()?;
+            content.contains("koboSpan").then_some(content)
+        });
+        assert!(chapter.is_some());
     }
-    assert_eq!(fs::read_to_string(count).unwrap().lines().count(), 1);
+}
+
+#[tokio::test]
+async fn kobo_delivers_native_kepub_without_reconverting_it() {
+    let (_temporary, storage, tasks, book, mut media) =
+        analyzed_media_fixture("epub/The Incomplete Theft - Ralph Burke.epub", "Native.kepub.epub").await;
+    media.epub_is_kepub = true;
+    storage.replace_media_analysis(&media).await.unwrap();
+
+    let mut user = User::new("native-kepub@example.org".into(), "unused".into());
+    user.roles.insert(UserRole::KoboSync);
+    user.roles.insert(UserRole::FileDownload);
+    storage.create_user(&user).await.unwrap();
+    let key = "native-kepub-key";
+    storage
+        .create_api_key(
+            "native-kepub-key-id",
+            &user.id,
+            &hex::encode(Sha512::digest(key.as_bytes())),
+            "Kobo",
+        )
+        .await
+        .unwrap();
+    let app = build_app(AppState::new(storage, tasks).await.unwrap());
+
+    let metadata = app
+        .clone()
+        .oneshot(
+            Request::get(format!("/kobo/{key}/v1/library/{}/metadata", book.id))
+                .header(header::HOST, "127.0.0.1:4567")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(metadata.status(), StatusCode::OK);
+    let metadata = body_json(metadata).await;
+    assert_eq!(metadata[0]["DownloadUrls"][0]["Format"], "KEPUB");
+    assert!(
+        metadata[0]["DownloadUrls"][0]["Url"]
+            .as_str()
+            .unwrap()
+            .ends_with("?convert_kepub=false")
+    );
+
+    let source = fs::read(book.url.to_file_path().unwrap()).unwrap();
+    let response = app
+        .oneshot(
+            Request::get(format!(
+                "/kobo/{key}/v1/books/{}/file/epub?convert_kepub=false",
+                book.id
+            ))
+            .body(Body::empty())
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(body_bytes(response).await, source);
 }

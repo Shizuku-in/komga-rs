@@ -1,4 +1,4 @@
-//! External kepubify execution and temporary converted-file caching.
+//! In-process KEPUB conversion with an optional external compatibility fallback.
 
 use std::{
     ffi::OsStr,
@@ -14,21 +14,29 @@ use std::{
 
 use chrono::NaiveDateTime;
 use komga_core::Book;
+use komga_media::{convert_epub_to_kepub, validate_kepub_conversion};
 use moka::future::Cache;
 use tempfile::TempDir;
 use thiserror::Error;
-use tokio::{process::Command, time::timeout};
+use tokio::{
+    process::Command,
+    sync::{OwnedSemaphorePermit, Semaphore},
+    task::spawn_blocking,
+    time::timeout,
+};
 use tokio_util::sync::CancellationToken;
 
 const VALIDATION_TIMEOUT: Duration = Duration::from_secs(3);
 const CONVERSION_TIMEOUT: Duration = Duration::from_secs(10);
 const CACHE_IDLE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const DIAGNOSTIC_LIMIT: u64 = 8 * 1024;
+const CONVERSION_PERMITS: usize = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct CacheKey {
     book_id: String,
     file_last_modified: NaiveDateTime,
+    file_size: i64,
 }
 
 /// One converted file whose temporary directory lives as long as this value.
@@ -48,38 +56,44 @@ impl fmt::Debug for CachedKepub {
     }
 }
 
-/// Failures while invoking the configured KEPUB converter.
+/// Failures while producing a validated temporary KEPUB.
 #[derive(Debug, Clone, Error)]
 pub(crate) enum KepubConversionError {
-    #[error("Kepub conversion is not available")]
-    Unavailable,
     #[error("book URL is not a local file")]
     InvalidSource,
     #[error("could not prepare KEPUB conversion: {0}")]
     Prepare(String),
-    #[error("could not start kepubify: {0}")]
+    #[error("in-process KEPUB conversion failed: {0}")]
+    BuiltIn(String),
+    #[error("in-process KEPUB conversion worker failed: {0}")]
+    Worker(String),
+    #[error("could not start kepubify fallback: {0}")]
     Spawn(String),
-    #[error("kepubify conversion timed out")]
+    #[error("kepubify fallback timed out")]
     Timeout,
-    #[error("kepubify conversion was cancelled")]
+    #[error("KEPUB conversion was cancelled")]
     Cancelled,
-    #[error("kepubify exited unsuccessfully{0}")]
+    #[error("kepubify fallback exited unsuccessfully{0}")]
     Exit(String),
-    #[error("kepubify did not produce a converted file")]
+    #[error("kepubify fallback did not produce a converted file")]
     MissingOutput,
+    #[error("generated KEPUB failed validation: {0}")]
+    Validation(String),
 }
 
-/// Cloneable process service shared by media analysis and Kobo downloads.
 #[derive(Clone)]
-pub(crate) struct KepubService {
-    configuration: Arc<RwLock<KepubConfiguration>>,
-    conversion_timeout: Duration,
-}
-
-struct KepubConfiguration {
+struct ExternalConfiguration {
     executable: Option<Arc<PathBuf>>,
     effective_path: Option<PathBuf>,
+}
+
+/// Cloneable conversion service shared by media analysis and Kobo downloads.
+#[derive(Clone)]
+pub(crate) struct KepubService {
+    external: Arc<RwLock<ExternalConfiguration>>,
     cache: Cache<CacheKey, Arc<CachedKepub>>,
+    conversion_limit: Arc<Semaphore>,
+    conversion_timeout: Duration,
 }
 
 impl KepubService {
@@ -93,23 +107,21 @@ impl KepubService {
         conversion_timeout: Duration,
     ) -> Self {
         Self {
-            configuration: Arc::new(RwLock::new(
-                KepubConfiguration::configure(path, validation_timeout).await,
+            external: Arc::new(RwLock::new(
+                ExternalConfiguration::configure(path, validation_timeout).await,
             )),
+            cache: Cache::builder().time_to_idle(CACHE_IDLE_TIMEOUT).build(),
+            conversion_limit: Arc::new(Semaphore::new(CONVERSION_PERMITS)),
             conversion_timeout,
         }
     }
 
     pub(crate) fn is_available(&self) -> bool {
-        self.configuration
-            .read()
-            .expect("kepub configuration lock poisoned")
-            .executable
-            .is_some()
+        true
     }
 
     pub(crate) fn effective_path(&self) -> Option<PathBuf> {
-        self.configuration
+        self.external
             .read()
             .expect("kepub configuration lock poisoned")
             .effective_path
@@ -117,11 +129,11 @@ impl KepubService {
     }
 
     pub(crate) async fn reconfigure(&self, database_path: Option<PathBuf>, fallback_path: Option<PathBuf>) {
-        let mut configuration = KepubConfiguration::configure(database_path, VALIDATION_TIMEOUT).await;
+        let mut configuration = ExternalConfiguration::configure(database_path, VALIDATION_TIMEOUT).await;
         if configuration.executable.is_none() && fallback_path.is_some() {
-            configuration = KepubConfiguration::configure(fallback_path, VALIDATION_TIMEOUT).await;
+            configuration = ExternalConfiguration::configure(fallback_path, VALIDATION_TIMEOUT).await;
         }
-        *self.configuration.write().expect("kepub configuration lock poisoned") = configuration;
+        *self.external.write().expect("kepub configuration lock poisoned") = configuration;
     }
 
     pub(crate) async fn get_or_convert(
@@ -129,26 +141,25 @@ impl KepubService {
         book: &Book,
         shutdown: &CancellationToken,
     ) -> Result<Arc<CachedKepub>, KepubConversionError> {
-        let (executable, cache) = {
-            let configuration = self.configuration.read().expect("kepub configuration lock poisoned");
-            (
-                configuration
-                    .executable
-                    .clone()
-                    .ok_or(KepubConversionError::Unavailable)?,
-                configuration.cache.clone(),
-            )
-        };
+        let executable = self
+            .external
+            .read()
+            .expect("kepub configuration lock poisoned")
+            .executable
+            .clone();
         let key = CacheKey {
             book_id: book.id.clone(),
             file_last_modified: book.file_last_modified,
+            file_size: book.file_size,
         };
         let book = book.clone();
         let shutdown = shutdown.clone();
+        let conversion_limit = self.conversion_limit.clone();
         let conversion_timeout = self.conversion_timeout;
-        cache
+        self.cache
             .try_get_with(key, async move {
-                convert(executable.as_ref(), &book, &shutdown, conversion_timeout)
+                let permit = acquire_permit(conversion_limit, &shutdown).await?;
+                convert(executable, &book, &shutdown, conversion_timeout, permit)
                     .await
                     .map(Arc::new)
             })
@@ -157,31 +168,39 @@ impl KepubService {
     }
 }
 
-impl KepubConfiguration {
+impl ExternalConfiguration {
     fn disabled() -> Self {
         Self {
             executable: None,
             effective_path: None,
-            cache: Cache::builder().time_to_idle(CACHE_IDLE_TIMEOUT).build(),
         }
     }
 
     async fn configure(path: Option<PathBuf>, validation_timeout: Duration) -> Self {
         let Some(path) = path else {
-            tracing::info!("Kepub conversion unavailable: kepubify path is not set");
+            tracing::info!("External kepubify fallback is not configured");
             return Self::disabled();
         };
         if executable_file(&path) || command_succeeds(&path, validation_timeout).await {
-            tracing::info!(path = %path.display(), "Kepub conversion available");
+            tracing::info!(path = %path.display(), "External kepubify fallback is available");
             Self {
                 executable: Some(Arc::new(path.clone())),
                 effective_path: Some(path),
-                cache: Cache::builder().time_to_idle(CACHE_IDLE_TIMEOUT).build(),
             }
         } else {
-            tracing::warn!(path = %path.display(), "Kepub conversion unavailable: kepubify path is invalid");
+            tracing::warn!(path = %path.display(), "External kepubify fallback path is invalid");
             Self::disabled()
         }
+    }
+}
+
+async fn acquire_permit(
+    semaphore: Arc<Semaphore>,
+    shutdown: &CancellationToken,
+) -> Result<OwnedSemaphorePermit, KepubConversionError> {
+    tokio::select! {
+        () = shutdown.cancelled() => Err(KepubConversionError::Cancelled),
+        permit = semaphore.acquire_owned() => permit.map_err(|error| KepubConversionError::Prepare(error.to_string())),
     }
 }
 
@@ -206,10 +225,11 @@ async fn command_succeeds(command: &Path, duration: Duration) -> bool {
 }
 
 async fn convert(
-    executable: &Path,
+    executable: Option<Arc<PathBuf>>,
     book: &Book,
     shutdown: &CancellationToken,
     conversion_timeout: Duration,
+    _permit: OwnedSemaphorePermit,
 ) -> Result<CachedKepub, KepubConversionError> {
     let source = book
         .url
@@ -223,14 +243,97 @@ async fn convert(
         .file_stem()
         .unwrap_or_else(|| OsStr::new("book"))
         .to_string_lossy();
+    let built_in_destination = directory.path().join(format!("{stem}.internal.kepub.epub"));
+    let built_in = run_built_in(source.clone(), built_in_destination.clone(), shutdown.clone()).await;
+    match built_in {
+        Ok(length) => {
+            return Ok(CachedKepub {
+                _directory: directory,
+                path: built_in_destination,
+                length,
+            });
+        }
+        Err(BuiltInFailure::Cancelled) => return Err(KepubConversionError::Cancelled),
+        Err(BuiltInFailure::Worker(error)) => return Err(KepubConversionError::Worker(error)),
+        Err(BuiltInFailure::Conversion(error)) if error.allows_external_fallback() && executable.is_some() => {
+            tracing::warn!(%error, path = %source.display(), "In-process KEPUB conversion failed; using external fallback");
+        }
+        Err(BuiltInFailure::Conversion(error)) => return Err(KepubConversionError::BuiltIn(error.to_string())),
+    }
+
     let destination = directory.path().join(format!("{stem}.kepub.epub"));
     let diagnostic_path = directory.path().join("kepubify.stderr.log");
+    run_external(
+        executable.expect("fallback executable checked above").as_ref(),
+        &source,
+        &destination,
+        &diagnostic_path,
+        shutdown,
+        conversion_timeout,
+    )
+    .await?;
+    validate_output(source, destination.clone(), shutdown.clone()).await?;
+    let metadata = std::fs::metadata(&destination).map_err(|_| KepubConversionError::MissingOutput)?;
+    if !metadata.is_file() {
+        return Err(KepubConversionError::MissingOutput);
+    }
+    Ok(CachedKepub {
+        _directory: directory,
+        path: destination,
+        length: metadata.len(),
+    })
+}
+
+enum BuiltInFailure {
+    Cancelled,
+    Worker(String),
+    Conversion(komga_media::KepubConversionError),
+}
+
+async fn run_built_in(
+    source: PathBuf,
+    destination: PathBuf,
+    shutdown: CancellationToken,
+) -> Result<u64, BuiltInFailure> {
+    spawn_blocking(move || {
+        let source_file = StdFile::open(&source)
+            .map_err(|error| BuiltInFailure::Conversion(komga_media::KepubConversionError::Io(error)))?;
+        let destination_file = StdFile::create(&destination)
+            .map_err(|error| BuiltInFailure::Conversion(komga_media::KepubConversionError::Io(error)))?;
+        convert_epub_to_kepub(source_file, destination_file, || shutdown.is_cancelled())
+            .map_err(BuiltInFailure::Conversion)?;
+        let source_file = StdFile::open(&source)
+            .map_err(|error| BuiltInFailure::Conversion(komga_media::KepubConversionError::Io(error)))?;
+        let destination_file = StdFile::open(&destination)
+            .map_err(|error| BuiltInFailure::Conversion(komga_media::KepubConversionError::Io(error)))?;
+        validate_kepub_conversion(source_file, destination_file, || shutdown.is_cancelled())
+            .map_err(BuiltInFailure::Conversion)?;
+        std::fs::metadata(&destination)
+            .map(|metadata| metadata.len())
+            .map_err(|error| BuiltInFailure::Conversion(komga_media::KepubConversionError::Io(error)))
+    })
+    .await
+    .map_err(|error| BuiltInFailure::Worker(error.to_string()))?
+    .map_err(|error| match error {
+        BuiltInFailure::Conversion(komga_media::KepubConversionError::Cancelled) => BuiltInFailure::Cancelled,
+        error => error,
+    })
+}
+
+async fn run_external(
+    executable: &Path,
+    source: &Path,
+    destination: &Path,
+    diagnostic_path: &Path,
+    shutdown: &CancellationToken,
+    conversion_timeout: Duration,
+) -> Result<(), KepubConversionError> {
     let diagnostic =
-        StdFile::create(&diagnostic_path).map_err(|error| KepubConversionError::Prepare(error.to_string()))?;
+        StdFile::create(diagnostic_path).map_err(|error| KepubConversionError::Prepare(error.to_string()))?;
     let mut child = Command::new(executable)
-        .arg(&source)
+        .arg(source)
         .arg("-o")
-        .arg(&destination)
+        .arg(destination)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::from(diagnostic))
@@ -253,7 +356,7 @@ async fn convert(
         }
     };
     if !status.success() {
-        let diagnostic = read_diagnostic(&diagnostic_path);
+        let diagnostic = read_diagnostic(diagnostic_path);
         let suffix = if diagnostic.is_empty() {
             String::new()
         } else {
@@ -261,15 +364,28 @@ async fn convert(
         };
         return Err(KepubConversionError::Exit(suffix));
     }
-    let metadata = std::fs::metadata(&destination).map_err(|_| KepubConversionError::MissingOutput)?;
-    if !metadata.is_file() {
+    if !std::fs::metadata(destination).is_ok_and(|metadata| metadata.is_file()) {
         return Err(KepubConversionError::MissingOutput);
     }
-    Ok(CachedKepub {
-        _directory: directory,
-        path: destination,
-        length: metadata.len(),
+    Ok(())
+}
+
+async fn validate_output(
+    source: PathBuf,
+    destination: PathBuf,
+    shutdown: CancellationToken,
+) -> Result<(), KepubConversionError> {
+    spawn_blocking(move || {
+        let source = StdFile::open(source).map_err(|error| KepubConversionError::Validation(error.to_string()))?;
+        let destination =
+            StdFile::open(destination).map_err(|error| KepubConversionError::Validation(error.to_string()))?;
+        validate_kepub_conversion(source, destination, || shutdown.is_cancelled()).map_err(|error| match error {
+            komga_media::KepubConversionError::Cancelled => KepubConversionError::Cancelled,
+            error => KepubConversionError::Validation(error.to_string()),
+        })
     })
+    .await
+    .map_err(|error| KepubConversionError::Worker(error.to_string()))?
 }
 
 fn read_diagnostic(path: &Path) -> String {
@@ -295,12 +411,35 @@ fn executable_file(path: &Path) -> bool {
 
 #[cfg(all(test, unix))]
 mod tests {
-    use std::{fs, os::unix::fs::PermissionsExt};
+    use std::{fs, io::Write, os::unix::fs::PermissionsExt};
 
     use chrono::Local;
     use url::Url;
+    use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
 
     use super::*;
+
+    fn write_epub(path: &Path, content: &[u8]) {
+        let mut writer = ZipWriter::new(StdFile::create(path).unwrap());
+        writer
+            .start_file(
+                "mimetype",
+                SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
+            )
+            .unwrap();
+        writer.write_all(b"application/epub+zip").unwrap();
+        writer
+            .start_file("META-INF/container.xml", SimpleFileOptions::default())
+            .unwrap();
+        writer.write_all(br#"<?xml version="1.0"?><container xmlns="urn:oasis:names:tc:opendocument:xmlns:container" version="1.0"><rootfiles><rootfile full-path="content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#).unwrap();
+        writer.start_file("content.opf", SimpleFileOptions::default()).unwrap();
+        writer.write_all(br#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0"><metadata/><manifest><item id="chapter" href="chapter.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="chapter"/></spine></package>"#).unwrap();
+        writer
+            .start_file("chapter.xhtml", SimpleFileOptions::default())
+            .unwrap();
+        writer.write_all(content).unwrap();
+        writer.finish().unwrap();
+    }
 
     fn book(path: &Path) -> Book {
         Book {
@@ -331,16 +470,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn converts_once_for_concurrent_and_repeated_cache_access() {
+    async fn in_process_conversion_is_available_without_configuration_and_cached() {
         let temporary = tempfile::tempdir().unwrap();
         let source = temporary.path().join("Book.epub");
-        let count = temporary.path().join("count");
-        fs::write(&source, b"epub").unwrap();
-        let executable = script(
-            temporary.path(),
-            &format!("echo run >> '{}'; cp \"$1\" \"$3\"", count.display()),
-        );
-        let service = KepubService::configure(Some(executable)).await;
+        write_epub(&source, b"<!DOCTYPE html><html><body><p>One. Two.</p></body></html>");
+        let service = KepubService::configure(None).await;
+        assert!(service.is_available());
+        assert_eq!(service.effective_path(), None);
         let book = book(&source);
         let shutdown = CancellationToken::new();
         let (first, second) = tokio::join!(
@@ -349,10 +485,126 @@ mod tests {
         );
         let first = first.unwrap();
         let second = second.unwrap();
-
         assert!(Arc::ptr_eq(&first, &second));
+        let mut archive = zip::ZipArchive::new(StdFile::open(&first.path).unwrap()).unwrap();
+        let mut chapter = String::new();
+        archive
+            .by_name("chapter.xhtml")
+            .unwrap()
+            .read_to_string(&mut chapter)
+            .unwrap();
+        assert!(chapter.contains("koboSpan"));
+    }
+
+    #[tokio::test]
+    async fn source_snapshot_change_uses_a_new_cache_entry() {
+        let temporary = tempfile::tempdir().unwrap();
+        let source = temporary.path().join("Book.epub");
+        write_epub(&source, b"<!DOCTYPE html><html><body><p>First.</p></body></html>");
+        let service = KepubService::configure(None).await;
+        let shutdown = CancellationToken::new();
+        let first = service.get_or_convert(&book(&source), &shutdown).await.unwrap();
+
+        write_epub(
+            &source,
+            b"<!DOCTYPE html><html><body><p>A substantially longer replacement chapter. Second.</p></body></html>",
+        );
+        let second = service.get_or_convert(&book(&source), &shutdown).await.unwrap();
+
+        assert!(!Arc::ptr_eq(&first, &second));
+        let mut archive = zip::ZipArchive::new(StdFile::open(&second.path).unwrap()).unwrap();
+        let mut chapter = String::new();
+        archive
+            .by_name("chapter.xhtml")
+            .unwrap()
+            .read_to_string(&mut chapter)
+            .unwrap();
+        assert!(chapter.contains("replacement chapter"));
+    }
+
+    #[tokio::test]
+    async fn conversion_limit_has_two_permits() {
+        let service = KepubService::configure(None).await;
+        let first = service.conversion_limit.clone().acquire_owned().await.unwrap();
+        let second = service.conversion_limit.clone().acquire_owned().await.unwrap();
+        assert!(
+            tokio::time::timeout(
+                Duration::from_millis(10),
+                service.conversion_limit.clone().acquire_owned()
+            )
+            .await
+            .is_err()
+        );
+        drop(first);
+        let third = tokio::time::timeout(
+            Duration::from_millis(50),
+            service.conversion_limit.clone().acquire_owned(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        drop((second, third));
+    }
+
+    #[tokio::test]
+    async fn configured_external_program_does_not_override_in_process_conversion() {
+        let temporary = tempfile::tempdir().unwrap();
+        let source = temporary.path().join("Book.epub");
+        let count = temporary.path().join("count");
+        write_epub(&source, b"<!DOCTYPE html><html><body><p>Text.</p></body></html>");
+        let executable = script(
+            temporary.path(),
+            &format!("echo run >> '{}'; cp \"$1\" \"$3\"", count.display()),
+        );
+        let service = KepubService::configure(Some(executable)).await;
+        service
+            .get_or_convert(&book(&source), &CancellationToken::new())
+            .await
+            .unwrap();
+        assert!(!count.exists());
+    }
+
+    #[tokio::test]
+    async fn compatible_content_failure_uses_validated_external_fallback() {
+        let temporary = tempfile::tempdir().unwrap();
+        let source = temporary.path().join("Book.epub");
+        let fallback = temporary.path().join("fallback.epub");
+        let count = temporary.path().join("count");
+        write_epub(&source, &[0xff, 0xfe]);
+        write_epub(&fallback, b"<!DOCTYPE html><html><body><p>Fallback.</p></body></html>");
+        let executable = script(
+            temporary.path(),
+            &format!("echo run >> '{}'; cp '{}' \"$3\"", count.display(), fallback.display()),
+        );
+        let service = KepubService::configure(Some(executable)).await;
+        service
+            .get_or_convert(&book(&source), &CancellationToken::new())
+            .await
+            .unwrap();
         assert_eq!(fs::read_to_string(count).unwrap().lines().count(), 1);
-        assert_eq!(fs::read(&first.path).unwrap(), b"epub");
+    }
+
+    #[tokio::test]
+    async fn unsafe_input_never_starts_external_fallback() {
+        let temporary = tempfile::tempdir().unwrap();
+        let source = temporary.path().join("Book.epub");
+        let count = temporary.path().join("count");
+        let mut writer = ZipWriter::new(StdFile::create(&source).unwrap());
+        writer.start_file("../bad", SimpleFileOptions::default()).unwrap();
+        writer.write_all(b"bad").unwrap();
+        writer.finish().unwrap();
+        let executable = script(
+            temporary.path(),
+            &format!("echo run >> '{}'; cp \"$1\" \"$3\"", count.display()),
+        );
+        let service = KepubService::configure(Some(executable)).await;
+        assert!(
+            service
+                .get_or_convert(&book(&source), &CancellationToken::new())
+                .await
+                .is_err()
+        );
+        assert!(!count.exists());
     }
 
     #[tokio::test]
@@ -360,7 +612,7 @@ mod tests {
         let temporary = tempfile::tempdir().unwrap();
         let source = temporary.path().join("Book.epub");
         let count = temporary.path().join("count");
-        fs::write(&source, b"epub").unwrap();
+        write_epub(&source, &[0xff]);
         let executable = script(
             temporary.path(),
             &format!("echo run >> '{}'; echo failed >&2; exit 2", count.display()),
@@ -368,17 +620,16 @@ mod tests {
         let service = KepubService::configure(Some(executable)).await;
         let book = book(&source);
         let shutdown = CancellationToken::new();
-
         assert!(service.get_or_convert(&book, &shutdown).await.is_err());
         assert!(service.get_or_convert(&book, &shutdown).await.is_err());
         assert_eq!(fs::read_to_string(count).unwrap().lines().count(), 2);
     }
 
     #[tokio::test]
-    async fn conversion_timeout_terminates_the_process() {
+    async fn external_fallback_timeout_terminates_the_process() {
         let temporary = tempfile::tempdir().unwrap();
         let source = temporary.path().join("Book.epub");
-        fs::write(&source, b"epub").unwrap();
+        write_epub(&source, &[0xff]);
         let executable = script(temporary.path(), "sleep 5");
         let service = KepubService::configure_with_timeouts(
             Some(executable),
@@ -386,7 +637,6 @@ mod tests {
             Duration::from_millis(50),
         )
         .await;
-
         let error = service
             .get_or_convert(&book(&source), &CancellationToken::new())
             .await

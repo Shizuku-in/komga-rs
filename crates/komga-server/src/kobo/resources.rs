@@ -338,7 +338,14 @@ pub(super) async fn book_file(
         .find_media_by_book_id(&book_id)
         .await?
         .ok_or_else(|| ApiError::service_unavailable("Kepub conversion failed"))?;
-    if media.status != MediaStatus::Ready || media.media_type.as_deref() != Some(EPUB_MEDIA_TYPE) || media.epub_is_kepub
+    let is_fixed_layout = matches!(
+        media.extension.as_ref(),
+        Some(MediaExtension::Epub(extension)) if extension.is_fixed_layout
+    );
+    if media.status != MediaStatus::Ready
+        || media.media_type.as_deref() != Some(EPUB_MEDIA_TYPE)
+        || media.epub_is_kepub
+        || is_fixed_layout
     {
         return Err(ApiError::service_unavailable("Kepub conversion failed"));
     }

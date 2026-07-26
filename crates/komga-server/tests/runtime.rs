@@ -6,7 +6,9 @@ use axum::{
 };
 use base64::{Engine, engine::general_purpose::STANDARD};
 use http_body_util::BodyExt;
-use komga_core::{BookMetadataPatch, Library, MetadataUpdate, PageRequest, ScanInterval, User, scan_library_files};
+use komga_core::{
+    BookMetadataPatch, Library, MediaExtension, MetadataUpdate, PageRequest, ScanInterval, User, scan_library_files,
+};
 use komga_media::analyze_book;
 use komga_search::{EntityKind, IndexState, SearchIndex};
 use komga_server::{AppState, build_app};
@@ -54,6 +56,124 @@ async fn file_search_startup_enqueues_only_non_current_indexes() {
         .await
         .unwrap();
     assert!(current_tasks.list().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn startup_kobo_span_backfill_preserves_existing_analyze_task_state() {
+    let storage = Storage::connect_memory().await.unwrap();
+    let tasks = TaskStorage::connect_memory().await.unwrap();
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path().join("library");
+    fs::create_dir_all(root.join("Series")).unwrap();
+    let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../komga/komga/src/test/resources/epub/The Incomplete Theft - Ralph Burke.epub");
+    fs::copy(fixture, root.join("Series/Book.epub")).unwrap();
+    let library = Library::new("EPUB".into(), Url::from_directory_path(&root).unwrap());
+    storage.create_library(&library).await.unwrap();
+    storage
+        .apply_library_scan(&library.id, &scan_library_files(&library, || false).unwrap(), false)
+        .await
+        .unwrap();
+    let book = storage
+        .list_active_books_by_library_id(&library.id)
+        .await
+        .unwrap()
+        .remove(0);
+    let media = analyze_book(&book, false, || false).unwrap();
+    assert!(matches!(
+        &media.extension,
+        Some(MediaExtension::Epub(extension))
+            if !extension.positions.is_empty() && extension.positions.iter().all(|position| position.kobo_span.is_none())
+    ));
+    storage.replace_media_analysis(&media).await.unwrap();
+    let existing = TaskRecord::analyze_book(&book.id, &book.series_id, 8);
+    tasks.save(&existing).await.unwrap();
+    tasks
+        .take_first_of_type("existing-worker", "AnalyzeBook")
+        .await
+        .unwrap();
+
+    let state = AppState::new(storage, tasks.clone()).await.unwrap();
+    let runtime = state.start_runtime().await.unwrap();
+    let queued = tasks.list().await.unwrap();
+    assert_eq!(queued.len(), 1);
+    assert_eq!(queued[0].priority, 8);
+    assert_eq!(queued[0].owner.as_deref(), Some("existing-worker"));
+    assert_eq!(queued[0].payload, existing.payload);
+    runtime.shutdown().await;
+}
+
+#[tokio::test]
+async fn startup_kobo_span_backfill_enriches_once_and_leaves_candidate_set() {
+    let storage = Storage::connect_memory().await.unwrap();
+    let tasks = TaskStorage::connect_memory().await.unwrap();
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path().join("library");
+    fs::create_dir_all(root.join("Series")).unwrap();
+    let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../komga/komga/src/test/resources/epub/The Incomplete Theft - Ralph Burke.epub");
+    fs::copy(fixture, root.join("Series/Book.epub")).unwrap();
+    let mut library = Library::new("EPUB".into(), Url::from_directory_path(&root).unwrap());
+    library.import_epub_book = false;
+    library.import_epub_series = false;
+    library.hash_files = false;
+    library.hash_koreader = false;
+    storage.create_library(&library).await.unwrap();
+    storage
+        .apply_library_scan(&library.id, &scan_library_files(&library, || false).unwrap(), false)
+        .await
+        .unwrap();
+    let book = storage
+        .list_active_books_by_library_id(&library.id)
+        .await
+        .unwrap()
+        .remove(0);
+    storage
+        .replace_media_analysis(&analyze_book(&book, false, || false).unwrap())
+        .await
+        .unwrap();
+
+    let runtime = AppState::new(storage.clone(), tasks.clone())
+        .await
+        .unwrap()
+        .start_runtime()
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let media = storage.find_media_by_book_id(&book.id).await.unwrap().unwrap();
+            let enriched = matches!(
+                media.extension,
+                Some(MediaExtension::Epub(extension))
+                    if !extension.positions.is_empty()
+                        && extension.positions.iter().all(|position| position.kobo_span.is_some())
+            );
+            if enriched && tasks.list().await.unwrap().is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("Kobo span backfill did not complete");
+    runtime.shutdown().await;
+    assert!(storage.list_epub_kobo_span_backfill_targets().await.unwrap().is_empty());
+
+    let second_runtime = AppState::new(storage, tasks.clone())
+        .await
+        .unwrap()
+        .start_runtime()
+        .await
+        .unwrap();
+    assert!(
+        tasks
+            .list()
+            .await
+            .unwrap()
+            .iter()
+            .all(|task| task.simple_type != "AnalyzeBook")
+    );
+    second_runtime.shutdown().await;
 }
 
 #[tokio::test]

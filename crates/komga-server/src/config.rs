@@ -40,7 +40,7 @@ pub struct Config {
     #[arg(long, env = "KOMGA_KOBO_SYNC_ITEM_LIMIT", default_value = "100")]
     pub kobo_sync_item_limit: NonZeroUsize,
 
-    /// Path or command name for the optional external kepubify executable.
+    /// Path or command name for the optional external kepubify fallback.
     #[arg(long, env = "KOMGA_KOBO_KEPUBIFY_PATH")]
     pub kobo_kepubify_path: Option<PathBuf>,
 

@@ -211,10 +211,10 @@ impl AppState {
         self
     }
 
-    /// Configures the optional external kepubify process used by Kobo clients.
+    /// Configures the optional external kepubify fallback used by Kobo clients.
     ///
-    /// An invalid or unavailable executable leaves conversion disabled and does
-    /// not prevent the application from starting.
+    /// An invalid or unavailable executable does not disable in-process
+    /// conversion and does not prevent the application from starting.
     #[must_use]
     pub async fn with_kobo_kepubify_path(mut self, path: Option<PathBuf>) -> Self {
         self.configuration_kepubify_path = path.clone();
