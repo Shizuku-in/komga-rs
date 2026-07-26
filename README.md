@@ -1,6 +1,6 @@
 # komga-rs
 
-An incremental Rust port of the [Komga](https://github.com/gotson/komga) backend. The Kotlin source checked out in `komga/` is the behavioral reference; the Rust implementation is a separate workspace at the repository root.
+An incremental Rust port of the [Komga](https://github.com/gotson/komga) backend. The Kotlin source pinned as the `komga/` Git submodule is the behavioral and Web UI reference; the Rust implementation is a separate workspace at the repository root.
 
 > The core headless backend is usable, but this is not yet a drop-in replacement for a complete Komga server. Users and permissions, library scanning, content browsing and reading, progress, collections and read lists, search, media delivery, metadata, and persistent background tasks are implemented. See [the migration matrix](docs/MIGRATION.md) for exact coverage.
 
@@ -33,7 +33,7 @@ The defaults match Komga:
 - load additional reader fonts from `$HOME/.komga/fonts`, alongside bundled OpenDyslexic files.
 - hash the first and last 3 pages of eligible ZIP books when a library enables page hashing.
 - return at most 100 source books or tags in each Kobo synchronization page.
-- leave KEPUB conversion and Kobo Store proxying disabled until explicitly configured.
+- enable in-process KEPUB conversion, with the external fallback and Kobo Store proxy disabled until configured.
 
 Configuration can be supplied through arguments or environment variables:
 
@@ -58,6 +58,9 @@ KOMGA_KOBO_KEPUBIFY_PATH=/usr/local/bin/kepubify KOMGA_KOBO_PROXY=true \
 KOMGA_PORT=25601 KOMGA_CONTEXT_PATH=/komga \
   cargo run -p komga-server
 ```
+
+`--kobo-kepubify-path` and `KOMGA_KOBO_KEPUBIFY_PATH` are optional compatibility fallbacks. The
+in-process converter remains the primary implementation when either setting is present.
 
 Do not run the Kotlin and Rust servers against the same SQLite file at the same time. Back up an existing database before the first Rust start.
 Migration `0011_page_hashing` deliberately clears existing `PAGE_HASH` rules and thumbnails and resets JPEG page hashes because Rust uses a versioned RGB24 pixel hash instead of Java ImageIO's encoder-dependent bytes.
@@ -154,7 +157,7 @@ Migration `0011_page_hashing` deliberately clears existing `PAGE_HASH` rules and
 
 Authentication is compatible with the current Komga contract: HTTP Basic, `KOMGA-SESSION`, `X-Auth-Token`, and SHA-512-backed `X-API-Key`. Existing Spring BCrypt `$2a$` password hashes are accepted. KOReader routes exclusively accept a plaintext API key in `X-Auth-User` and require the `KOREADER_SYNC` role. Kobo routes exclusively accept a plaintext API key in the `/kobo/{apiKey}` path and require `KOBO_SYNC`; original-file delivery also requires `FILE_DOWNLOAD`. Kobo keys are redacted from request tracing. OPDS 2 also exposes the public authentication document and returns its media type, Basic challenge, and discovery link on authentication failures.
 
-Administrators can retrieve and patch Kotlin-compatible server settings through `/api/v1/settings`. Empty-container cleanup, thumbnail size, task-pool size, remember-me policy, Kobo Store proxying/public URL port, and `kepubify` selection update live after a committed PATCH. `serverPort` and `serverContextPath` are persisted as database overrides and take effect on the next process start; the response reports configuration, database, and current effective values separately. Database values override CLI/environment values, and clearing nullable overrides restores the configured fallback.
+Administrators can retrieve and patch Kotlin-compatible server settings through `/api/v1/settings`. Empty-container cleanup, thumbnail size, task-pool size, remember-me policy, Kobo Store proxying/public URL port, and external `kepubify` fallback selection update live after a committed PATCH. `serverPort` and `serverContextPath` are persisted as database overrides and take effect on the next process start; the response reports configuration, database, and current effective values separately. Database values override CLI/environment values, and clearing nullable overrides restores the configured fallback.
 
 Administrators can inspect nine Komga application metrics through the actuator endpoints. Content gauges query SQLite on each request; task execution and failure measurements are process-local and reset after restart. Announcement and release endpoints read the fixed Komga feed and GitHub release API, cache successful upstream responses for one idle hour, and never cache failures. Announcement read state is persisted per user. These outbound requests are read-only but disclose the server's network address and request metadata to Komga's website or GitHub.
 
@@ -170,7 +173,7 @@ RAR/CBR conversion streams only analyzed pages and ancillary files into a valida
 
 Libraries with `hashKoreader` enabled enqueue Kotlin-compatible `HashBookKoreader` tasks after scans, when the setting is enabled, and after ZIP page removal. The worker computes KOReader's partial MD5 against a source snapshot and conditionally persists it to `FILE_HASH_KOREADER`. KOReader clients can then authenticate, pull, and push Divina/PDF page progress or EPUB resource progress. Hash resolution applies the user's library, age, and sharing-label restrictions before reporting collisions.
 
-Kobo synchronization captures Kotlin-compatible SyncPoint snapshots of each user's visible READY EPUB books and virtual On Deck tag. First and incremental synchronization are transactionally paged with Komga, Calibre Web, and official dotted sync-token compatibility. Metadata, reading state, EPUB/native KEPUB files, and JPEG covers are delivered through path-authenticated routes. When `kepubify` is configured, ordinary reflowable EPUBs advertise and stream a temporary KEPUB from a five-minute idle cache; analysis also records converted KoboSpan positions for newly analyzed or manually reanalyzed books. Enabling `KOMGA_KOBO_PROXY` or the corresponding database setting forwards only the official authorization/content headers and `x-kobo-*` protocol headers to the fixed Kobo Store endpoint, merges official sync pages after local pages, and redirects unknown covers to Kobo's CDN. The `koboPort` server setting corrects device-visible absolute URLs when no forwarded headers are present; it does not create another listener. Store proxying may disclose device and Kobo account tokens to Kobo; it never forwards the local path API key. Unknown routes still return an empty JSON object while proxying is disabled.
+Kobo synchronization captures Kotlin-compatible SyncPoint snapshots of each user's visible READY EPUB books and virtual On Deck tag. First and incremental synchronization are transactionally paged with Komga, Calibre Web, and official dotted sync-token compatibility. Metadata, reading state, EPUB/native KEPUB files, and JPEG covers are delivered through path-authenticated routes. Ordinary reflowable EPUBs always advertise and stream an in-process converted KEPUB from a five-minute idle cache; a configured `kepubify` executable is used only after a compatible content-conversion failure, never to bypass archive safety or resource limits. Native KEPUB and fixed-layout EPUB delivery remains unchanged. Analysis records KoboSpan positions for new books, while startup submits low-priority analysis for eligible historical EPUBs which have no KoboSpan positions. Converted files remain process-local temporary files and never replace Library sources. Enabling `KOMGA_KOBO_PROXY` or the corresponding database setting forwards only the official authorization/content headers and `x-kobo-*` protocol headers to the fixed Kobo Store endpoint, merges official sync pages after local pages, and redirects unknown covers to Kobo's CDN. The `koboPort` server setting corrects device-visible absolute URLs when no forwarded headers are present; it does not create another listener. Store proxying may disclose device and Kobo account tokens to Kobo; it never forwards the local path API key. Unknown routes still return an empty JSON object while proxying is disabled.
 
 Libraries with `hashPages` enabled enqueue Kotlin-compatible discovery and page-hashing tasks at startup, after scans, and when the setting is enabled. Only READY ZIP/CBZ media participates. The first and last configured number of pages are hashed; JPEG pages use a deterministic dimensions-plus-RGB24 representation, while other page types retain raw-byte XXH3-128 hashing. Administrators can classify hashes as `DELETE_AUTO`, `DELETE_MANUAL`, or `IGNORE`, inspect matching pages and previews, and queue all or individual matches for deletion. ZIP removal raw-copies surviving entries in archive order, validates the complete temporary archive and current source snapshot, and then performs a same-directory atomic replacement. Each removed page creates a `DuplicatePageDeleted` historical event in the same database transaction. It does not create a source backup, so back up real libraries before enabling deletion rules.
 
@@ -181,6 +184,12 @@ The modern Series and Book list endpoints support Spring-style pagination, the c
 OPDS 1.2 serves Atom navigation and acquisition feeds, OpenSearch discovery, PSE page streaming, thumbnails, and original files. OPDS 2 serves recommended and paged library feeds, browse facets, grouped search, publications, profile manifests, reading resources, and Readium progression. Both generations enforce the same library and content restrictions as REST, generate proxy-aware absolute links, and reuse the existing media and search implementations.
 
 ## Develop
+
+Initialize the pinned Kotlin and Web UI reference after cloning:
+
+```bash
+git submodule update --init komga
+```
 
 ```bash
 cargo fmt --all -- --check
