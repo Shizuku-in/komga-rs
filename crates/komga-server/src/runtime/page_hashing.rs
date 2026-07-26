@@ -1,5 +1,5 @@
 use chrono::{DateTime, Local};
-use komga_core::{MediaStatus, ZIP_MEDIA_TYPE};
+use komga_core::{MediaStatus, PDF_MEDIA_TYPE, ZIP_MEDIA_TYPE};
 use komga_media::{MediaOperationError, PageHashError, RGB_PAGE_HASH_ALGORITHM, extract_page, hash_page};
 use komga_storage::PageHashUpdate;
 
@@ -98,7 +98,9 @@ pub(super) async fn process_hash_book_pages_task(state: &AppState, task: &TaskRe
             return TaskOutcome::Retry;
         }
     };
-    if media.status != MediaStatus::Ready || media.media_type.as_deref() != Some(ZIP_MEDIA_TYPE) {
+    if media.status != MediaStatus::Ready
+        || !matches!(media.media_type.as_deref(), Some(ZIP_MEDIA_TYPE | PDF_MEDIA_TYPE))
+    {
         return TaskOutcome::Completed;
     }
     let targets = match state
@@ -147,7 +149,7 @@ pub(super) async fn process_hash_book_pages_task(state: &AppState, task: &TaskRe
             }
             let content = extract_page(&hashing_book, &hashing_media, target.number.saturating_add(1))
                 .map_err(PageHashWorkError::Media)?;
-            let computed = hash_page(&content.bytes, &target.media_type).map_err(PageHashWorkError::Hash)?;
+            let computed = hash_page(&content.bytes, &content.media_type).map_err(PageHashWorkError::Hash)?;
             updates.push(PageHashUpdate {
                 number: target.number,
                 file_name: target.file_name,
@@ -232,6 +234,7 @@ mod tests {
     use komga_core::{Library, scan_library_files};
     use komga_media::analyze_book;
     use komga_storage::{Storage, TaskStorage};
+    use pdf_writer::{Finish, Rect, Ref};
     use url::Url;
     use zip::{ZipWriter, write::SimpleFileOptions};
 
@@ -356,5 +359,91 @@ mod tests {
                 .iter()
                 .any(|task| task.id == format!("FIND_DUPLICATE_PAGES_TO_DELETE_{}", library.id))
         );
+    }
+
+    #[tokio::test]
+    async fn pdf_hash_task_hashes_rendered_jpeg_edges_with_rgb_algorithm() {
+        let storage = Storage::connect_memory().await.unwrap();
+        let tasks = TaskStorage::connect_memory().await.unwrap();
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("library");
+        let series = root.join("Series");
+        fs::create_dir_all(&series).unwrap();
+        fs::write(
+            series.join("Volume.pdf"),
+            blank_pdf(&[(100.0, 160.0), (120.0, 160.0), (140.0, 160.0)]),
+        )
+        .unwrap();
+        let mut library = Library::new("Library".into(), Url::from_directory_path(&root).unwrap());
+        library.hash_pages = true;
+        storage.create_library(&library).await.unwrap();
+        storage
+            .apply_library_scan(&library.id, &scan_library_files(&library, || false).unwrap(), false)
+            .await
+            .unwrap();
+        let book = storage
+            .list_active_books_by_library_id(&library.id)
+            .await
+            .unwrap()
+            .remove(0);
+        let media = analyze_book(&book, true, || false).unwrap();
+        storage.replace_media_analysis(&media).await.unwrap();
+        let state = AppState::new(storage.clone(), tasks.clone())
+            .await
+            .unwrap()
+            .with_page_hashing(NonZeroUsize::new(1).unwrap());
+
+        assert_eq!(
+            process_find_missing_page_hashes_task(
+                &state,
+                &TaskRecord::find_books_with_missing_page_hash(&library.id, 0),
+            )
+            .await,
+            TaskOutcome::Completed
+        );
+        let task = tasks
+            .list()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|task| task.simple_type == "HashBookPages")
+            .unwrap();
+        assert_eq!(
+            process_hash_book_pages_task(&state, &task).await,
+            TaskOutcome::Completed
+        );
+
+        let persisted = storage.find_media_by_book_id(&book.id).await.unwrap().unwrap();
+        assert!(!persisted.pages[0].file_hash.is_empty());
+        assert!(persisted.pages[1].file_hash.is_empty());
+        assert!(!persisted.pages[2].file_hash.is_empty());
+        assert!(
+            storage
+                .list_page_hash_targets(&book.id, 1, RGB_PAGE_HASH_ALGORITHM)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    fn blank_pdf(page_sizes: &[(f32, f32)]) -> Vec<u8> {
+        let mut pdf = pdf_writer::Pdf::new();
+        let catalog = Ref::new(1);
+        let pages = Ref::new(2);
+        let page_refs = (0..page_sizes.len())
+            .map(|index| Ref::new(i32::try_from(index + 3).unwrap()))
+            .collect::<Vec<_>>();
+        pdf.catalog(catalog).pages(pages);
+        pdf.pages(pages)
+            .kids(page_refs.iter().copied())
+            .count(i32::try_from(page_refs.len()).unwrap());
+        for (page_ref, (width, height)) in page_refs.into_iter().zip(page_sizes.iter().copied()) {
+            let mut page = pdf.page(page_ref);
+            page.parent(pages);
+            page.media_box(Rect::new(0.0, 0.0, width, height));
+            page.resources();
+            page.finish();
+        }
+        pdf.finish()
     }
 }

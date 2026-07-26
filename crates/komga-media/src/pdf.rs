@@ -158,7 +158,7 @@ fn scale(crop_width: f32, crop_height: f32, render_width: f32, render_height: f3
     Some(requested.min(viewport_limit))
 }
 
-fn write_pages(pdf: &Pdf, page_indices: &[usize]) -> Result<Vec<u8>, MediaOperationError> {
+pub(crate) fn write_pages(pdf: &Pdf, page_indices: &[usize]) -> Result<Vec<u8>, MediaOperationError> {
     let mut output = pdf_writer::Pdf::new();
     let mut next_ref = Ref::new(1);
     let catalog_ref = next_ref.bump();

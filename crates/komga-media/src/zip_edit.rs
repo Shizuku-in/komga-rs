@@ -1,94 +1,61 @@
 use std::{
     collections::HashSet,
-    fs::{self, File, Metadata},
-    io::{self, Read, Seek, SeekFrom},
+    fs::{self, File, Metadata, OpenOptions},
+    io::{Read, Seek, SeekFrom},
     path::Path,
     time::SystemTime,
 };
 
 use chrono::{DateTime, Local};
 use komga_core::{Book, HashedPageTarget, Media, MediaStatus, ZIP_MEDIA_TYPE};
-use tempfile::NamedTempFile;
-use thiserror::Error;
 use url::Url;
 use zip::{ZipArchive, ZipWriter};
 
-use crate::{FileHashError, MediaAnalysisError, PageHashError, analyze_book, hash_file, hash_page};
+use crate::{
+    FileHashError, MediaAnalysisError, PageRemovalError, PageRemovalRewrite, analyze_book, hash_file, hash_page,
+    page_removal::CreatedOutput,
+};
 
-/// Validated result of atomically removing pages from a local ZIP book.
-#[derive(Debug)]
-pub struct ZipPageRemoval {
-    /// Filesystem snapshot after atomic replacement.
-    pub book: Book,
-    /// Reanalyzed media with surviving page hashes restored.
-    pub media: Media,
-    /// Snapshot-bound targets that were removed.
-    pub removed: Vec<HashedPageTarget>,
-    /// Whether the original first page was removed.
-    pub removed_first_page: bool,
-}
-
-/// Failures produced while safely rewriting a ZIP book.
-#[derive(Debug, Error)]
-pub enum ZipPageRemovalError {
-    /// Cancellation was requested before source replacement.
-    #[error("ZIP page removal cancelled")]
-    Cancelled,
-    /// The task no longer matches the book, media, or target pages.
-    #[error("ZIP page removal target is stale: {0}")]
-    Stale(String),
-    /// The source is not a local ready ZIP book.
-    #[error("ZIP page removal is unsupported: {0}")]
-    Unsupported(String),
-    /// The source ZIP or generated ZIP could not be read or written.
-    #[error("could not rewrite ZIP: {0}")]
-    Archive(String),
-    /// Filesystem metadata, hashing, or replacement failed.
-    #[error("could not replace ZIP source: {0}")]
-    Io(#[from] io::Error),
-    /// A page hash could not be recomputed for source validation.
-    #[error("could not validate page hash: {0}")]
-    Hash(#[from] PageHashError),
-    /// The generated ZIP did not preserve every expected entry.
-    #[error("generated ZIP failed validation: {0}")]
-    Validation(String),
-}
-
-/// Removes snapshot-bound pages from a local ready ZIP using a validated,
-/// same-directory atomic replacement.
+/// Writes a validated ZIP containing every page except the snapshot-bound
+/// targets to `output` without replacing the source file.
 ///
 /// Every retained entry is copied as compressed data in original archive
 /// order. Entry metadata, archive comment, directories, and non-page files are
-/// preserved. The source is never replaced unless the temporary archive can be
-/// fully reanalyzed and the source fingerprint is still current.
+/// preserved. The source is never modified, and `output` must not exist.
 ///
 /// # Errors
 ///
-/// Returns [`ZipPageRemovalError::Stale`] when any task snapshot differs from
-/// current media or source metadata, and [`ZipPageRemovalError::Validation`]
+/// Returns [`PageRemovalError::Stale`] when any task snapshot differs from
+/// current media or source metadata, and [`PageRemovalError::Validation`]
 /// when the generated archive differs from the expected survivors.
-pub fn remove_hashed_zip_pages(
+pub fn rewrite_hashed_zip_pages(
     book: &Book,
     media: &Media,
     targets: &[HashedPageTarget],
+    output: &Path,
     analyze_dimensions: bool,
     cancelled: impl Fn() -> bool,
-) -> Result<ZipPageRemoval, ZipPageRemovalError> {
+) -> Result<PageRemovalRewrite, PageRemovalError> {
     if cancelled() {
-        return Err(ZipPageRemovalError::Cancelled);
+        return Err(PageRemovalError::Cancelled);
     }
     if media.status != MediaStatus::Ready || media.media_type.as_deref() != Some(ZIP_MEDIA_TYPE) {
-        return Err(ZipPageRemovalError::Unsupported(
+        return Err(PageRemovalError::Unsupported(
             "media must be a ready application/zip".into(),
         ));
     }
     if targets.is_empty() {
-        return Err(ZipPageRemovalError::Stale("no pages were requested".into()));
+        return Err(PageRemovalError::Stale("no pages were requested".into()));
     }
     let path = book
         .url
         .to_file_path()
-        .map_err(|()| ZipPageRemovalError::Unsupported("book URL is not a local file".into()))?;
+        .map_err(|()| PageRemovalError::Unsupported("book URL is not a local file".into()))?;
+    if path == output {
+        return Err(PageRemovalError::Unsupported(
+            "output must differ from the source".into(),
+        ));
+    }
     let initial_metadata = fs::metadata(&path)?;
     ensure_book_snapshot(book, &initial_metadata)?;
     let initial_fingerprint = source_fingerprint(&path, &cancelled)?;
@@ -96,30 +63,30 @@ pub fn remove_hashed_zip_pages(
     let mut target_indices = HashSet::new();
     for target in targets {
         let index = usize::try_from(target.page_number - 1)
-            .map_err(|_| ZipPageRemovalError::Stale("page number is not positive".into()))?;
+            .map_err(|_| PageRemovalError::Stale("page number is not positive".into()))?;
         if !target_indices.insert(index) {
-            return Err(ZipPageRemovalError::Stale(
+            return Err(PageRemovalError::Stale(
                 "the same page was requested more than once".into(),
             ));
         }
         let page = media
             .pages
             .get(index)
-            .ok_or_else(|| ZipPageRemovalError::Stale("page number is outside current media".into()))?;
+            .ok_or_else(|| PageRemovalError::Stale("page number is outside current media".into()))?;
         if page.file_name != target.file_name
             || page.media_type != target.media_type
             || page.file_hash != target.file_hash
             || page.file_size != Some(target.file_size)
             || target.file_hash.is_empty()
         {
-            return Err(ZipPageRemovalError::Stale(format!(
+            return Err(PageRemovalError::Stale(format!(
                 "page {} no longer matches its task payload",
                 target.page_number
             )));
         }
     }
     if target_indices.len() >= media.pages.len() {
-        return Err(ZipPageRemovalError::Stale("removal would delete every page".into()));
+        return Err(PageRemovalError::Stale("removal would delete every page".into()));
     }
 
     validate_source_archive(&path, targets, &cancelled)?;
@@ -127,36 +94,39 @@ pub fn remove_hashed_zip_pages(
         .iter()
         .map(|target| target.file_name.as_str())
         .collect::<HashSet<_>>();
-    let retained_pages = media
+    let retained_original_indices = media
         .pages
         .iter()
         .enumerate()
         .filter(|(index, _)| !target_indices.contains(index))
-        .map(|(_, page)| page.clone())
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
+    let retained_pages = retained_original_indices
+        .iter()
+        .map(|index| media.pages[*index].clone())
         .collect::<Vec<_>>();
 
-    let parent = path
-        .parent()
-        .ok_or_else(|| ZipPageRemovalError::Unsupported("book path has no parent directory".into()))?;
-    let mut temporary = NamedTempFile::new_in(parent)?;
-    rewrite_archive(&path, &mut temporary, &removed_names, &cancelled)?;
-    temporary.as_file().set_permissions(initial_metadata.permissions())?;
-    temporary.as_file().sync_all()?;
+    let mut output_guard = CreatedOutput::new(output);
+    let mut rewritten = OpenOptions::new().write(true).create_new(true).open(output)?;
+    output_guard.arm();
+    rewrite_archive(&path, &mut rewritten, &removed_names, &cancelled)?;
+    rewritten.set_permissions(initial_metadata.permissions())?;
+    rewritten.sync_all()?;
 
     if cancelled() {
-        return Err(ZipPageRemovalError::Cancelled);
+        return Err(PageRemovalError::Cancelled);
     }
-    let temporary_metadata = temporary.as_file().metadata()?;
+    let temporary_metadata = rewritten.metadata()?;
     let mut temporary_book = book.clone();
-    temporary_book.url = Url::from_file_path(temporary.path())
-        .map_err(|()| ZipPageRemovalError::Unsupported("temporary path cannot be represented as a URL".into()))?;
+    temporary_book.url = Url::from_file_path(output)
+        .map_err(|()| PageRemovalError::Unsupported("output path cannot be represented as a URL".into()))?;
     temporary_book.file_size = i64::try_from(temporary_metadata.len()).unwrap_or(i64::MAX);
     temporary_book.file_last_modified = scan_timestamp(&temporary_metadata);
     temporary_book.file_hash.clear();
     temporary_book.file_hash_koreader.clear();
     let mut created_media =
         analyze_book(&temporary_book, analyze_dimensions, &cancelled).map_err(|error| match error {
-            MediaAnalysisError::Cancelled => ZipPageRemovalError::Cancelled,
+            MediaAnalysisError::Cancelled => PageRemovalError::Cancelled,
         })?;
     validate_created_media(&created_media, &retained_pages, media)?;
     for page in &mut created_media.pages {
@@ -167,55 +137,54 @@ pub fn remove_hashed_zip_pages(
                     && candidate.media_type == page.media_type
                     && candidate.file_size == page.file_size
             })
-            .ok_or_else(|| ZipPageRemovalError::Validation(format!("unexpected page {}", page.file_name)))?;
+            .ok_or_else(|| PageRemovalError::Validation(format!("unexpected page {}", page.file_name)))?;
         page.file_hash.clone_from(&previous.file_hash);
     }
 
     if cancelled() {
-        return Err(ZipPageRemovalError::Cancelled);
+        return Err(PageRemovalError::Cancelled);
     }
     let current_metadata = fs::metadata(&path)?;
     ensure_same_metadata(&initial_metadata, &current_metadata, &path)?;
     let current_fingerprint = source_fingerprint(&path, &cancelled)?;
     if initial_fingerprint != current_fingerprint {
-        return Err(ZipPageRemovalError::Stale("source bytes changed during rewrite".into()));
+        return Err(PageRemovalError::Stale("source bytes changed during rewrite".into()));
     }
     if cancelled() {
-        return Err(ZipPageRemovalError::Cancelled);
+        return Err(PageRemovalError::Cancelled);
     }
-    temporary
-        .persist(&path)
-        .map_err(|error| ZipPageRemovalError::Io(error.error))?;
-
-    let final_metadata = fs::metadata(&path)?;
+    let final_metadata = fs::metadata(output)?;
     let mut updated_book = book.clone();
     updated_book.file_size = i64::try_from(final_metadata.len()).unwrap_or(i64::MAX);
     updated_book.file_last_modified = scan_timestamp(&final_metadata);
     updated_book.file_hash.clear();
     updated_book.file_hash_koreader.clear();
-    Ok(ZipPageRemoval {
+    let result = PageRemovalRewrite {
         book: updated_book,
         media: created_media,
         removed: targets.to_vec(),
+        retained_original_indices,
         removed_first_page: targets.iter().any(|target| target.page_number == 1),
-    })
+    };
+    output_guard.keep();
+    Ok(result)
 }
 
 fn validate_source_archive(
     path: &Path,
     targets: &[HashedPageTarget],
     cancelled: &impl Fn() -> bool,
-) -> Result<(), ZipPageRemovalError> {
+) -> Result<(), PageRemovalError> {
     ensure_unique_entry_names(path)?;
     let mut archive = ZipArchive::new(File::open(path)?).map_err(archive_error)?;
     let mut names = HashSet::new();
     for index in 0..archive.len() {
         if cancelled() {
-            return Err(ZipPageRemovalError::Cancelled);
+            return Err(PageRemovalError::Cancelled);
         }
         let entry = archive.by_index(index).map_err(archive_error)?;
         if !names.insert(entry.name().to_owned()) {
-            return Err(ZipPageRemovalError::Stale(format!(
+            return Err(PageRemovalError::Stale(format!(
                 "archive contains duplicate entry name {:?}",
                 entry.name()
             )));
@@ -223,19 +192,19 @@ fn validate_source_archive(
     }
     for target in targets {
         if cancelled() {
-            return Err(ZipPageRemovalError::Cancelled);
+            return Err(PageRemovalError::Cancelled);
         }
         let mut entry = archive.by_name(&target.file_name).map_err(archive_error)?;
         if i64::try_from(entry.size()).ok() != Some(target.file_size) {
-            return Err(ZipPageRemovalError::Stale(format!(
+            return Err(PageRemovalError::Stale(format!(
                 "entry size changed for {:?}",
                 target.file_name
             )));
         }
         let mut bytes = Vec::with_capacity(usize::try_from(entry.size()).unwrap_or(0));
-        entry.read_to_end(&mut bytes).map_err(ZipPageRemovalError::Io)?;
+        entry.read_to_end(&mut bytes).map_err(PageRemovalError::Io)?;
         if hash_page(&bytes, &target.media_type)?.hash != target.file_hash {
-            return Err(ZipPageRemovalError::Stale(format!(
+            return Err(PageRemovalError::Stale(format!(
                 "entry hash changed for {:?}",
                 target.file_name
             )));
@@ -244,7 +213,7 @@ fn validate_source_archive(
     Ok(())
 }
 
-fn ensure_unique_entry_names(path: &Path) -> Result<(), ZipPageRemovalError> {
+fn ensure_unique_entry_names(path: &Path) -> Result<(), PageRemovalError> {
     const EOCD_SIGNATURE: [u8; 4] = [0x50, 0x4b, 0x05, 0x06];
     const ZIP64_LOCATOR_SIGNATURE: [u8; 4] = [0x50, 0x4b, 0x06, 0x07];
     const ZIP64_EOCD_SIGNATURE: [u8; 4] = [0x50, 0x4b, 0x06, 0x06];
@@ -259,9 +228,9 @@ fn ensure_unique_entry_names(path: &Path) -> Result<(), ZipPageRemovalError> {
     let eocd_index = tail
         .windows(EOCD_SIGNATURE.len())
         .rposition(|value| value == EOCD_SIGNATURE)
-        .ok_or_else(|| ZipPageRemovalError::Archive("end-of-central-directory record is missing".into()))?;
+        .ok_or_else(|| PageRemovalError::Archive("end-of-central-directory record is missing".into()))?;
     if tail.len().saturating_sub(eocd_index) < 22 {
-        return Err(ZipPageRemovalError::Archive(
+        return Err(PageRemovalError::Archive(
             "end-of-central-directory record is truncated".into(),
         ));
     }
@@ -271,20 +240,20 @@ fn ensure_unique_entry_names(path: &Path) -> Result<(), ZipPageRemovalError> {
     if entry_count == u64::from(u16::MAX) || central_offset == u64::from(u32::MAX) {
         let eocd_absolute = file_len - u64::try_from(tail.len() - eocd_index).unwrap_or(0);
         if eocd_absolute < 20 {
-            return Err(ZipPageRemovalError::Archive("ZIP64 locator is missing".into()));
+            return Err(PageRemovalError::Archive("ZIP64 locator is missing".into()));
         }
         file.seek(SeekFrom::Start(eocd_absolute - 20))?;
         let mut locator = [0; 20];
         file.read_exact(&mut locator)?;
         if locator[..4] != ZIP64_LOCATOR_SIGNATURE {
-            return Err(ZipPageRemovalError::Archive("ZIP64 locator is invalid".into()));
+            return Err(PageRemovalError::Archive("ZIP64 locator is invalid".into()));
         }
         let zip64_offset = u64::from_le_bytes(locator[8..16].try_into().expect("fixed slice"));
         file.seek(SeekFrom::Start(zip64_offset))?;
         let mut zip64 = [0; 56];
         file.read_exact(&mut zip64)?;
         if zip64[..4] != ZIP64_EOCD_SIGNATURE {
-            return Err(ZipPageRemovalError::Archive("ZIP64 end record is invalid".into()));
+            return Err(PageRemovalError::Archive("ZIP64 end record is invalid".into()));
         }
         entry_count = u64::from_le_bytes(zip64[32..40].try_into().expect("fixed slice"));
         central_offset = u64::from_le_bytes(zip64[48..56].try_into().expect("fixed slice"));
@@ -296,9 +265,7 @@ fn ensure_unique_entry_names(path: &Path) -> Result<(), ZipPageRemovalError> {
         let mut header = [0; 46];
         file.read_exact(&mut header)?;
         if header[..4] != CENTRAL_SIGNATURE {
-            return Err(ZipPageRemovalError::Archive(
-                "central-directory entry is invalid".into(),
-            ));
+            return Err(PageRemovalError::Archive("central-directory entry is invalid".into()));
         }
         let name_len = usize::from(u16::from_le_bytes([header[28], header[29]]));
         let extra_len = u64::from(u16::from_le_bytes([header[30], header[31]]));
@@ -306,13 +273,13 @@ fn ensure_unique_entry_names(path: &Path) -> Result<(), ZipPageRemovalError> {
         let mut name = vec![0; name_len];
         file.read_exact(&mut name)?;
         if !names.insert(name.clone()) {
-            return Err(ZipPageRemovalError::Stale(format!(
+            return Err(PageRemovalError::Stale(format!(
                 "archive contains duplicate entry name {:?}",
                 String::from_utf8_lossy(&name)
             )));
         }
         file.seek(SeekFrom::Current(i64::try_from(extra_len + comment_len).map_err(
-            |_| ZipPageRemovalError::Archive("central-directory entry is too large".into()),
+            |_| PageRemovalError::Archive("central-directory entry is too large".into()),
         )?))?;
     }
     Ok(())
@@ -320,19 +287,19 @@ fn ensure_unique_entry_names(path: &Path) -> Result<(), ZipPageRemovalError> {
 
 fn rewrite_archive(
     path: &Path,
-    temporary: &mut NamedTempFile,
+    temporary: &mut File,
     removed_names: &HashSet<&str>,
     cancelled: &impl Fn() -> bool,
-) -> Result<(), ZipPageRemovalError> {
+) -> Result<(), PageRemovalError> {
     let mut archive = ZipArchive::new(File::open(path)?).map_err(archive_error)?;
     let comment = archive.comment().to_vec();
-    let mut writer = ZipWriter::new(temporary.as_file_mut());
+    let mut writer = ZipWriter::new(temporary);
     writer
         .set_raw_comment(comment.into_boxed_slice())
         .map_err(archive_error)?;
     for index in 0..archive.len() {
         if cancelled() {
-            return Err(ZipPageRemovalError::Cancelled);
+            return Err(PageRemovalError::Cancelled);
         }
         let entry = archive.by_index(index).map_err(archive_error)?;
         if !removed_names.contains(entry.name()) {
@@ -359,9 +326,9 @@ fn validate_created_media(
     created: &Media,
     retained_pages: &[komga_core::BookPage],
     previous: &Media,
-) -> Result<(), ZipPageRemovalError> {
+) -> Result<(), PageRemovalError> {
     if created.status != MediaStatus::Ready || created.media_type.as_deref() != Some(ZIP_MEDIA_TYPE) {
-        return Err(ZipPageRemovalError::Validation(
+        return Err(PageRemovalError::Validation(
             "temporary archive is not a ready ZIP".into(),
         ));
     }
@@ -372,7 +339,7 @@ fn validate_created_media(
                 && left.file_size == right.file_size
         });
     if !pages_match {
-        return Err(ZipPageRemovalError::Validation(
+        return Err(PageRemovalError::Validation(
             "temporary archive does not contain exactly the retained pages".into(),
         ));
     }
@@ -384,36 +351,34 @@ fn validate_created_media(
                 && left.sub_type == right.sub_type
         });
     if !files_match {
-        return Err(ZipPageRemovalError::Validation(
+        return Err(PageRemovalError::Validation(
             "temporary archive does not contain exactly the ancillary files".into(),
         ));
     }
     Ok(())
 }
 
-fn source_fingerprint(path: &Path, cancelled: &impl Fn() -> bool) -> Result<String, ZipPageRemovalError> {
+fn source_fingerprint(path: &Path, cancelled: &impl Fn() -> bool) -> Result<String, PageRemovalError> {
     hash_file(path, cancelled).map_err(|error| match error {
-        FileHashError::Cancelled => ZipPageRemovalError::Cancelled,
-        FileHashError::Io(error) => ZipPageRemovalError::Io(error),
-        FileHashError::InvalidSource(source) | FileHashError::SourceChanged(source) => {
-            ZipPageRemovalError::Stale(source)
-        }
+        FileHashError::Cancelled => PageRemovalError::Cancelled,
+        FileHashError::Io(error) => PageRemovalError::Io(error),
+        FileHashError::InvalidSource(source) | FileHashError::SourceChanged(source) => PageRemovalError::Stale(source),
     })
 }
 
-fn ensure_book_snapshot(book: &Book, metadata: &Metadata) -> Result<(), ZipPageRemovalError> {
+fn ensure_book_snapshot(book: &Book, metadata: &Metadata) -> Result<(), PageRemovalError> {
     let size = i64::try_from(metadata.len()).unwrap_or(i64::MAX);
     if size != book.file_size || scan_timestamp(metadata) != book.file_last_modified {
-        return Err(ZipPageRemovalError::Stale(
+        return Err(PageRemovalError::Stale(
             "book filesystem snapshot changed before rewrite".into(),
         ));
     }
     Ok(())
 }
 
-fn ensure_same_metadata(initial: &Metadata, current: &Metadata, path: &Path) -> Result<(), ZipPageRemovalError> {
+fn ensure_same_metadata(initial: &Metadata, current: &Metadata, path: &Path) -> Result<(), PageRemovalError> {
     if initial.len() != current.len() || initial.modified()? != current.modified()? {
-        return Err(ZipPageRemovalError::Stale(format!(
+        return Err(PageRemovalError::Stale(format!(
             "source metadata changed during rewrite: {}",
             path.display()
         )));
@@ -427,8 +392,8 @@ fn scan_timestamp(metadata: &Metadata) -> chrono::NaiveDateTime {
     DateTime::<Local>::from(modified.max(created)).naive_local()
 }
 
-fn archive_error(error: zip::result::ZipError) -> ZipPageRemovalError {
-    ZipPageRemovalError::Archive(error.to_string())
+fn archive_error(error: zip::result::ZipError) -> PageRemovalError {
+    PageRemovalError::Archive(error.to_string())
 }
 
 #[cfg(test)]
@@ -446,6 +411,20 @@ mod tests {
 
     use super::*;
     use crate::extract_page;
+
+    fn remove_hashed_zip_pages(
+        book: &Book,
+        media: &Media,
+        targets: &[HashedPageTarget],
+        analyze_dimensions: bool,
+        cancelled: impl Fn() -> bool,
+    ) -> Result<PageRemovalRewrite, PageRemovalError> {
+        let source = book.url.to_file_path().unwrap();
+        let output = source.with_extension("rewrite.tmp");
+        let result = rewrite_hashed_zip_pages(book, media, targets, &output, analyze_dimensions, cancelled)?;
+        fs::rename(output, source)?;
+        Ok(result)
+    }
 
     #[test]
     fn removal_preserves_raw_entries_order_metadata_directories_and_files() {
@@ -507,19 +486,34 @@ mod tests {
         stale.file_size += 1;
         assert!(matches!(
             remove_hashed_zip_pages(&book, &media, &[stale], false, || false),
-            Err(ZipPageRemovalError::Stale(_))
+            Err(PageRemovalError::Stale(_))
         ));
         assert_eq!(fs::read(&stale_path).unwrap(), original);
         assert!(matches!(
             remove_hashed_zip_pages(&book, &media, &[target(&media, 1), target(&media, 2)], false, || false),
-            Err(ZipPageRemovalError::Stale(_))
+            Err(PageRemovalError::Stale(_))
         ));
         assert_eq!(fs::read(&stale_path).unwrap(), original);
         assert!(matches!(
             remove_hashed_zip_pages(&book, &media, &[target(&media, 1)], false, || true),
-            Err(ZipPageRemovalError::Cancelled)
+            Err(PageRemovalError::Cancelled)
         ));
         assert_eq!(fs::read(&stale_path).unwrap(), original);
+
+        let existing_output = temporary.path().join("existing.tmp");
+        fs::write(&existing_output, b"existing output").unwrap();
+        assert!(matches!(
+            rewrite_hashed_zip_pages(
+                &book,
+                &media,
+                &[target(&media, 1)],
+                &existing_output,
+                false,
+                || false
+            ),
+            Err(PageRemovalError::Io(error)) if error.kind() == std::io::ErrorKind::AlreadyExists
+        ));
+        assert_eq!(fs::read(&existing_output).unwrap(), b"existing output");
 
         let duplicate_path = temporary.path().join("duplicate.cbz");
         write_zip(&duplicate_path, &["same1.png", "same2.png", "other.png"]);
@@ -544,7 +538,7 @@ mod tests {
             || false,
         );
         assert!(
-            matches!(duplicate_result, Err(ZipPageRemovalError::Stale(_))),
+            matches!(duplicate_result, Err(PageRemovalError::Stale(_))),
             "{duplicate_result:?}"
         );
         assert_eq!(fs::read(&duplicate_path).unwrap(), original);

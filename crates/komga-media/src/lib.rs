@@ -17,7 +17,9 @@ mod hashing;
 mod image_ops;
 mod kepub;
 mod metadata;
+mod page_removal;
 mod pdf;
+mod pdf_edit;
 mod rar_conversion;
 mod zip_edit;
 
@@ -31,8 +33,10 @@ pub use metadata::{
     ComicInfoContainers, ComicInfoReadList, EmbeddedMetadata, extract_comic_info_containers,
     extract_comic_info_metadata, extract_epub_metadata, extract_mylar_metadata,
 };
+pub use page_removal::{PageRemovalError, PageRemovalRewrite};
+pub use pdf_edit::rewrite_hashed_pdf_pages;
 pub use rar_conversion::{RarToCbzConversion, RarToCbzError, convert_rar_to_cbz};
-pub use zip_edit::{ZipPageRemoval, ZipPageRemovalError, remove_hashed_zip_pages};
+pub use zip_edit::rewrite_hashed_zip_pages;
 
 #[cfg(test)]
 use metadata::parse_comic_info_containers;

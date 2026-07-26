@@ -80,9 +80,9 @@ pub struct PageHashMatch {
     pub url: String,
     /// One-based page number.
     pub page_number: i32,
-    /// Exact ZIP entry name.
+    /// Exact archive entry name or one-based PDF page label.
     pub file_name: String,
-    /// Uncompressed entry size.
+    /// Uncompressed entry size, or zero for a rendered PDF page.
     pub file_size: i64,
     /// Detected page media type.
     pub media_type: String,
@@ -92,13 +92,13 @@ pub struct PageHashMatch {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HashedPageTarget {
-    /// Exact ZIP entry name.
+    /// Exact archive entry name or one-based PDF page label.
     pub file_name: String,
     /// Detected page media type.
     pub media_type: String,
     /// Page content hash.
     pub file_hash: String,
-    /// Uncompressed entry size.
+    /// Uncompressed entry size, or zero for a rendered PDF page.
     pub file_size: i64,
     /// One-based page number.
     pub page_number: i32,

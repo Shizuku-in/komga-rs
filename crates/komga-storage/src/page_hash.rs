@@ -120,8 +120,10 @@ impl Storage {
         let mut query = QueryBuilder::<Sqlite>::new(
             r#"SELECT mp.BOOK_ID AS book_id, b.URL AS url, mp.NUMBER + 1 AS page_number,
                       mp.FILE_NAME AS file_name, COALESCE(mp.FILE_SIZE, 0) AS file_size,
-                      mp.MEDIA_TYPE AS media_type
+                      CASE WHEN m.MEDIA_TYPE = 'application/pdf' THEN 'image/jpeg'
+                           ELSE mp.MEDIA_TYPE END AS media_type
                  FROM MEDIA_PAGE mp JOIN BOOK b ON b.ID = mp.BOOK_ID
+                 JOIN MEDIA m ON m.BOOK_ID = mp.BOOK_ID
                 WHERE mp.FILE_HASH = "#,
         );
         query.push_bind(page_hash.to_owned());
@@ -208,10 +210,14 @@ impl Storage {
             return Ok(Vec::new());
         }
         let mut query = QueryBuilder::<Sqlite>::new(
-            r#"SELECT mp.BOOK_ID, mp.FILE_NAME, mp.MEDIA_TYPE, mp.FILE_HASH,
+            r#"SELECT mp.BOOK_ID, mp.FILE_NAME,
+                      CASE WHEN m.MEDIA_TYPE = 'application/pdf' THEN 'image/jpeg'
+                           ELSE mp.MEDIA_TYPE END,
+                      mp.FILE_HASH,
                       COALESCE(mp.FILE_SIZE, 0), mp.NUMBER + 1
                  FROM MEDIA_PAGE mp JOIN PAGE_HASH ph ON ph.HASH = mp.FILE_HASH
-                 JOIN BOOK b ON b.ID = mp.BOOK_ID WHERE ph.ACTION IN ("#,
+                 JOIN BOOK b ON b.ID = mp.BOOK_ID
+                 JOIN MEDIA m ON m.BOOK_ID = mp.BOOK_ID WHERE ph.ACTION IN ("#,
         );
         let mut separated = query.separated(", ");
         for action in actions {
@@ -424,6 +430,16 @@ mod tests {
             .await
             .unwrap();
         }
+        sqlx::query("UPDATE MEDIA SET MEDIA_TYPE='application/pdf' WHERE BOOK_ID=?")
+            .bind(&books[1].id)
+            .execute(&storage.pool)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE MEDIA_PAGE SET FILE_NAME='1',MEDIA_TYPE='',FILE_SIZE=NULL WHERE BOOK_ID=?")
+            .bind(&books[1].id)
+            .execute(&storage.pool)
+            .await
+            .unwrap();
         sqlx::query(
             "INSERT INTO MEDIA_PAGE (BOOK_ID,NUMBER,FILE_NAME,MEDIA_TYPE,FILE_HASH,FILE_SIZE) VALUES (?,1,'blank.jpg','image/jpeg','',5)",
         )
@@ -453,6 +469,14 @@ mod tests {
         assert_eq!(matches.content.len(), 2);
         assert_eq!(matches.content[0].page_number, 1);
         assert!(matches.content[0].url.ends_with(".cbz"));
+        let pdf_match = matches
+            .content
+            .iter()
+            .find(|matched| matched.book_id == books[1].id)
+            .unwrap();
+        assert_eq!(pdf_match.file_name, "1");
+        assert_eq!(pdf_match.file_size, 0);
+        assert_eq!(pdf_match.media_type, komga_core::JPEG_MEDIA_TYPE);
 
         storage
             .create_or_update_page_hash("duplicate", Some(10), PageHashAction::DeleteAuto, Some(b"jpeg"))
@@ -490,6 +514,9 @@ mod tests {
             .unwrap();
         assert_eq!(targets.len(), 2);
         assert!(targets.iter().all(|(_, page)| page.page_number == 1));
+        let pdf_target = targets.iter().find(|(book_id, _)| *book_id == books[1].id).unwrap();
+        assert_eq!(pdf_target.1.file_size, 0);
+        assert_eq!(pdf_target.1.media_type, komga_core::JPEG_MEDIA_TYPE);
 
         storage
             .create_or_update_page_hash("negative", Some(-1), PageHashAction::DeleteManual, None)
