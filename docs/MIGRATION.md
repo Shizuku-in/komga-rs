@@ -16,7 +16,7 @@ The `komga/` Git submodule pins the behavioral reference baseline at Komga commi
 | OPDS | Implemented | OPDS 1.2 Atom/OpenSearch catalogs with PSE acquisition links and OPDS 2 catalogs, authentication, publications, manifests, resources, browse facets, grouped search, and progression aliases. |
 | Device sync | Implemented | KOReader API-key authentication, partial-MD5 document matching, and Divina/PDF/EPUB reading-progress synchronization are implemented. Kobo path-key authentication, SyncPoint library and On Deck synchronization, bidirectional progress, initialization, metadata, original and converted KEPUB delivery, JPEG covers, optional Store merging/proxying, and public-port URL correction are implemented. |
 | Operations | Implemented | Persistent task storage, atomic worker ownership, startup recovery, dynamically resizable task processing, scan/media/file-hash/KOReader-hash/page-hash/duplicate-page-removal/source-deletion/source-import/RAR-conversion/extension-repair/local-artwork/thumbnail/metadata-refresh/metadata-aggregation workers, library scheduling, task-status and content-domain SSE, historical-event administration, task clearing, client and server settings, application metrics, announcements, release checks, and bundled/local reader fonts are implemented. |
-| Web UI packaging | Pending | The source is maintained in root `webui/`; static asset build/embedding and SPA fallback are pending. |
+| Web UI packaging | Implemented | Cargo builds and embeds the maintained root `webui/`, injects the effective context path, serves long-lived hashed assets with Brotli/Gzip negotiation, and provides strict SPA history fallback without masking backend 404s. |
 
 ## Compatibility rules
 
@@ -47,7 +47,7 @@ The `komga/` Git submodule pins the behavioral reference baseline at Komga commi
 
 ## Next slice
 
-The next compatibility slice can address page removal for one non-ZIP format or Web UI packaging. Series artwork sidecars, database-backed dynamic server settings, the Operations API, and in-process KEPUB conversion now close their respective scanner, configuration, administration, and Kobo delivery gaps. Kotlin's `koboPort` is an advertised-port correction for direct device URLs, not a dedicated listener.
+The next compatibility slice can address page removal for one non-ZIP format. Series artwork sidecars, database-backed dynamic server settings, the Operations API, in-process KEPUB conversion, and embedded Web UI packaging now close their respective scanner, configuration, administration, Kobo delivery, and browser-client gaps. Kotlin's `koboPort` is an advertised-port correction for direct device URLs, not a dedicated listener.
 
 ### In-process KEPUB conversion
 

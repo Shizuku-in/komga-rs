@@ -4,20 +4,19 @@
     <meta charset="utf-8">
     <meta http-equiv="X-UA-Compatible" content="IE=edge">
     <meta name="viewport" content="width=device-width,initial-scale=1.0">
+    <base href="<%= process.env.NODE_ENV === 'production' ? '__KOMGA_BASE_URL__' : '/' %>">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="mobile-web-app-capable" content="yes">
     <title>Komga</title>
-    <link rel="icon" href="/favicon.ico">
-    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
-    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">
-    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png">
+    <link rel="icon" href="favicon.ico">
+    <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
+    <link rel="icon" type="image/png" sizes="32x32" href="favicon-32x32.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="favicon-16x16.png">
     <meta name="msapplication-TileColor" content="#08397f">
-    <meta name="msapplication-TileImage" content="/mstile-144x144.png">
-    <link rel="manifest" href="/manifest.json">
-    <script th:inline="javascript">
-        /*<![CDATA[*/
-        window.resourceBaseUrl = /*[(<%="$"%>{"'" + baseUrl + "'"})]*/ '/'
-        /*]]>*/
+    <meta name="msapplication-TileImage" content="mstile-144x144.png">
+    <link rel="manifest" href="manifest.json">
+    <script>
+        window.resourceBaseUrl = '<%= process.env.NODE_ENV === 'production' ? '__KOMGA_BASE_URL__' : '/' %>'
     </script>
 </head>
 <body>

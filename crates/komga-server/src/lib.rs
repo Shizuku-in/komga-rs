@@ -46,6 +46,8 @@ mod source_import_routes;
 mod sse_routes;
 mod thumbnail_routes;
 mod webpub_routes;
+#[cfg(feature = "webui")]
+mod webui_routes;
 
 pub use auth::{REMEMBER_ME_COOKIE, SESSION_COOKIE, SESSION_HEADER};
 pub use runtime::{AppRuntime, ShutdownHandle};
@@ -305,8 +307,9 @@ impl AppState {
 ///
 /// The returned router includes public health and claim endpoints, authenticated
 /// user/session endpoints, CORS handling, request IDs, a 2 MiB JSON body limit,
-/// and request tracing. It can be served directly with `axum::serve` or cloned
-/// for in-process contract tests.
+/// and request tracing. The default `webui` feature also serves the embedded Web
+/// UI and its history fallback. The router can be served directly with
+/// `axum::serve` or cloned for in-process contract tests.
 pub fn build_app(state: AppState) -> Router {
     app_router::build(state)
 }

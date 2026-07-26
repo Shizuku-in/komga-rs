@@ -4,7 +4,7 @@ use axum::{
     Router,
     body::Body,
     extract::{DefaultBodyLimit, State},
-    http::{HeaderValue, Request, Uri, header, uri::Authority},
+    http::{HeaderMap, HeaderValue, Request, StatusCode, Uri, header, uri::Authority},
     middleware::{self, Next},
     response::Response,
     routing::{delete, get, patch, post},
@@ -15,6 +15,8 @@ use tower_http::{
     trace::TraceLayer,
 };
 
+#[cfg(feature = "webui")]
+use crate::webui_routes;
 use crate::{
     AppState, auth, book_file_routes, container_routes, content_routes, filesystem_routes, font_routes, history_routes,
     kobo, koreader_routes, library_routes, media_routes, metadata_routes, metrics_routes, opds_router,
@@ -39,16 +41,38 @@ pub(crate) fn build(state: AppState) -> Router {
         .layer(PropagateRequestIdLayer::x_request_id())
         .layer(SetRequestIdLayer::x_request_id(MakeRequestUuid))
         .layer(TraceLayer::new_for_http().make_span_with(make_http_span))
+        .layer(middleware::from_fn(suppress_ajax_basic_challenge))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             apply_server_request_settings,
         ))
         .with_state(state);
+    #[cfg(feature = "webui")]
+    let app = app.fallback_service(webui_routes::router(&context_path));
     if context_path.is_empty() {
         app
     } else {
         Router::new().nest(&context_path, app)
     }
+}
+
+async fn suppress_ajax_basic_challenge(request: Request<Body>, next: Next) -> Response {
+    let ajax = is_xml_http_request(request.headers());
+    let mut response = next.run(request).await;
+    if ajax
+        && response.status() == StatusCode::UNAUTHORIZED
+        && response.headers().get(header::WWW_AUTHENTICATE) == Some(&HeaderValue::from_static("Basic realm=\"Komga\""))
+    {
+        response.headers_mut().remove(header::WWW_AUTHENTICATE);
+    }
+    response
+}
+
+fn is_xml_http_request(headers: &HeaderMap) -> bool {
+    headers
+        .get("x-requested-with")
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value == "XMLHttpRequest")
 }
 
 async fn apply_server_request_settings(

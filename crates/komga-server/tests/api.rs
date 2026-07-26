@@ -68,5 +68,8 @@ mod source_import_cases;
 mod sse_cases;
 #[path = "api_cases/webpub.rs"]
 mod webpub_cases;
+#[cfg(feature = "webui")]
+#[path = "api_cases/webui.rs"]
+mod webui_cases;
 
 use support::*;

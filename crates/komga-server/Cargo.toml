@@ -5,6 +5,15 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
+[features]
+default = ["webui"]
+webui = [
+  "dep:include_dir",
+  "dep:mime_guess",
+  "tower-http/compression-br",
+  "tower-http/compression-gzip",
+]
+
 [dependencies]
 anyhow.workspace = true
 async-stream.workspace = true
@@ -21,11 +30,13 @@ headers-accept.workspace = true
 hex.workspace = true
 http.workspace = true
 httpdate.workspace = true
+include_dir = { workspace = true, optional = true }
 komga-core = { path = "../komga-core" }
 komga-media = { path = "../komga-media" }
 komga-search = { path = "../komga-search" }
 komga-storage = { path = "../komga-storage" }
 mediatype.workspace = true
+mime_guess = { workspace = true, optional = true }
 moka.workspace = true
 percent-encoding.workspace = true
 rand.workspace = true

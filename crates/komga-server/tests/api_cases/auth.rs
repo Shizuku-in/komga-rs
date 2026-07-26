@@ -36,6 +36,20 @@ async fn basic_login_issues_cookie_and_session_authenticates_follow_up_requests(
         "Basic realm=\"Komga\""
     );
 
+    let webui_unauthorized = app
+        .clone()
+        .oneshot(
+            Request::get("/api/v2/users/me")
+                .header("X-Requested-With", "XMLHttpRequest")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(webui_unauthorized.status(), StatusCode::UNAUTHORIZED);
+    assert!(!webui_unauthorized.headers().contains_key(header::WWW_AUTHENTICATE));
+    assert_eq!(body_json(webui_unauthorized).await["status"], 401);
+
     let login = app
         .clone()
         .oneshot(

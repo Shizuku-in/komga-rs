@@ -2,26 +2,38 @@
 
 An incremental Rust port of the [Komga](https://github.com/gotson/komga) backend. The Kotlin source pinned as the `komga/` Git submodule is the behavioral reference; the Rust implementation and its maintained Web UI source live in the repository root.
 
-> The core headless backend is usable, but this is not yet a drop-in replacement for a complete Komga server. Users and permissions, library scanning, content browsing and reading, progress, collections and read lists, search, media delivery, metadata, and persistent background tasks are implemented. See [the migration matrix](docs/MIGRATION.md) for exact coverage.
+> The server is usable, but this is not yet a drop-in replacement for a complete Komga server. Users and permissions, library scanning, content browsing and reading, progress, collections and read lists, search, media delivery, metadata, the bundled Web UI, and persistent background tasks are implemented. See [the migration matrix](docs/MIGRATION.md) for exact coverage.
 
 ## Port status
 
-The migration matrix currently tracks 13 functional areas: 5 are implemented or core-complete, 7 are partially implemented, and 1 is pending.
+The migration matrix currently tracks 13 functional areas: 6 are implemented or core-complete and 7 are partially implemented.
 
 | Status | Areas |
 | --- | --- |
-| Implemented / core-complete | Claim and users; collections and read lists; OPDS; device sync; operations |
+| Implemented / core-complete | Claim and users; collections and read lists; OPDS; device sync; operations; Web UI packaging |
 | Partial | Process and configuration; SQLite; authentication; libraries and scanner; Series, Books, and progress; media; search |
-| Pending | Web UI packaging |
 
 Recent content work added modern and deprecated Series/Book queries, legacy regex search, duplicate-book discovery, book-file hashing, configurable ZIP edge-page hashing, PageHash administration, safe duplicate-page removal from CBZ files with historical auditing, RAR/CBR-to-CBZ conversion, source-extension repair, authenticated OPDS 1.2 and OPDS 2 catalogs, Kotlin-compatible content-domain SSE, KOReader and Kobo synchronization, application metrics, announcements, release checks, and bundled and local reader fonts.
 
 ## Run
 
-Rust 1.96.1 or newer is required.
+Rust 1.96.1 or newer and Node.js 22.11 through 24 are required for the default build. Cargo builds and embeds the root Web UI automatically.
 
 ```bash
 cargo run --release -p komga-server
+```
+
+Packagers can reuse an existing production build instead of invoking Node. Relative paths are resolved from the workspace root:
+
+```bash
+cd webui && npm ci && npm run build && cd ..
+KOMGA_WEBUI_DIST_DIR=webui/dist cargo build --release -p komga-server
+```
+
+For an API-only binary without embedded Web UI assets or a Node dependency, disable the default feature:
+
+```bash
+cargo build -p komga-server --no-default-features
 ```
 
 The defaults match Komga:
@@ -34,6 +46,7 @@ The defaults match Komga:
 - hash the first and last 3 pages of eligible ZIP books when a library enables page hashing.
 - return at most 100 source books or tags in each Kobo synchronization page.
 - enable in-process KEPUB conversion, with the external fallback and Kobo Store proxy disabled until configured.
+- serve the embedded Web UI at `/`, including SPA history fallback and configured context paths.
 
 Configuration can be supplied through arguments or environment variables:
 
