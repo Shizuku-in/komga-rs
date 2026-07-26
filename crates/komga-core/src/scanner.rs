@@ -93,6 +93,28 @@ pub struct ScannedSidecar {
     pub parent_url: Url,
     /// Filesystem modification time.
     pub last_modified_time: NaiveDateTime,
+    /// Consumer category used to schedule the correct refresh task.
+    pub sidecar_type: SidecarType,
+    /// Entity represented by `parent_url`.
+    pub source: SidecarSource,
+}
+
+/// Kind of metadata represented by a filesystem sidecar.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SidecarType {
+    /// Local artwork image.
+    Artwork,
+    /// Local metadata document.
+    Metadata,
+}
+
+/// Entity to which a filesystem sidecar belongs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SidecarSource {
+    /// The sidecar belongs to one book.
+    Book,
+    /// The sidecar belongs to a series.
+    Series,
 }
 
 /// Complete filesystem snapshot produced for one library.
@@ -260,7 +282,7 @@ pub fn scan_library_files(library: &Library, cancelled: impl Fn() -> bool) -> Re
         }
     }
     scanned.sort_by(|left, right| left.series.url.as_str().cmp(right.series.url.as_str()));
-    let sidecars = scanned
+    let mut sidecars = scanned
         .iter()
         .filter(|entry| !entry.series.oneshot)
         .filter_map(|entry| {
@@ -271,13 +293,122 @@ pub fn scan_library_files(library: &Library, cancelled: impl Fn() -> bool) -> Re
                 url: Url::from_file_path(path).ok()?,
                 parent_url: entry.series.url.clone(),
                 last_modified_time: updated_time(&metadata),
+                sidecar_type: SidecarType::Metadata,
+                source: SidecarSource::Series,
             })
         })
-        .collect();
+        .collect::<Vec<_>>();
+    for entry in &scanned {
+        for book in &entry.books {
+            let Ok(path) = book.url.to_file_path() else {
+                continue;
+            };
+            let Ok(paths) = scan_book_sidecars(&path) else {
+                continue;
+            };
+            for path in paths {
+                if fs::symlink_metadata(&path).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
+                    continue;
+                }
+                let Ok(metadata) = fs::metadata(&path) else {
+                    continue;
+                };
+                let Ok(url) = Url::from_file_path(path) else {
+                    continue;
+                };
+                sidecars.push(ScannedSidecar {
+                    url,
+                    parent_url: book.url.clone(),
+                    last_modified_time: updated_time(&metadata),
+                    sidecar_type: SidecarType::Artwork,
+                    source: SidecarSource::Book,
+                });
+            }
+        }
+    }
+    sidecars.sort_by(|left, right| left.url.as_str().cmp(right.url.as_str()));
     Ok(ScanResult {
         series: scanned,
         sidecars,
     })
+}
+
+/// Projects one existing regular file into a new book identity.
+///
+/// Unlike a library scan this intentionally does not filter by extension,
+/// matching Komga's import workflow. Returns `None` when the path cannot be
+/// represented as a local regular file.
+#[must_use]
+pub fn scan_book_file(path: &Path, library_id: &str, oneshot: bool) -> Option<Book> {
+    let metadata = fs::metadata(path).ok().filter(|value| value.is_file())?;
+    let url = Url::from_file_path(path).ok()?;
+    Some(Book {
+        id: new_id(),
+        name: path.file_stem()?.to_string_lossy().into_owned(),
+        url,
+        file_last_modified: updated_time(&metadata),
+        file_size: i64::try_from(metadata.len()).unwrap_or(i64::MAX),
+        file_hash: String::new(),
+        file_hash_koreader: String::new(),
+        number: 0,
+        series_id: String::new(),
+        library_id: library_id.to_owned(),
+        deleted_date: None,
+        oneshot,
+        created_date: None,
+        last_modified_date: None,
+    })
+}
+
+/// Finds artwork files adjacent to one book using Komga's basename policy.
+///
+/// # Errors
+///
+/// Returns an I/O error when the book's parent directory cannot be listed.
+pub fn scan_book_sidecars(book_path: &Path) -> std::io::Result<Vec<PathBuf>> {
+    let Some(parent) = book_path.parent() else {
+        return Ok(Vec::new());
+    };
+    let Some(base) = book_path.file_stem().and_then(|value| value.to_str()) else {
+        return Ok(Vec::new());
+    };
+    let base = base.to_ascii_lowercase();
+    let mut result = Vec::new();
+    for entry in fs::read_dir(parent)? {
+        let entry = entry?;
+        let path = entry.path();
+        let file_type = entry.file_type()?;
+        if (!file_type.is_file() && !file_type.is_symlink()) || !is_artwork_extension(&path) {
+            continue;
+        }
+        let Some(candidate) = path.file_stem().and_then(|value| value.to_str()) else {
+            continue;
+        };
+        let candidate = candidate.to_ascii_lowercase();
+        let suffix = candidate.strip_prefix(&base);
+        if suffix.is_some_and(|value| value.is_empty() || is_numbered_suffix(value)) {
+            result.push(path);
+        }
+    }
+    result.sort_by(|left, right| left.as_os_str().cmp(right.as_os_str()));
+    Ok(result)
+}
+
+fn is_numbered_suffix(value: &str) -> bool {
+    value
+        .strip_prefix('-')
+        .is_some_and(|digits| !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit()))
+}
+
+fn is_artwork_extension(path: &Path) -> bool {
+    matches!(
+        path.extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or_default()
+            .to_ascii_lowercase()
+            .as_str(),
+        "png" | "jpeg" | "jpg" | "tbn" | "webp" | "gif"
+    )
 }
 
 fn should_visit(path: &Path, exclusions: &[String]) -> bool {
@@ -393,5 +524,35 @@ mod tests {
             scan_library_files(&library(&root), || true),
             Err(ScanError::Cancelled)
         ));
+    }
+
+    #[test]
+    fn discovers_book_artwork_sidecars_with_kotlin_basename_rules() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("library");
+        let series = root.join("Series");
+        fs::create_dir_all(&series).unwrap();
+        let book = series.join("Book 2.cbz");
+        fs::write(&book, b"book").unwrap();
+        fs::write(series.join("Book 2.jpg"), b"art").unwrap();
+        fs::write(series.join("BOOK 2-1.webp"), b"art").unwrap();
+        fs::write(series.join("Book 2-extra.jpg"), b"ignored").unwrap();
+        fs::write(series.join("Other.jpg"), b"ignored").unwrap();
+
+        let paths = scan_book_sidecars(&book).unwrap();
+        assert_eq!(paths.len(), 2);
+        let result = scan_library_files(&library(&root), || false).unwrap();
+        let artwork = result
+            .sidecars
+            .iter()
+            .filter(|sidecar| sidecar.sidecar_type == SidecarType::Artwork)
+            .collect::<Vec<_>>();
+        assert_eq!(artwork.len(), 2);
+        assert!(artwork.iter().all(|sidecar| sidecar.source == SidecarSource::Book));
+        assert!(
+            artwork
+                .iter()
+                .all(|sidecar| sidecar.parent_url.as_str().ends_with("Book%202.cbz"))
+        );
     }
 }

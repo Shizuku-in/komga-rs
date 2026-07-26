@@ -1,6 +1,6 @@
 use std::{collections::BTreeMap, path::Path, str::FromStr, time::Duration};
 
-use komga_core::HashedPageTarget;
+use komga_core::{CopyMode, HashedPageTarget};
 use serde::{Deserialize, Serialize};
 use sqlx::{
     FromRow, SqlitePool,
@@ -137,6 +137,57 @@ impl TaskRecord {
             simple_type: "DeleteSeries".into(),
             payload: serde_json::json!({
                 "seriesId": series_id,
+                "priority": priority,
+                "groupId": null,
+                "uniqueId": id,
+            })
+            .to_string(),
+            owner: None,
+        }
+    }
+
+    /// Builds a Kotlin-compatible book source-file import task.
+    pub fn import_book(
+        source_file: &str,
+        series_id: &str,
+        copy_mode: CopyMode,
+        destination_name: Option<&str>,
+        upgrade_book_id: Option<&str>,
+    ) -> Self {
+        let priority = 8;
+        let id = format!("IMPORT_BOOK_{series_id}_{source_file}");
+        Self {
+            id: id.clone(),
+            priority,
+            group_id: Some(series_id.to_owned()),
+            class: "org.gotson.komga.application.tasks.Task$ImportBook".into(),
+            simple_type: "ImportBook".into(),
+            payload: serde_json::json!({
+                "sourceFile": source_file,
+                "seriesId": series_id,
+                "copyMode": copy_mode,
+                "destinationName": destination_name,
+                "upgradeBookId": upgrade_book_id,
+                "priority": priority,
+                "groupId": series_id,
+                "uniqueId": id,
+            })
+            .to_string(),
+            owner: None,
+        }
+    }
+
+    /// Builds a Kotlin-compatible local book artwork refresh task.
+    pub fn refresh_book_local_artwork(book_id: &str, priority: i32) -> Self {
+        let id = format!("REFRESH_BOOK_LOCAL_ARTWORK_{book_id}");
+        Self {
+            id: id.clone(),
+            priority,
+            group_id: None,
+            class: "org.gotson.komga.application.tasks.Task$RefreshBookLocalArtwork".into(),
+            simple_type: "RefreshBookLocalArtwork".into(),
+            payload: serde_json::json!({
+                "bookId": book_id,
                 "priority": priority,
                 "groupId": null,
                 "uniqueId": id,

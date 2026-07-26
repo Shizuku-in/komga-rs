@@ -235,7 +235,7 @@ async fn delete_series_dependents(
     Ok(())
 }
 
-async fn reorder_series(
+pub(crate) async fn reorder_series(
     tx: &mut Transaction<'_, Sqlite>,
     series_id: &str,
     refreshes: &mut Vec<NumberingRefreshTarget>,

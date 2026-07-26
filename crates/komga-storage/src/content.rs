@@ -1,7 +1,7 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use chrono::{Local, NaiveDateTime};
-use komga_core::{Book, BookEvent, ScanResult, Series, SeriesEvent};
+use komga_core::{Book, BookEvent, ScanResult, Series, SeriesEvent, SidecarSource, SidecarType};
 use sqlx::FromRow;
 use url::Url;
 
@@ -28,6 +28,8 @@ pub struct ScanApplyStats {
     pub books_deleted: u64,
     /// Series whose Mylar sidecar was added or modified.
     pub sidecars_changed: Vec<String>,
+    /// Books whose local artwork sidecar was added or modified.
+    pub book_artwork_changed: Vec<String>,
     /// Book identities created by this scan.
     pub book_added_events: Vec<BookEvent>,
     /// Book identities changed or soft-deleted by this scan.
@@ -495,14 +497,32 @@ impl Storage {
                     .await?;
             sqlx::query("INSERT INTO SIDECAR (URL,PARENT_URL,LAST_MODIFIED_TIME,LIBRARY_ID) VALUES (?,?,?,?) ON CONFLICT(URL) DO UPDATE SET PARENT_URL=excluded.PARENT_URL,LAST_MODIFIED_TIME=excluded.LAST_MODIFIED_TIME,LIBRARY_ID=excluded.LIBRARY_ID")
                 .bind(sidecar.url.as_str()).bind(sidecar.parent_url.as_str()).bind(sidecar.last_modified_time).bind(library_id).execute(&mut *tx).await?;
-            if previous != Some(sidecar.last_modified_time)
-                && let Some(id) =
-                    sqlx::query_scalar::<_, String>("SELECT ID FROM SERIES WHERE URL = ? AND DELETED_DATE IS NULL")
+            if previous != Some(sidecar.last_modified_time) {
+                match (sidecar.source, sidecar.sidecar_type) {
+                    (SidecarSource::Series, SidecarType::Metadata) => {
+                        if let Some(id) = sqlx::query_scalar::<_, String>(
+                            "SELECT ID FROM SERIES WHERE URL = ? AND DELETED_DATE IS NULL",
+                        )
                         .bind(sidecar.parent_url.as_str())
                         .fetch_optional(&mut *tx)
                         .await?
-            {
-                stats.sidecars_changed.push(id);
+                        {
+                            stats.sidecars_changed.push(id);
+                        }
+                    }
+                    (SidecarSource::Book, SidecarType::Artwork) => {
+                        if let Some(id) = sqlx::query_scalar::<_, String>(
+                            "SELECT ID FROM BOOK WHERE URL = ? AND DELETED_DATE IS NULL",
+                        )
+                        .bind(sidecar.parent_url.as_str())
+                        .fetch_optional(&mut *tx)
+                        .await?
+                        {
+                            stats.book_artwork_changed.push(id);
+                        }
+                    }
+                    _ => {}
+                }
             }
         }
 
@@ -541,7 +561,7 @@ impl Storage {
     }
 }
 
-async fn insert_book(
+pub(crate) async fn insert_book(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     book: &Book,
     series_id: &str,

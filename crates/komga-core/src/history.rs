@@ -71,6 +71,12 @@ impl HistoricalEvent {
     /// Creates the Kotlin-compatible audit record for a user-requested source-file deletion.
     #[must_use]
     pub fn book_file_deleted(book: &Book) -> Self {
+        Self::book_file_deleted_for_reason(book, "File was deleted by user request")
+    }
+
+    /// Creates the Kotlin-compatible audit record for a source file deleted for a specified reason.
+    #[must_use]
+    pub fn book_file_deleted_for_reason(book: &Book, reason: &str) -> Self {
         let name = book
             .url
             .to_file_path()
@@ -80,9 +86,26 @@ impl HistoricalEvent {
             "BookFileDeleted",
             Some(book.id.clone()),
             Some(book.series_id.clone()),
+            BTreeMap::from([("reason".into(), reason.into()), ("name".into(), name)]),
+        )
+    }
+
+    /// Creates the Kotlin-compatible audit record for one completed book import.
+    #[must_use]
+    pub fn book_imported(book: &Book, source: &Path, upgrade: bool) -> Self {
+        let name = book
+            .url
+            .to_file_path()
+            .map(|path| path.to_string_lossy().into_owned())
+            .unwrap_or_else(|()| book.url.to_string());
+        Self::new(
+            "BookImported",
+            Some(book.id.clone()),
+            Some(book.series_id.clone()),
             BTreeMap::from([
-                ("reason".into(), "File was deleted by user request".into()),
                 ("name".into(), name),
+                ("source".into(), source.to_string_lossy().into_owned()),
+                ("upgrade".into(), if upgrade { "Yes".into() } else { "No".into() }),
             ]),
         )
     }
@@ -146,5 +169,16 @@ mod tests {
         assert_eq!(event.series_id.as_deref(), Some("series"));
         assert_eq!(event.properties["reason"], "Folder was deleted because it was empty");
         assert_eq!(event.properties["name"], "/library/Series");
+
+        let event = HistoricalEvent::book_imported(&book(), Path::new("/imports/Volume.cbz"), true);
+        assert_eq!(event.event_type, "BookImported");
+        assert_eq!(event.book_id.as_deref(), Some("book"));
+        assert_eq!(event.series_id.as_deref(), Some("series"));
+        assert_eq!(event.properties["name"], "/library/Series/Volume.cbz");
+        assert_eq!(event.properties["source"], "/imports/Volume.cbz");
+        assert_eq!(event.properties["upgrade"], "Yes");
+
+        let event = HistoricalEvent::book_file_deleted_for_reason(&book(), "File was deleted to import an upgrade");
+        assert_eq!(event.properties["reason"], "File was deleted to import an upgrade");
     }
 }

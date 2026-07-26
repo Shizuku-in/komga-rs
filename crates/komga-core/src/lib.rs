@@ -17,6 +17,7 @@ mod page_hash;
 mod pagination;
 mod progress;
 mod scanner;
+mod source_import;
 mod sync;
 
 use std::collections::BTreeSet;
@@ -62,8 +63,10 @@ pub use progress::{
     progression, series_read_progress,
 };
 pub use scanner::{
-    Book, ScanError, ScanResult, ScannedSeries, ScannedSidecar, Series, compare_book_names, scan_library_files,
+    Book, ScanError, ScanResult, ScannedSeries, ScannedSidecar, Series, SidecarSource, SidecarType, compare_book_names,
+    scan_book_file, scan_book_sidecars, scan_library_files,
 };
+pub use source_import::CopyMode;
 pub use sync::{
     KomgaSyncToken, ON_DECK_READ_LIST_ID, SyncBatch, SyncBookChange, SyncBookProjection, SyncChangeKind, SyncPoint,
     SyncPointBook, SyncPointReadList, SyncPointReadListBook, SyncReadListChange, SyncReadProgress,

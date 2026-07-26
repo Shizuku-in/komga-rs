@@ -667,6 +667,63 @@ impl Storage {
         Ok(saved)
     }
 
+    /// Replaces a filesystem-backed sidecar thumbnail with the same URL.
+    ///
+    /// The first discovered sidecar replaces a generated selection, but never
+    /// overrides a user-selected uploaded or sidecar thumbnail.
+    ///
+    /// # Errors
+    ///
+    /// Returns a database error when reconciliation cannot be committed.
+    pub async fn upsert_book_sidecar_thumbnail(
+        &self,
+        thumbnail: &ThumbnailBook,
+        prefer_selected: bool,
+    ) -> Result<ThumbnailBook> {
+        let mut tx = self.pool.begin().await?;
+        let selected_type = sqlx::query_scalar::<_, String>(
+            "SELECT TYPE FROM THUMBNAIL_BOOK WHERE BOOK_ID = ? AND SELECTED = 1 LIMIT 1",
+        )
+        .bind(&thumbnail.book_id)
+        .fetch_optional(&mut *tx)
+        .await?;
+        sqlx::query("DELETE FROM THUMBNAIL_BOOK WHERE BOOK_ID = ? AND TYPE = 'SIDECAR' AND URL = ?")
+            .bind(&thumbnail.book_id)
+            .bind(&thumbnail.url)
+            .execute(&mut *tx)
+            .await?;
+        let selected = prefer_selected && selected_type.as_deref().is_none_or(|value| value == "GENERATED");
+        sqlx::query(
+            r#"INSERT INTO THUMBNAIL_BOOK
+                 (ID, THUMBNAIL, URL, SELECTED, TYPE, BOOK_ID, WIDTH, HEIGHT, MEDIA_TYPE, FILE_SIZE)
+               VALUES (?, ?, ?, ?, 'SIDECAR', ?, ?, ?, ?, ?)"#,
+        )
+        .bind(&thumbnail.id)
+        .bind(&thumbnail.thumbnail)
+        .bind(&thumbnail.url)
+        .bind(selected)
+        .bind(&thumbnail.book_id)
+        .bind(thumbnail.dimension.width)
+        .bind(thumbnail.dimension.height)
+        .bind(&thumbnail.media_type)
+        .bind(thumbnail.file_size)
+        .execute(&mut *tx)
+        .await?;
+        if selected {
+            sqlx::query("UPDATE THUMBNAIL_BOOK SET SELECTED = (ID = ?) WHERE BOOK_ID = ?")
+                .bind(&thumbnail.id)
+                .bind(&thumbnail.book_id)
+                .execute(&mut *tx)
+                .await?;
+        } else {
+            ensure_book_thumbnail_selected(&mut tx, &thumbnail.book_id).await?;
+        }
+        tx.commit().await?;
+        let mut saved = thumbnail.clone();
+        saved.selected = selected;
+        Ok(saved)
+    }
+
     /// Selects a thumbnail belonging to a book.
     pub async fn select_book_thumbnail(&self, book_id: &str, thumbnail_id: &str) -> Result<bool> {
         let mut tx = self.pool.begin().await?;

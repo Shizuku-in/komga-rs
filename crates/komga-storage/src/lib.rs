@@ -23,6 +23,7 @@ mod referential;
 mod schema;
 mod settings;
 mod source_deletion;
+mod source_import;
 mod sync;
 mod tasks;
 
@@ -34,6 +35,7 @@ pub use lifecycle::{EmptyTrashResult, NumberingRefreshTarget};
 pub use media::{PageHashTarget, PageHashUpdate};
 pub use referential::{ReferentialScope, author_page_request};
 pub use settings::ClientSetting;
+pub use source_import::BookImportCommitResult;
 pub use tasks::{RebuildIndexEntity, TaskRecord, TaskStorage};
 
 pub(crate) use auth::sqlite_datetime_to_utc;
@@ -1191,6 +1193,40 @@ mod tests {
                 "uniqueId": "DELETE_SERIES_series",
             })
         );
+    }
+
+    #[test]
+    fn source_import_tasks_match_kotlin_payloads() {
+        let task = TaskRecord::import_book(
+            "/imports/book.cbz",
+            "series",
+            komga_core::CopyMode::Hardlink,
+            Some("Volume 2"),
+            Some("old"),
+        );
+        assert_eq!(task.id, "IMPORT_BOOK_series_/imports/book.cbz");
+        assert_eq!(task.priority, 8);
+        assert_eq!(task.group_id.as_deref(), Some("series"));
+        assert_eq!(task.class, "org.gotson.komga.application.tasks.Task$ImportBook");
+        assert_eq!(task.simple_type, "ImportBook");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&task.payload).unwrap(),
+            serde_json::json!({
+                "sourceFile": "/imports/book.cbz",
+                "seriesId": "series",
+                "copyMode": "HARDLINK",
+                "destinationName": "Volume 2",
+                "upgradeBookId": "old",
+                "priority": 8,
+                "groupId": "series",
+                "uniqueId": "IMPORT_BOOK_series_/imports/book.cbz",
+            })
+        );
+
+        let artwork = TaskRecord::refresh_book_local_artwork("book", 4);
+        assert_eq!(artwork.id, "REFRESH_BOOK_LOCAL_ARTWORK_book");
+        assert_eq!(artwork.group_id, None);
+        assert_eq!(artwork.simple_type, "RefreshBookLocalArtwork");
     }
 
     #[tokio::test]
