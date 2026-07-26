@@ -81,10 +81,12 @@ Migration `0011_page_hashing` deliberately clears existing `PAGE_HASH` rules and
 - `GET /api/v1/series` and `GET /api/v1/series/alphabetical-groups`
 - `GET /api/v1/series/{latest|new|updated}`
 - `GET /api/v1/series/{id}`
+- `DELETE /api/v1/series/{id}/file`
 - `POST /api/v1/books/list`
 - `GET /api/v1/books`
 - `GET /api/v1/books/{latest|ondeck}`
 - `GET /api/v1/books/{id}`
+- `GET|DELETE /api/v1/books/{id}/file`
 - `GET /api/v1/books/{id}/previous`
 - `GET /api/v1/books/{id}/next`
 - `POST /api/v1/books/{id}/analyze`
@@ -139,7 +141,9 @@ Migration `0011_page_hashing` deliberately clears existing `PAGE_HASH` rules and
 
 Authentication is compatible with the current Komga contract: HTTP Basic, `KOMGA-SESSION`, `X-Auth-Token`, and SHA-512-backed `X-API-Key`. Existing Spring BCrypt `$2a$` password hashes are accepted. KOReader routes exclusively accept a plaintext API key in `X-Auth-User` and require the `KOREADER_SYNC` role. Kobo routes exclusively accept a plaintext API key in the `/kobo/{apiKey}` path and require `KOBO_SYNC`; original-file delivery also requires `FILE_DOWNLOAD`. Kobo keys are redacted from request tracing. OPDS 2 also exposes the public authentication document and returns its media type, Basic challenge, and discovery link on authentication failures.
 
-`ScanLibrary` tasks are executed in the background. They discover configured CBX/PDF/EPUB files and persist Kotlin-compatible Series, Book, Media, and initial metadata rows. CBZ, CBR, PDF, and EPUB contents are analyzed and receive generated book thumbnails; fixed-layout EPUB pages, publication resources, navigation, reading positions, and Divina/PDF/EPUB WebPub manifests are available through the REST API. Root-level `ComicInfo.xml`, EPUB OPF, and Mylar `series.json` metadata are imported incrementally after analysis and through the book, series, and library metadata refresh endpoints. Provider updates preserve locked fields, and ComicInfo collection/read-list relationships remain incremental. `EmptyTrash` permanently removes soft-deleted database content, honors automatic cleanup after scans, and never deletes source files. Library deletion cascades through database-owned content and sidecars while also preserving source files. Other unported task types remain queued and unmodified.
+`ScanLibrary` tasks are executed in the background. They discover configured CBX/PDF/EPUB files and persist Kotlin-compatible Series, Book, Media, and initial metadata rows. CBZ, CBR, PDF, and EPUB contents are analyzed and receive generated book thumbnails; fixed-layout EPUB pages, publication resources, navigation, reading positions, and Divina/PDF/EPUB WebPub manifests are available through the REST API. Root-level `ComicInfo.xml`, EPUB OPF, and Mylar `series.json` metadata are imported incrementally after analysis and through the book, series, and library metadata refresh endpoints. Provider updates preserve locked fields, and ComicInfo collection/read-list relationships remain incremental. `EmptyTrash` permanently removes soft-deleted database content, honors automatic cleanup after scans, and never deletes source files. Library deletion cascades through database-owned content and sidecars while also preserving source files. Administrator Book/Series file deletion requests enqueue deduplicated Kotlin-compatible tasks that remove registered source files and `SIDECAR` thumbnails before atomically soft-deleting content and writing `BookFileDeleted`/`SeriesFolderDeleted` history. Other unported task types remain queued and unmodified.
+
+Source-file deletion is permanent: no backup, trash copy, or recovery archive is created. The worker deletes only database-registered Book files and `SIDECAR` thumbnails, never unknown directory contents. Before the first unlink it canonicalizes the Library root and every involved existing path; a non-local URL or any real path outside that root rejects the complete task. The Library root directory itself is always preserved, including when its last root-level Book is deleted. Back up real libraries before using these endpoints.
 
 Libraries with `hashKoreader` enabled enqueue Kotlin-compatible `HashBookKoreader` tasks after scans, when the setting is enabled, and after ZIP page removal. The worker computes KOReader's partial MD5 against a source snapshot and conditionally persists it to `FILE_HASH_KOREADER`. KOReader clients can then authenticate, pull, and push Divina/PDF page progress or EPUB resource progress. Hash resolution applies the user's library, age, and sharing-label restrictions before reporting collisions.
 
