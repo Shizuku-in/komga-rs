@@ -3,9 +3,10 @@
 use axum::{
     Router,
     body::Body,
-    extract::DefaultBodyLimit,
-    http::{Request, Uri},
-    middleware,
+    extract::{DefaultBodyLimit, State},
+    http::{HeaderValue, Request, Uri, header, uri::Authority},
+    middleware::{self, Next},
+    response::Response,
     routing::{delete, get, patch, post},
 };
 use tower_http::{
@@ -22,11 +23,12 @@ use crate::{
 };
 
 pub(crate) fn build(state: AppState) -> Router {
+    let context_path = state.effective_server_context_path.clone();
     let protected = protected_api()
         .merge(opds_router::protected())
         .route_layer(middleware::from_fn_with_state(state.clone(), auth::require_auth));
 
-    public_api()
+    let app = public_api()
         .merge(opds_router::public())
         .merge(koreader_routes::router(&state))
         .merge(kobo::router(&state))
@@ -36,7 +38,64 @@ pub(crate) fn build(state: AppState) -> Router {
         .layer(PropagateRequestIdLayer::x_request_id())
         .layer(SetRequestIdLayer::x_request_id(MakeRequestUuid))
         .layer(TraceLayer::new_for_http().make_span_with(make_http_span))
-        .with_state(state)
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            apply_server_request_settings,
+        ))
+        .with_state(state);
+    if context_path.is_empty() {
+        app
+    } else {
+        Router::new().nest(&context_path, app)
+    }
+}
+
+async fn apply_server_request_settings(
+    State(state): State<AppState>,
+    mut request: Request<Body>,
+    next: Next,
+) -> Response {
+    let has_forwarded_header = has_forwarded_header(request.headers());
+    if !state.effective_server_context_path.is_empty()
+        && !request.headers().contains_key("x-forwarded-prefix")
+        && let Ok(value) = HeaderValue::from_str(&state.effective_server_context_path)
+    {
+        request.headers_mut().insert("x-forwarded-prefix", value);
+    }
+    if request.uri().path().starts_with("/kobo/")
+        && !has_forwarded_header
+        && let Some(port) = state.kobo_public_port().or(state.effective_server_port)
+        && let Some(authority) = request
+            .headers()
+            .get(header::HOST)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.parse::<Authority>().ok())
+    {
+        let host = authority.host();
+        let host = if host.contains(':') {
+            format!("[{host}]:{port}")
+        } else {
+            format!("{host}:{port}")
+        };
+        if let Ok(value) = HeaderValue::from_str(&host) {
+            request.headers_mut().insert(header::HOST, value);
+        }
+    }
+    next.run(request).await
+}
+
+fn has_forwarded_header(headers: &axum::http::HeaderMap) -> bool {
+    [
+        "forwarded",
+        "x-forwarded-host",
+        "x-forwarded-port",
+        "x-forwarded-proto",
+        "x-forwarded-prefix",
+        "x-forwarded-ssl",
+        "x-forwarded-for",
+    ]
+    .iter()
+    .any(|name| headers.contains_key(*name))
 }
 
 fn make_http_span(request: &Request<Body>) -> tracing::Span {
@@ -387,6 +446,10 @@ fn protected_api() -> Router<AppState> {
         .route(
             "/api/v1/client-settings/user",
             patch(settings_routes::save_user_settings).delete(settings_routes::delete_user_settings),
+        )
+        .route(
+            "/api/v1/settings",
+            get(settings_routes::server_settings).patch(settings_routes::update_server_settings),
         )
         .route("/api/v1/tasks", delete(settings_routes::clear_tasks))
         .route("/sse/v1/events", get(sse_routes::events))

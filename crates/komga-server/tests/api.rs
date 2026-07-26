@@ -8,7 +8,7 @@ use komga_core::{
     scan_library_files,
 };
 use komga_media::{analyze_book, generate_thumbnail, image_dimension};
-use komga_server::{AppState, REMEMBER_ME_COOKIE, SESSION_HEADER, build_app};
+use komga_server::{AppState, REMEMBER_ME_COOKIE, SESSION_HEADER, ServerBindSettings, build_app};
 use komga_storage::{Storage, TaskStorage};
 use sha2::{Digest, Sha512};
 use std::{
@@ -52,6 +52,8 @@ mod page_hash_cases;
 mod progress_cases;
 #[path = "api_cases/referential.rs"]
 mod referential_cases;
+#[path = "api_cases/settings.rs"]
+mod settings_cases;
 #[path = "api_cases/source_deletion.rs"]
 mod source_deletion_cases;
 #[path = "api_cases/source_import.rs"]

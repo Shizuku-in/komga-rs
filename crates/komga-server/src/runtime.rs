@@ -105,14 +105,13 @@ impl AppState {
     ///
     /// # Errors
     ///
-    /// Returns a storage error when the configured task pool size cannot be read.
+    /// The result remains fallible for API compatibility with embedders; current
+    /// startup work does not perform an additional database query.
     pub async fn start_runtime(&self) -> Result<AppRuntime, StorageError> {
-        let worker_count = self.storage.task_pool_size().await?;
-        let mut handles = Vec::with_capacity(worker_count + 1);
-        for index in 0..worker_count {
-            handles.push(tokio::spawn(worker_loop(self.clone(), index)));
-        }
-        handles.push(tokio::spawn(scheduler_loop(self.clone())));
+        let handles = vec![
+            tokio::spawn(worker_supervisor(self.clone(), self.task_pool_size.subscribe())),
+            tokio::spawn(scheduler_loop(self.clone())),
+        ];
         self.task_notify.notify_waiters();
         Ok(AppRuntime {
             shutdown: ShutdownHandle {
@@ -235,12 +234,96 @@ const SUPPORTED_TASK_TYPES: [&str; 24] = [
     "RefreshSeriesLocalArtwork",
 ];
 
-async fn worker_loop(state: AppState, index: usize) {
+struct WorkerHandle {
+    stop: CancellationToken,
+    handle: JoinHandle<()>,
+}
+
+async fn worker_supervisor(state: AppState, mut desired: tokio::sync::watch::Receiver<usize>) {
+    let mut workers = Vec::new();
+    let mut retiring = Vec::new();
+    let mut next_index = 0_usize;
+    resize_workers(
+        &state,
+        *desired.borrow_and_update(),
+        &mut workers,
+        &mut retiring,
+        &mut next_index,
+    );
+    loop {
+        tokio::select! {
+            () = state.shutdown.cancelled() => break,
+            changed = desired.changed() => {
+                if changed.is_err() {
+                    break;
+                }
+                resize_workers(
+                    &state,
+                    *desired.borrow_and_update(),
+                    &mut workers,
+                    &mut retiring,
+                    &mut next_index,
+                );
+                collect_finished_workers(&mut retiring).await;
+            }
+        }
+    }
+    for worker in workers.iter().chain(&retiring) {
+        worker.stop.cancel();
+    }
+    state.task_notify.notify_waiters();
+    workers.append(&mut retiring);
+    for worker in workers {
+        if let Err(error) = worker.handle.await {
+            tracing::error!(%error, "task worker terminated unexpectedly");
+        }
+    }
+}
+
+fn resize_workers(
+    state: &AppState,
+    desired: usize,
+    workers: &mut Vec<WorkerHandle>,
+    retiring: &mut Vec<WorkerHandle>,
+    next_index: &mut usize,
+) {
+    while workers.len() < desired {
+        let stop = CancellationToken::new();
+        workers.push(WorkerHandle {
+            stop: stop.clone(),
+            handle: tokio::spawn(worker_loop(state.clone(), *next_index, stop)),
+        });
+        *next_index = next_index.wrapping_add(1);
+    }
+    while workers.len() > desired {
+        if let Some(worker) = workers.pop() {
+            worker.stop.cancel();
+            retiring.push(worker);
+        }
+    }
+    state.task_notify.notify_waiters();
+}
+
+async fn collect_finished_workers(workers: &mut Vec<WorkerHandle>) {
+    let mut index = 0;
+    while index < workers.len() {
+        if workers[index].handle.is_finished() {
+            let worker = workers.swap_remove(index);
+            if let Err(error) = worker.handle.await {
+                tracing::error!(%error, "retired task worker terminated unexpectedly");
+            }
+        } else {
+            index += 1;
+        }
+    }
+}
+
+async fn worker_loop(state: AppState, index: usize, stop: CancellationToken) {
     let owner = format!("komga-rs-{}-{index}", std::process::id());
     loop {
         let notified = state.task_notify.notified();
         tokio::pin!(notified);
-        if state.shutdown.is_cancelled() {
+        if state.shutdown.is_cancelled() || stop.is_cancelled() {
             break;
         }
         match state.tasks.take_first_of_types(&owner, &SUPPORTED_TASK_TYPES).await {
@@ -256,6 +339,7 @@ async fn worker_loop(state: AppState, index: usize) {
                 if outcome == TaskOutcome::Retry {
                     tokio::select! {
                         () = state.shutdown.cancelled() => break,
+                        () = stop.cancelled() => break,
                         () = tokio::time::sleep(Duration::from_secs(1)) => {}
                     }
                 }
@@ -263,6 +347,7 @@ async fn worker_loop(state: AppState, index: usize) {
             Ok(None) => {
                 tokio::select! {
                     () = state.shutdown.cancelled() => break,
+                    () = stop.cancelled() => break,
                     () = &mut notified => {}
                 }
             }
@@ -270,6 +355,7 @@ async fn worker_loop(state: AppState, index: usize) {
                 tracing::error!(%error, worker = %owner, "could not claim task");
                 tokio::select! {
                     () = state.shutdown.cancelled() => break,
+                    () = stop.cancelled() => break,
                     () = tokio::time::sleep(Duration::from_secs(1)) => {}
                 }
             }
@@ -358,6 +444,38 @@ mod tests {
     use url::Url;
 
     use super::*;
+
+    #[tokio::test]
+    async fn task_workers_resize_up_and_retire_without_cancelling_active_work() {
+        let state = AppState::new(
+            Storage::connect_memory().await.unwrap(),
+            TaskStorage::connect_memory().await.unwrap(),
+        )
+        .await
+        .unwrap();
+        let mut workers = Vec::new();
+        let mut retiring = Vec::new();
+        let mut next_index = 0;
+        resize_workers(&state, 3, &mut workers, &mut retiring, &mut next_index);
+        assert_eq!(workers.len(), 3);
+        assert!(retiring.is_empty());
+        assert_eq!(next_index, 3);
+
+        resize_workers(&state, 1, &mut workers, &mut retiring, &mut next_index);
+        assert_eq!(workers.len(), 1);
+        assert_eq!(retiring.len(), 2);
+        assert!(retiring.iter().all(|worker| worker.stop.is_cancelled()));
+
+        state.shutdown.cancel();
+        for worker in &workers {
+            worker.stop.cancel();
+        }
+        state.task_notify.notify_waiters();
+        workers.append(&mut retiring);
+        for worker in workers {
+            worker.handle.await.unwrap();
+        }
+    }
 
     #[tokio::test]
     async fn rebuild_index_honors_subsets_and_upgrade_index_rebuilds_everything() {

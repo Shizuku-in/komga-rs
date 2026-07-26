@@ -47,14 +47,21 @@ mod webpub_routes;
 pub use auth::{REMEMBER_ME_COOKIE, SESSION_COOKIE, SESSION_HEADER};
 pub use runtime::{AppRuntime, ShutdownHandle};
 
-use std::{num::NonZeroUsize, path::PathBuf, sync::Arc};
+use std::{
+    num::{NonZeroU16, NonZeroUsize},
+    path::PathBuf,
+    sync::{
+        Arc,
+        atomic::{AtomicU16, Ordering},
+    },
+};
 
 use auth::SessionStore;
 use axum::Router;
 use komga_core::DomainEvent;
 use komga_search::{IndexState, SearchIndex};
-use komga_storage::{Storage, StorageError, TaskRecord, TaskStorage};
-use tokio::sync::{Mutex, Notify, broadcast};
+use komga_storage::{ServerSettings, Storage, StorageError, TaskRecord, TaskStorage};
+use tokio::sync::{Mutex, Notify, broadcast, watch};
 use tokio_util::sync::CancellationToken;
 
 /// Shared dependencies used by the HTTP router.
@@ -71,12 +78,36 @@ pub struct AppState {
     claim_lock: Arc<Mutex<()>>,
     task_notify: Arc<Notify>,
     schedule_notify: Arc<Notify>,
+    task_pool_size: watch::Sender<usize>,
     domain_events: broadcast::Sender<Arc<DomainEvent>>,
     shutdown: CancellationToken,
     page_hashing: NonZeroUsize,
     kobo_sync_item_limit: NonZeroUsize,
     kobo_kepub: kobo::kepub::KepubService,
     kobo_proxy: kobo::proxy::KoboProxy,
+    kobo_port: Arc<AtomicU16>,
+    database_kobo_proxy: Option<bool>,
+    database_kepubify_path: Option<PathBuf>,
+    configuration_server_port: u16,
+    configuration_server_context_path: Option<String>,
+    effective_server_port: Option<u16>,
+    effective_server_context_path: String,
+    configuration_kobo_proxy: bool,
+    configuration_kepubify_path: Option<PathBuf>,
+}
+
+/// Configuration-source and effective HTTP binding values exposed by the
+/// Kotlin-compatible server-settings API.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ServerBindSettings {
+    /// Port supplied by CLI or environment configuration.
+    pub configuration_port: u16,
+    /// Optional context path supplied by CLI or environment configuration.
+    pub configuration_context_path: Option<String>,
+    /// Port actually bound by the current process.
+    pub effective_port: Option<u16>,
+    /// Context path used by the current process, or an empty string at root.
+    pub effective_context_path: String,
 }
 
 impl AppState {
@@ -116,22 +147,34 @@ impl AppState {
     }
 
     async fn build(storage: Storage, tasks: TaskStorage, search: SearchIndex) -> Result<Self, StorageError> {
-        let remember_me_duration_days = storage.remember_me_duration_days().await?;
+        let server_settings = storage.server_settings().await?;
+        let (task_pool_size, _) = watch::channel(server_settings.task_pool_size);
         let (domain_events, _) = broadcast::channel(1_024);
         Ok(Self {
             storage,
             search,
             tasks,
-            sessions: SessionStore::new(remember_me_duration_days),
+            sessions: SessionStore::new(server_settings.remember_me_duration_days),
             claim_lock: Arc::new(Mutex::new(())),
             task_notify: Arc::new(Notify::new()),
             schedule_notify: Arc::new(Notify::new()),
+            task_pool_size,
             domain_events,
             shutdown: CancellationToken::new(),
             page_hashing: NonZeroUsize::new(3).expect("page hashing default is nonzero"),
             kobo_sync_item_limit: NonZeroUsize::new(100).expect("Kobo sync default is nonzero"),
-            kobo_kepub: kobo::kepub::KepubService::disabled(),
-            kobo_proxy: kobo::proxy::KoboProxy::new(false),
+            kobo_kepub: kobo::kepub::KepubService::configure(server_settings.kepubify_path.as_ref().map(PathBuf::from))
+                .await,
+            kobo_proxy: kobo::proxy::KoboProxy::new(server_settings.kobo_proxy.unwrap_or(false)),
+            kobo_port: Arc::new(AtomicU16::new(server_settings.kobo_port.unwrap_or(0))),
+            database_kobo_proxy: server_settings.kobo_proxy,
+            database_kepubify_path: server_settings.kepubify_path.map(PathBuf::from),
+            configuration_server_port: 25_600,
+            configuration_server_context_path: None,
+            effective_server_port: None,
+            effective_server_context_path: String::new(),
+            configuration_kobo_proxy: false,
+            configuration_kepubify_path: None,
         })
     }
 
@@ -155,15 +198,52 @@ impl AppState {
     /// not prevent the application from starting.
     #[must_use]
     pub async fn with_kobo_kepubify_path(mut self, path: Option<PathBuf>) -> Self {
-        self.kobo_kepub = kobo::kepub::KepubService::configure(path).await;
+        self.configuration_kepubify_path = path.clone();
+        self.kobo_kepub
+            .reconfigure(self.database_kepubify_path.clone(), path)
+            .await;
         self
     }
 
     /// Enables or disables forwarding unsupported Kobo requests to the official store.
     #[must_use]
     pub fn with_kobo_proxy(mut self, enabled: bool) -> Self {
-        self.kobo_proxy = kobo::proxy::KoboProxy::new(enabled);
+        self.configuration_kobo_proxy = enabled;
+        self.kobo_proxy.set_enabled(self.database_kobo_proxy.unwrap_or(enabled));
         self
+    }
+
+    /// Records the configured and effective HTTP binding used by this process.
+    #[must_use]
+    pub fn with_server_bind_settings(mut self, settings: ServerBindSettings) -> Self {
+        self.configuration_server_port = settings.configuration_port;
+        self.configuration_server_context_path = settings.configuration_context_path;
+        self.effective_server_port = settings.effective_port;
+        self.effective_server_context_path = settings.effective_context_path;
+        self
+    }
+
+    async fn apply_server_settings(&self, settings: &ServerSettings, remember_me_key_renewed: bool) {
+        self.sessions
+            .set_remember_me_duration_days(settings.remember_me_duration_days);
+        if remember_me_key_renewed {
+            self.sessions.remove_remembered();
+        }
+        self.task_pool_size.send_replace(settings.task_pool_size);
+        self.task_notify.notify_waiters();
+        self.kobo_proxy
+            .set_enabled(settings.kobo_proxy.unwrap_or(self.configuration_kobo_proxy));
+        self.kobo_port.store(settings.kobo_port.unwrap_or(0), Ordering::Relaxed);
+        self.kobo_kepub
+            .reconfigure(
+                settings.kepubify_path.as_ref().map(PathBuf::from),
+                self.configuration_kepubify_path.clone(),
+            )
+            .await;
+    }
+
+    fn kobo_public_port(&self) -> Option<u16> {
+        NonZeroU16::new(self.kobo_port.load(Ordering::Relaxed)).map(NonZeroU16::get)
     }
 
     pub(crate) async fn enqueue_task(&self, task: &TaskRecord) -> Result<(), StorageError> {

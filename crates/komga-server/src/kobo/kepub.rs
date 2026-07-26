@@ -8,7 +8,7 @@ use std::{
     io::Read,
     path::{Path, PathBuf},
     process::Stdio,
-    sync::Arc,
+    sync::{Arc, RwLock},
     time::Duration,
 };
 
@@ -72,20 +72,17 @@ pub(crate) enum KepubConversionError {
 /// Cloneable process service shared by media analysis and Kobo downloads.
 #[derive(Clone)]
 pub(crate) struct KepubService {
-    executable: Option<Arc<PathBuf>>,
-    cache: Cache<CacheKey, Arc<CachedKepub>>,
+    configuration: Arc<RwLock<KepubConfiguration>>,
     conversion_timeout: Duration,
 }
 
-impl KepubService {
-    pub(crate) fn disabled() -> Self {
-        Self {
-            executable: None,
-            cache: Cache::builder().time_to_idle(CACHE_IDLE_TIMEOUT).build(),
-            conversion_timeout: CONVERSION_TIMEOUT,
-        }
-    }
+struct KepubConfiguration {
+    executable: Option<Arc<PathBuf>>,
+    effective_path: Option<PathBuf>,
+    cache: Cache<CacheKey, Arc<CachedKepub>>,
+}
 
+impl KepubService {
     pub(crate) async fn configure(path: Option<PathBuf>) -> Self {
         Self::configure_with_timeouts(path, VALIDATION_TIMEOUT, CONVERSION_TIMEOUT).await
     }
@@ -95,26 +92,36 @@ impl KepubService {
         validation_timeout: Duration,
         conversion_timeout: Duration,
     ) -> Self {
-        let Some(path) = path else {
-            tracing::info!("Kepub conversion unavailable: kepubify path is not set");
-            return Self::disabled();
-        };
-        let executable = if executable_file(&path) || command_succeeds(&path, validation_timeout).await {
-            tracing::info!(path = %path.display(), "Kepub conversion available");
-            Some(Arc::new(path))
-        } else {
-            tracing::warn!(path = %path.display(), "Kepub conversion unavailable: kepubify path is invalid");
-            None
-        };
         Self {
-            executable,
-            cache: Cache::builder().time_to_idle(CACHE_IDLE_TIMEOUT).build(),
+            configuration: Arc::new(RwLock::new(
+                KepubConfiguration::configure(path, validation_timeout).await,
+            )),
             conversion_timeout,
         }
     }
 
     pub(crate) fn is_available(&self) -> bool {
-        self.executable.is_some()
+        self.configuration
+            .read()
+            .expect("kepub configuration lock poisoned")
+            .executable
+            .is_some()
+    }
+
+    pub(crate) fn effective_path(&self) -> Option<PathBuf> {
+        self.configuration
+            .read()
+            .expect("kepub configuration lock poisoned")
+            .effective_path
+            .clone()
+    }
+
+    pub(crate) async fn reconfigure(&self, database_path: Option<PathBuf>, fallback_path: Option<PathBuf>) {
+        let mut configuration = KepubConfiguration::configure(database_path, VALIDATION_TIMEOUT).await;
+        if configuration.executable.is_none() && fallback_path.is_some() {
+            configuration = KepubConfiguration::configure(fallback_path, VALIDATION_TIMEOUT).await;
+        }
+        *self.configuration.write().expect("kepub configuration lock poisoned") = configuration;
     }
 
     pub(crate) async fn get_or_convert(
@@ -122,7 +129,16 @@ impl KepubService {
         book: &Book,
         shutdown: &CancellationToken,
     ) -> Result<Arc<CachedKepub>, KepubConversionError> {
-        let executable = self.executable.clone().ok_or(KepubConversionError::Unavailable)?;
+        let (executable, cache) = {
+            let configuration = self.configuration.read().expect("kepub configuration lock poisoned");
+            (
+                configuration
+                    .executable
+                    .clone()
+                    .ok_or(KepubConversionError::Unavailable)?,
+                configuration.cache.clone(),
+            )
+        };
         let key = CacheKey {
             book_id: book.id.clone(),
             file_last_modified: book.file_last_modified,
@@ -130,7 +146,7 @@ impl KepubService {
         let book = book.clone();
         let shutdown = shutdown.clone();
         let conversion_timeout = self.conversion_timeout;
-        self.cache
+        cache
             .try_get_with(key, async move {
                 convert(executable.as_ref(), &book, &shutdown, conversion_timeout)
                     .await
@@ -138,6 +154,34 @@ impl KepubService {
             })
             .await
             .map_err(|error| (*error).clone())
+    }
+}
+
+impl KepubConfiguration {
+    fn disabled() -> Self {
+        Self {
+            executable: None,
+            effective_path: None,
+            cache: Cache::builder().time_to_idle(CACHE_IDLE_TIMEOUT).build(),
+        }
+    }
+
+    async fn configure(path: Option<PathBuf>, validation_timeout: Duration) -> Self {
+        let Some(path) = path else {
+            tracing::info!("Kepub conversion unavailable: kepubify path is not set");
+            return Self::disabled();
+        };
+        if executable_file(&path) || command_succeeds(&path, validation_timeout).await {
+            tracing::info!(path = %path.display(), "Kepub conversion available");
+            Self {
+                executable: Some(Arc::new(path.clone())),
+                effective_path: Some(path),
+                cache: Cache::builder().time_to_idle(CACHE_IDLE_TIMEOUT).build(),
+            }
+        } else {
+            tracing::warn!(path = %path.display(), "Kepub conversion unavailable: kepubify path is invalid");
+            Self::disabled()
+        }
     }
 }
 

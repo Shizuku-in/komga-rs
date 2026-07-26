@@ -9,7 +9,7 @@ use std::collections::BTreeSet;
 use chrono::NaiveDate;
 use komga_core::{
     AlternateTitle, Author, BookMetadataPatch, MetadataUpdate, R2Locator, ReadingDirection, ScanInterval, SeriesCover,
-    SeriesMetadataPatch, SeriesStatus, WebLink,
+    SeriesMetadataPatch, SeriesStatus, ThumbnailSize, WebLink,
 };
 use serde::{Deserialize, Deserializer, Serialize};
 
@@ -256,6 +256,45 @@ pub(crate) struct ClientSettingGlobalUpdateDto {
 #[derive(Debug, Deserialize)]
 pub(crate) struct ClientSettingUserUpdateDto {
     pub(crate) value: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SettingMultiSource<T> {
+    pub(crate) configuration_source: T,
+    pub(crate) database_source: T,
+    pub(crate) effective_value: T,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ServerSettingsDto {
+    pub(crate) delete_empty_collections: bool,
+    pub(crate) delete_empty_read_lists: bool,
+    pub(crate) remember_me_duration_days: u64,
+    pub(crate) thumbnail_size: ThumbnailSize,
+    pub(crate) task_pool_size: usize,
+    pub(crate) server_port: SettingMultiSource<Option<u16>>,
+    pub(crate) server_context_path: SettingMultiSource<Option<String>>,
+    pub(crate) kobo_proxy: bool,
+    pub(crate) kobo_port: Option<u16>,
+    pub(crate) kepubify_path: SettingMultiSource<Option<String>>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub(crate) struct ServerSettingsUpdateDto {
+    pub(crate) delete_empty_collections: Option<bool>,
+    pub(crate) delete_empty_read_lists: Option<bool>,
+    pub(crate) remember_me_duration_days: Option<i64>,
+    pub(crate) renew_remember_me_key: Option<bool>,
+    pub(crate) thumbnail_size: Option<ThumbnailSize>,
+    pub(crate) task_pool_size: Option<i32>,
+    pub(crate) server_port: Patch<u16>,
+    pub(crate) server_context_path: Patch<String>,
+    pub(crate) kobo_proxy: Option<bool>,
+    pub(crate) kobo_port: Patch<u16>,
+    pub(crate) kepubify_path: Patch<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]

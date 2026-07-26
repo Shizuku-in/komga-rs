@@ -8,7 +8,10 @@
 //! `KOMGA-SESSION`.
 
 use std::{
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{Duration, Instant},
 };
 
@@ -45,19 +48,20 @@ pub(crate) struct AuthContext {
 struct Session {
     user_id: String,
     expires_at: Instant,
+    remember_me: bool,
 }
 
 #[derive(Clone)]
 pub(crate) struct SessionStore {
     sessions: Arc<DashMap<String, Session>>,
-    remember_me_duration: Duration,
+    remember_me_duration_seconds: Arc<AtomicU64>,
 }
 
 impl SessionStore {
     pub(crate) fn new(remember_me_duration_days: u64) -> Self {
         Self {
             sessions: Arc::new(DashMap::new()),
-            remember_me_duration: Duration::from_secs(remember_me_duration_days.saturating_mul(24 * 60 * 60)),
+            remember_me_duration_seconds: Arc::new(AtomicU64::new(duration_seconds(remember_me_duration_days))),
         }
     }
 
@@ -67,7 +71,7 @@ impl SessionStore {
         rand::rng().fill_bytes(&mut bytes);
         let id = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes);
         let duration = if remember_me {
-            self.remember_me_duration
+            Duration::from_secs(self.remember_me_duration_seconds.load(Ordering::Relaxed))
         } else {
             Duration::from_secs(7 * 24 * 60 * 60)
         };
@@ -76,6 +80,7 @@ impl SessionStore {
             Session {
                 user_id: user_id.to_owned(),
                 expires_at: Instant::now() + duration,
+                remember_me,
             },
         );
         id
@@ -102,9 +107,24 @@ impl SessionStore {
         self.sessions.retain(|_, session| session.user_id != user_id);
     }
 
-    pub(crate) fn remember_me_max_age(&self) -> u64 {
-        self.remember_me_duration.as_secs()
+    /// Updates the lifetime used by subsequently issued remember-me sessions.
+    pub(crate) fn set_remember_me_duration_days(&self, days: u64) {
+        self.remember_me_duration_seconds
+            .store(duration_seconds(days), Ordering::Relaxed);
     }
+
+    /// Invalidates long-lived sessions while preserving ordinary sessions.
+    pub(crate) fn remove_remembered(&self) {
+        self.sessions.retain(|_, session| !session.remember_me);
+    }
+
+    pub(crate) fn remember_me_max_age(&self) -> u64 {
+        self.remember_me_duration_seconds.load(Ordering::Relaxed)
+    }
+}
+
+fn duration_seconds(days: u64) -> u64 {
+    days.saturating_mul(24 * 60 * 60)
 }
 
 enum AuthSource {

@@ -1,6 +1,12 @@
 //! Restricted forwarding of Kobo device API requests to the official store.
 
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
 
 use axum::{
     body::{Body, Bytes},
@@ -67,7 +73,7 @@ pub(super) enum ProxyError {
 /// Cloneable, production-pinned Kobo Store proxy service.
 #[derive(Clone)]
 pub(crate) struct KoboProxy {
-    enabled: bool,
+    enabled: Arc<AtomicBool>,
     client: reqwest::Client,
     base_url: Arc<str>,
 }
@@ -85,14 +91,18 @@ impl KoboProxy {
             .build()
             .expect("constant Kobo Store HTTP client configuration is valid");
         Self {
-            enabled,
+            enabled: Arc::new(AtomicBool::new(enabled)),
             client,
             base_url: Arc::from(base_url.trim_end_matches('/')),
         }
     }
 
-    pub(super) fn is_enabled(&self) -> bool {
-        self.enabled
+    pub(crate) fn is_enabled(&self) -> bool {
+        self.enabled.load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn set_enabled(&self, enabled: bool) {
+        self.enabled.store(enabled, Ordering::Relaxed);
     }
 
     pub(super) async fn forward(
@@ -103,7 +113,7 @@ impl KoboProxy {
         body: Option<Bytes>,
         raw_sync_token: Option<&str>,
     ) -> Result<ProxyResponse, ProxyError> {
-        if !self.enabled {
+        if !self.is_enabled() {
             return Err(ProxyError::Disabled);
         }
         let upstream_path = upstream_path(uri.path()).ok_or(ProxyError::InvalidPath)?;
@@ -288,6 +298,27 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(error, ProxyError::Upstream(StatusCode::IM_A_TEAPOT)));
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn proxy_enablement_changes_without_replacing_the_upstream_client() {
+        let (base_url, handle) = upstream().await;
+        let proxy = KoboProxy::with_base_url(false, &base_url);
+        let uri = "/kobo/local-secret/v1/resources".parse().unwrap();
+        assert!(matches!(
+            proxy.forward(&Method::GET, &uri, &HeaderMap::new(), None, None).await,
+            Err(ProxyError::Disabled)
+        ));
+        proxy.set_enabled(true);
+        assert!(
+            proxy
+                .forward(&Method::GET, &uri, &HeaderMap::new(), None, None)
+                .await
+                .is_ok()
+        );
+        proxy.set_enabled(false);
+        assert!(!proxy.is_enabled());
         handle.abort();
     }
 }
