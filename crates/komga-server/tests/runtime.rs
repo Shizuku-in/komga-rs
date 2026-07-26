@@ -1,10 +1,17 @@
 use std::{fs, fs::File, io::Write, path::PathBuf, time::Duration};
 
+use axum::{
+    body::Body,
+    http::{Request, StatusCode, header},
+};
+use base64::{Engine, engine::general_purpose::STANDARD};
+use http_body_util::BodyExt;
 use komga_core::{BookMetadataPatch, Library, MetadataUpdate, PageRequest, ScanInterval, User, scan_library_files};
 use komga_media::analyze_book;
 use komga_search::{EntityKind, IndexState, SearchIndex};
-use komga_server::AppState;
+use komga_server::{AppState, build_app};
 use komga_storage::{Storage, TaskRecord, TaskStorage};
+use tower::ServiceExt;
 use url::Url;
 use zip::{ZipArchive, ZipWriter, write::SimpleFileOptions};
 
@@ -141,6 +148,206 @@ async fn owned_source_deletion_tasks_resume_after_task_storage_reconnect() {
             .deleted_date
             .is_some()
     );
+    runtime.shutdown().await;
+}
+
+#[tokio::test]
+async fn restarted_scan_tasks_import_series_sidecars_through_api_sse_and_cleanup_paths() {
+    const PNG_1X1: &[u8] = &[
+        137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 4, 0, 0, 0, 181, 28,
+        12, 2, 0, 0, 0, 11, 73, 68, 65, 84, 120, 218, 99, 100, 248, 15, 0, 1, 5, 1, 1, 39, 24, 227, 102, 0, 0, 0, 0,
+        73, 69, 78, 68, 174, 66, 96, 130,
+    ];
+
+    let storage = Storage::connect_memory().await.unwrap();
+    let task_directory = tempfile::tempdir().unwrap();
+    let task_path = task_directory.path().join("tasks.sqlite");
+    let tasks = TaskStorage::connect_path(&task_path).await.unwrap();
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path().join("library");
+    let delete_series_path = root.join("Delete Series");
+    let lazy_series_path = root.join("Lazy Series");
+    fs::create_dir_all(&delete_series_path).unwrap();
+    fs::create_dir_all(&lazy_series_path).unwrap();
+    let delete_book = delete_series_path.join("Book.cbz");
+    let delete_cover = delete_series_path.join("cover.png");
+    let lazy_book = lazy_series_path.join("Book.cbz");
+    let lazy_cover = lazy_series_path.join("poster.png");
+    fs::write(&delete_book, b"book").unwrap();
+    fs::write(&delete_cover, PNG_1X1).unwrap();
+    fs::write(&lazy_book, b"book").unwrap();
+    fs::write(&lazy_cover, PNG_1X1).unwrap();
+    let mut library = Library::new("Artwork".into(), Url::from_directory_path(&root).unwrap());
+    library.scan_interval = ScanInterval::Disabled;
+    library.hash_files = false;
+    library.hash_koreader = false;
+    storage.create_library(&library).await.unwrap();
+    tasks
+        .save(&TaskRecord::scan_library(&library.id, false, 8))
+        .await
+        .unwrap();
+    assert!(
+        tasks
+            .take_first_of_type("stopped-worker", "ScanLibrary")
+            .await
+            .unwrap()
+            .is_some()
+    );
+    drop(tasks);
+
+    let tasks = TaskStorage::connect_path(&task_path).await.unwrap();
+    assert_eq!(tasks.list().await.unwrap()[0].owner, None);
+    let state = AppState::new(storage.clone(), tasks.clone()).await.unwrap();
+    let app = build_app(state.clone());
+    assert_eq!(
+        app.clone()
+            .oneshot(
+                Request::post("/api/v1/claim")
+                    .header("X-Komga-Email", "admin@example.org")
+                    .header("X-Komga-Password", "password")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::OK
+    );
+    let authorization = format!("Basic {}", STANDARD.encode("admin@example.org:password"));
+    let sse = app
+        .clone()
+        .oneshot(
+            Request::get("/sse/v1/events")
+                .header(header::AUTHORIZATION, &authorization)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(sse.status(), StatusCode::OK);
+    let mut sse_body = sse.into_body();
+    let initial = tokio::time::timeout(Duration::from_secs(2), sse_body.frame())
+        .await
+        .expect("SSE did not produce an initial task status")
+        .unwrap()
+        .unwrap();
+    assert!(String::from_utf8_lossy(&initial.into_data().unwrap()).contains("TaskQueueStatus"));
+
+    let runtime = state.start_runtime().await.unwrap();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let series = storage.list_series_by_library_id(&library.id).await.unwrap();
+            let artwork_ready = series.len() == 2 && {
+                let mut ready = true;
+                for candidate in &series {
+                    ready &= storage.list_series_thumbnails(&candidate.id).await.unwrap().len() == 1;
+                }
+                ready
+            };
+            if artwork_ready && tasks.list().await.unwrap().is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("restarted scan task did not import series sidecars");
+    assert!(tasks.count_by_simple_type().await.unwrap().is_empty());
+
+    let sse_event = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let frame = sse_body.frame().await.unwrap().unwrap();
+            let text = String::from_utf8_lossy(&frame.into_data().unwrap()).into_owned();
+            if text.contains("event: ThumbnailSeriesAdded") {
+                break text;
+            }
+        }
+    })
+    .await
+    .expect("SSE did not deliver ThumbnailSeriesAdded");
+    assert!(sse_event.contains(r#""selected":true"#));
+
+    let mut series = storage.list_series_by_library_id(&library.id).await.unwrap();
+    series.sort_by(|left, right| left.name.cmp(&right.name));
+    let delete_series = &series[0];
+    let lazy_series = &series[1];
+    assert_eq!(delete_series.name, "Delete Series");
+    assert_eq!(lazy_series.name, "Lazy Series");
+    let thumbnails_path = format!("/api/v1/series/{}/thumbnails", lazy_series.id);
+    let listed = app
+        .clone()
+        .oneshot(
+            Request::get(&thumbnails_path)
+                .header(header::AUTHORIZATION, &authorization)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(listed.status(), StatusCode::OK);
+    let listed =
+        serde_json::from_slice::<serde_json::Value>(&listed.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert_eq!(listed[0]["type"], "SIDECAR");
+    assert_eq!(listed[0]["mediaType"], "image/png");
+    assert_eq!(listed[0]["width"], 1);
+    assert_eq!(listed[0]["height"], 1);
+    let thumbnail_id = listed[0]["id"].as_str().unwrap();
+    for path in [
+        format!("/api/v1/series/{}/thumbnail", lazy_series.id),
+        format!("{thumbnails_path}/{thumbnail_id}"),
+    ] {
+        let image = app
+            .clone()
+            .oneshot(
+                Request::get(path)
+                    .header(header::AUTHORIZATION, &authorization)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(image.status(), StatusCode::OK);
+        assert_eq!(image.into_body().collect().await.unwrap().to_bytes().as_ref(), PNG_1X1);
+    }
+
+    let deletion = app
+        .clone()
+        .oneshot(
+            Request::delete(format!("/api/v1/series/{}/file", delete_series.id))
+                .header(header::AUTHORIZATION, &authorization)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(deletion.status(), StatusCode::ACCEPTED);
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while delete_book.exists() || delete_cover.exists() || !tasks.list().await.unwrap().is_empty() {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("series deletion did not remove imported sidecar");
+
+    fs::remove_file(&lazy_cover).unwrap();
+    let missing = app
+        .oneshot(
+            Request::get(format!("/api/v1/series/{}/thumbnail", lazy_series.id))
+                .header(header::AUTHORIZATION, &authorization)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+    assert!(
+        storage
+            .list_series_thumbnails(&lazy_series.id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
     runtime.shutdown().await;
 }
 

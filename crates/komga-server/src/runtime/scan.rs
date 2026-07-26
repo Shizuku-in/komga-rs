@@ -119,10 +119,19 @@ pub(super) async fn process_scan_task(state: &AppState, task: &TaskRecord) -> Ta
             }
             for book_id in stats.book_artwork_changed {
                 if let Err(error) = state
-                    .enqueue_task(&TaskRecord::refresh_book_local_artwork(&book_id, task.priority))
+                    .enqueue_task(&TaskRecord::refresh_book_local_artwork(&book_id, 4))
                     .await
                 {
                     tracing::error!(%error, %book_id, "could not enqueue local artwork refresh");
+                    return TaskOutcome::Retry;
+                }
+            }
+            for series_id in stats.series_artwork_changed {
+                if let Err(error) = state
+                    .enqueue_task(&TaskRecord::refresh_series_local_artwork(&series_id, 4))
+                    .await
+                {
+                    tracing::error!(%error, %series_id, "could not enqueue local series artwork refresh");
                     return TaskOutcome::Retry;
                 }
             }
@@ -243,4 +252,53 @@ pub(super) async fn process_scan_task(state: &AppState, task: &TaskRecord) -> Ta
         library_id: payload.library_id,
     }));
     TaskOutcome::Completed
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use komga_core::{Library, ScanInterval};
+    use komga_storage::{Storage, TaskStorage};
+    use url::Url;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn scans_enqueue_book_and_series_artwork_at_kotlin_default_priority() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("library");
+        let series = root.join("Series");
+        fs::create_dir_all(&series).unwrap();
+        fs::write(series.join("Book.cbz"), b"book").unwrap();
+        fs::write(series.join("Book.jpg"), b"artwork").unwrap();
+        fs::write(series.join("cover.jpg"), b"artwork").unwrap();
+        let mut library = Library::new("Library".into(), Url::from_directory_path(&root).unwrap());
+        library.scan_interval = ScanInterval::Disabled;
+        library.hash_files = false;
+        library.hash_koreader = false;
+        let storage = Storage::connect_memory().await.unwrap();
+        let tasks = TaskStorage::connect_memory().await.unwrap();
+        storage.create_library(&library).await.unwrap();
+        let state = AppState::new(storage, tasks.clone()).await.unwrap();
+
+        assert_eq!(
+            process_scan_task(&state, &TaskRecord::scan_library(&library.id, false, 9)).await,
+            TaskOutcome::Completed
+        );
+        let artwork = tasks
+            .list()
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|task| {
+                matches!(
+                    task.simple_type.as_str(),
+                    "RefreshBookLocalArtwork" | "RefreshSeriesLocalArtwork"
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(artwork.len(), 2);
+        assert!(artwork.iter().all(|task| task.priority == 4));
+    }
 }

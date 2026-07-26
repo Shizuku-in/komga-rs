@@ -42,7 +42,7 @@ use duplicate_pages::{process_find_duplicate_pages_task, process_remove_hashed_p
 use hashing::process_hash_book_task;
 use koreader_hashing::process_hash_book_koreader_task;
 use lifecycle::{perform_empty_trash, process_empty_trash_task};
-use local_artwork::process_refresh_book_local_artwork_task;
+use local_artwork::{process_refresh_book_local_artwork_task, process_refresh_series_local_artwork_task};
 use maintenance::{process_aggregate_series_metadata_task, process_find_thumbnails_task};
 use metadata::{process_refresh_book_metadata_task, process_refresh_series_metadata_task};
 use page_hashing::{process_find_missing_page_hashes_task, process_hash_book_pages_task};
@@ -208,7 +208,7 @@ pub(super) enum TaskOutcome {
     Retry,
 }
 
-const SUPPORTED_TASK_TYPES: [&str; 23] = [
+const SUPPORTED_TASK_TYPES: [&str; 24] = [
     "ScanLibrary",
     "FindBooksToConvert",
     "ConvertBook",
@@ -232,6 +232,7 @@ const SUPPORTED_TASK_TYPES: [&str; 23] = [
     "DeleteSeries",
     "ImportBook",
     "RefreshBookLocalArtwork",
+    "RefreshSeriesLocalArtwork",
 ];
 
 async fn worker_loop(state: AppState, index: usize) {
@@ -299,6 +300,7 @@ async fn process_task(state: &AppState, task: &TaskRecord) -> TaskOutcome {
         "DeleteSeries" => process_delete_series_task(state, task).await,
         "ImportBook" => process_import_book_task(state, task).await,
         "RefreshBookLocalArtwork" => process_refresh_book_local_artwork_task(state, task).await,
+        "RefreshSeriesLocalArtwork" => process_refresh_series_local_artwork_task(state, task).await,
         "RebuildIndex" => {
             let payload = match serde_json::from_str::<RebuildIndexPayload>(&task.payload) {
                 Ok(payload) => payload,
