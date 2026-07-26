@@ -7,3 +7,17 @@ from `komga/komga-webui` at Komga commit
 Production builds must use this root copy. The `komga/` submodule remains the
 read-only behavioral reference and is not the source for packaged Web UI
 assets.
+
+Node.js 24 is the default toolchain. Install dependencies and run the explicit
+quality gates with:
+
+```bash
+npm ci
+npm run lint
+npm run test:unit -- --runInBand
+npm run build
+```
+
+Production builds transpile TypeScript without running the memory-intensive
+Vue CLI type-checking plugin. Sass is compiled with Sass Embedded's shared
+modern compiler; dependency versions are pinned by `package-lock.json`.
