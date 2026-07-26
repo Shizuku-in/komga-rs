@@ -836,6 +836,58 @@ impl Storage {
         Ok(saved)
     }
 
+    /// Replaces a filesystem-backed series thumbnail with the same URL.
+    ///
+    /// The first discovered sidecar is selected only when the series currently
+    /// has no selected thumbnail. Existing uploaded and other sidecar selections
+    /// are preserved.
+    ///
+    /// # Errors
+    ///
+    /// Returns a database error when reconciliation cannot be committed.
+    pub async fn upsert_series_sidecar_thumbnail(
+        &self,
+        thumbnail: &ThumbnailSeries,
+        prefer_selected: bool,
+    ) -> Result<ThumbnailSeries> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("DELETE FROM THUMBNAIL_SERIES WHERE SERIES_ID = ? AND TYPE = 'SIDECAR' AND URL = ?")
+            .bind(&thumbnail.series_id)
+            .bind(&thumbnail.url)
+            .execute(&mut *tx)
+            .await?;
+        let has_selected = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS(SELECT 1 FROM THUMBNAIL_SERIES WHERE SERIES_ID = ? AND SELECTED = 1)",
+        )
+        .bind(&thumbnail.series_id)
+        .fetch_one(&mut *tx)
+        .await?;
+        let selected = prefer_selected && !has_selected;
+        sqlx::query(
+            r#"INSERT INTO THUMBNAIL_SERIES
+                 (ID, THUMBNAIL, URL, SELECTED, TYPE, SERIES_ID, WIDTH, HEIGHT, MEDIA_TYPE, FILE_SIZE)
+               VALUES (?, ?, ?, ?, 'SIDECAR', ?, ?, ?, ?, ?)"#,
+        )
+        .bind(&thumbnail.id)
+        .bind(&thumbnail.thumbnail)
+        .bind(&thumbnail.url)
+        .bind(selected)
+        .bind(&thumbnail.series_id)
+        .bind(thumbnail.dimension.width)
+        .bind(thumbnail.dimension.height)
+        .bind(&thumbnail.media_type)
+        .bind(thumbnail.file_size)
+        .execute(&mut *tx)
+        .await?;
+        if selected {
+            mark_series_thumbnail_selected(&mut tx, &thumbnail.series_id, &thumbnail.id).await?;
+        }
+        tx.commit().await?;
+        let mut saved = thumbnail.clone();
+        saved.selected = selected;
+        Ok(saved)
+    }
+
     /// Selects a thumbnail belonging to a series.
     pub async fn select_series_thumbnail(&self, series_id: &str, thumbnail_id: &str) -> Result<bool> {
         let mut tx = self.pool.begin().await?;
@@ -1875,6 +1927,105 @@ mod tests {
                 .delete_series_thumbnail(&book.series_id, "series-upload")
                 .await
                 .unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn series_sidecar_upsert_replaces_urls_preserves_selection_and_rolls_back() {
+        let storage = Storage::connect_memory().await.unwrap();
+        let temporary = tempfile::tempdir().unwrap();
+        let book = scanned_book(&storage, temporary.path()).await;
+        let sidecar = |id: &str, url: &str| ThumbnailSeries {
+            id: id.into(),
+            thumbnail: None,
+            url: Some(url.into()),
+            selected: false,
+            thumbnail_type: "SIDECAR".into(),
+            media_type: "image/png".into(),
+            file_size: 10,
+            dimension: Dimension { width: 2, height: 5 },
+            series_id: book.series_id.clone(),
+        };
+
+        let first = storage
+            .upsert_series_sidecar_thumbnail(&sidecar("first", "file:///cover.jpg"), true)
+            .await
+            .unwrap();
+        assert!(first.selected);
+        let second = storage
+            .upsert_series_sidecar_thumbnail(&sidecar("second", "file:///poster.jpg"), false)
+            .await
+            .unwrap();
+        assert!(!second.selected);
+        assert!(
+            storage
+                .select_series_thumbnail(&book.series_id, "second")
+                .await
+                .unwrap()
+        );
+
+        storage
+            .upsert_series_sidecar_thumbnail(&sidecar("first-replaced", "file:///cover.jpg"), true)
+            .await
+            .unwrap();
+        let selected = storage
+            .find_selected_series_thumbnail(&book.series_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(selected.id, "second");
+        assert!(
+            storage
+                .find_series_thumbnail(&book.series_id, "first")
+                .await
+                .unwrap()
+                .is_none()
+        );
+
+        let uploaded = ThumbnailSeries {
+            id: "uploaded".into(),
+            thumbnail: Some(vec![1]),
+            url: None,
+            selected: false,
+            thumbnail_type: "USER_UPLOADED".into(),
+            media_type: "image/jpeg".into(),
+            file_size: 1,
+            dimension: Dimension { width: 1, height: 1 },
+            series_id: book.series_id.clone(),
+        };
+        storage.insert_series_thumbnail(&uploaded, true).await.unwrap();
+        storage
+            .upsert_series_sidecar_thumbnail(&sidecar("third", "file:///folder.jpg"), true)
+            .await
+            .unwrap();
+        assert_eq!(
+            storage
+                .find_selected_series_thumbnail(&book.series_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .id,
+            "uploaded"
+        );
+
+        sqlx::query(
+            "CREATE TRIGGER fail_series_sidecar BEFORE INSERT ON THUMBNAIL_SERIES WHEN NEW.TYPE = 'SIDECAR' BEGIN SELECT RAISE(FAIL, 'forced'); END",
+        )
+        .execute(storage.pool())
+        .await
+        .unwrap();
+        assert!(
+            storage
+                .upsert_series_sidecar_thumbnail(&sidecar("replacement-fails", "file:///cover.jpg"), false)
+                .await
+                .is_err()
+        );
+        assert!(
+            storage
+                .find_series_thumbnail(&book.series_id, "first-replaced")
+                .await
+                .unwrap()
+                .is_some()
         );
     }
 }

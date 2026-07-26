@@ -257,6 +257,26 @@ impl TaskRecord {
         }
     }
 
+    /// Builds a Kotlin-compatible local series artwork refresh task.
+    pub fn refresh_series_local_artwork(series_id: &str, priority: i32) -> Self {
+        let id = format!("REFRESH_SERIES_LOCAL_ARTWORK_{series_id}");
+        Self {
+            id: id.clone(),
+            priority,
+            group_id: None,
+            class: "org.gotson.komga.application.tasks.Task$RefreshSeriesLocalArtwork".into(),
+            simple_type: "RefreshSeriesLocalArtwork".into(),
+            payload: serde_json::json!({
+                "seriesId": series_id,
+                "priority": priority,
+                "groupId": null,
+                "uniqueId": id,
+            })
+            .to_string(),
+            owner: None,
+        }
+    }
+
     /// Builds a Kotlin-compatible book analysis task.
     pub fn analyze_book(book_id: &str, series_id: &str, priority: i32) -> Self {
         let id = format!("ANALYZE_BOOK_{book_id}");

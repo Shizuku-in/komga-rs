@@ -1228,6 +1228,47 @@ mod tests {
         assert_eq!(artwork.id, "REFRESH_BOOK_LOCAL_ARTWORK_book");
         assert_eq!(artwork.group_id, None);
         assert_eq!(artwork.simple_type, "RefreshBookLocalArtwork");
+
+        let series_artwork = TaskRecord::refresh_series_local_artwork("series", 4);
+        assert_eq!(series_artwork.id, "REFRESH_SERIES_LOCAL_ARTWORK_series");
+        assert_eq!(series_artwork.priority, 4);
+        assert_eq!(series_artwork.group_id, None);
+        assert_eq!(
+            series_artwork.class,
+            "org.gotson.komga.application.tasks.Task$RefreshSeriesLocalArtwork"
+        );
+        assert_eq!(series_artwork.simple_type, "RefreshSeriesLocalArtwork");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&series_artwork.payload).unwrap(),
+            serde_json::json!({
+                "seriesId": "series",
+                "priority": 4,
+                "groupId": null,
+                "uniqueId": "REFRESH_SERIES_LOCAL_ARTWORK_series",
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn series_local_artwork_tasks_deduplicate_by_series_id() {
+        let tasks = TaskStorage::connect_memory().await.unwrap();
+        tasks
+            .save(&TaskRecord::refresh_series_local_artwork("series", 4))
+            .await
+            .unwrap();
+        tasks
+            .save(&TaskRecord::refresh_series_local_artwork("series", 8))
+            .await
+            .unwrap();
+
+        let queued = tasks.list().await.unwrap();
+        assert_eq!(queued.len(), 1);
+        assert_eq!(queued[0].id, "REFRESH_SERIES_LOCAL_ARTWORK_series");
+        assert_eq!(queued[0].priority, 8);
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&queued[0].payload).unwrap()["priority"],
+            8
+        );
     }
 
     #[test]
@@ -1396,6 +1437,73 @@ mod tests {
             storage.list_books_by_series_id(&original_series.id).await.unwrap()[0]
                 .deleted_date
                 .is_some()
+        );
+    }
+
+    #[tokio::test]
+    async fn scan_snapshots_track_each_sidecar_consumer_only_for_additions_and_changes() {
+        let storage = Storage::connect_memory().await.unwrap();
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("library");
+        let series_directory = root.join("Series");
+        fs::create_dir_all(&series_directory).unwrap();
+        fs::write(series_directory.join("Book.cbz"), b"book").unwrap();
+        fs::write(series_directory.join("series.json"), b"{}").unwrap();
+        fs::write(series_directory.join("Book.jpg"), b"book artwork").unwrap();
+        fs::write(series_directory.join("cover.jpg"), b"series artwork").unwrap();
+        let library = Library::new("Library".into(), Url::from_directory_path(&root).unwrap());
+        storage.create_library(&library).await.unwrap();
+
+        let first_scan = scan_library_files(&library, || false).unwrap();
+        let first = storage
+            .apply_library_scan(&library.id, &first_scan, false)
+            .await
+            .unwrap();
+        let series = storage.list_series_by_library_id(&library.id).await.unwrap().remove(0);
+        let book = storage.list_books_by_series_id(&series.id).await.unwrap().remove(0);
+        assert_eq!(first.sidecars_changed.as_slice(), std::slice::from_ref(&series.id));
+        assert_eq!(first.book_artwork_changed.as_slice(), std::slice::from_ref(&book.id));
+        assert_eq!(
+            first.series_artwork_changed.as_slice(),
+            std::slice::from_ref(&series.id)
+        );
+
+        let unchanged = scan_library_files(&library, || false).unwrap();
+        assert_eq!(
+            storage
+                .apply_library_scan(&library.id, &unchanged, false)
+                .await
+                .unwrap(),
+            ScanApplyStats::default()
+        );
+
+        let mut changed_scan = unchanged.clone();
+        for sidecar in &mut changed_scan.sidecars {
+            sidecar.last_modified_time += chrono::Duration::seconds(1);
+        }
+        let changed = storage
+            .apply_library_scan(&library.id, &changed_scan, false)
+            .await
+            .unwrap();
+        assert_eq!(changed.sidecars_changed.as_slice(), std::slice::from_ref(&series.id));
+        assert_eq!(changed.book_artwork_changed.as_slice(), std::slice::from_ref(&book.id));
+        assert_eq!(
+            changed.series_artwork_changed.as_slice(),
+            std::slice::from_ref(&series.id)
+        );
+
+        let mut removed = changed_scan;
+        removed.sidecars.retain(|sidecar| {
+            !(sidecar.source == komga_core::SidecarSource::Series
+                && sidecar.sidecar_type == komga_core::SidecarType::Artwork)
+        });
+        assert!(
+            storage
+                .apply_library_scan(&library.id, &removed, false)
+                .await
+                .unwrap()
+                .series_artwork_changed
+                .is_empty()
         );
     }
 

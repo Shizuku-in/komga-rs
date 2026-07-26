@@ -64,7 +64,7 @@ pub use progress::{
 };
 pub use scanner::{
     Book, ScanError, ScanResult, ScannedSeries, ScannedSidecar, Series, SidecarSource, SidecarType, compare_book_names,
-    scan_book_file, scan_book_sidecars, scan_library_files,
+    scan_book_file, scan_book_sidecars, scan_library_files, scan_series_sidecars,
 };
 pub use source_import::CopyMode;
 pub use sync::{
@@ -641,5 +641,9 @@ mod tests {
         let mut updated = library.clone();
         updated.scan_directory_exclusions.insert("ignored".into());
         assert!(library.should_rescan(&updated));
+
+        let mut artwork = library.clone();
+        artwork.import_local_artwork = false;
+        assert!(!library.should_rescan(&artwork));
     }
 }

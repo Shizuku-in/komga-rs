@@ -30,6 +30,8 @@ pub struct ScanApplyStats {
     pub sidecars_changed: Vec<String>,
     /// Books whose local artwork sidecar was added or modified.
     pub book_artwork_changed: Vec<String>,
+    /// Series whose local artwork sidecar was added or modified.
+    pub series_artwork_changed: Vec<String>,
     /// Book identities created by this scan.
     pub book_added_events: Vec<BookEvent>,
     /// Book identities changed or soft-deleted by this scan.
@@ -519,6 +521,17 @@ impl Storage {
                         .await?
                         {
                             stats.book_artwork_changed.push(id);
+                        }
+                    }
+                    (SidecarSource::Series, SidecarType::Artwork) => {
+                        if let Some(id) = sqlx::query_scalar::<_, String>(
+                            "SELECT ID FROM SERIES WHERE URL = ? AND DELETED_DATE IS NULL AND ONESHOT = 0",
+                        )
+                        .bind(sidecar.parent_url.as_str())
+                        .fetch_optional(&mut *tx)
+                        .await?
+                        {
+                            stats.series_artwork_changed.push(id);
                         }
                     }
                     _ => {}

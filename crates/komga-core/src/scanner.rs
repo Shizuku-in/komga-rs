@@ -84,7 +84,7 @@ pub struct ScannedSeries {
     pub books: Vec<Book>,
 }
 
-/// A supported filesystem sidecar discovered at a series root.
+/// A supported filesystem sidecar discovered while scanning a library.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScannedSidecar {
     /// Exact sidecar file URL.
@@ -122,7 +122,7 @@ pub enum SidecarSource {
 pub struct ScanResult {
     /// Discovered series in deterministic path order.
     pub series: Vec<ScannedSeries>,
-    /// Mylar sidecars found for non-one-shot series.
+    /// Metadata and artwork sidecars found for scanned content.
     pub sidecars: Vec<ScannedSidecar>,
 }
 
@@ -299,6 +299,29 @@ pub fn scan_library_files(library: &Library, cancelled: impl Fn() -> bool) -> Re
         })
         .collect::<Vec<_>>();
     for entry in &scanned {
+        if !entry.series.oneshot
+            && let Ok(directory) = entry.series.url.to_file_path()
+            && let Ok(paths) = scan_series_sidecars(&directory)
+        {
+            for path in paths {
+                if fs::symlink_metadata(&path).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
+                    continue;
+                }
+                let Ok(metadata) = fs::metadata(&path) else {
+                    continue;
+                };
+                let Ok(url) = Url::from_file_path(path) else {
+                    continue;
+                };
+                sidecars.push(ScannedSidecar {
+                    url,
+                    parent_url: entry.series.url.clone(),
+                    last_modified_time: updated_time(&metadata),
+                    sidecar_type: SidecarType::Artwork,
+                    source: SidecarSource::Series,
+                });
+            }
+        }
         for book in &entry.books {
             let Ok(path) = book.url.to_file_path() else {
                 continue;
@@ -387,6 +410,34 @@ pub fn scan_book_sidecars(book_path: &Path) -> std::io::Result<Vec<PathBuf>> {
         let candidate = candidate.to_ascii_lowercase();
         let suffix = candidate.strip_prefix(&base);
         if suffix.is_some_and(|value| value.is_empty() || is_numbered_suffix(value)) {
+            result.push(path);
+        }
+    }
+    result.sort_by(|left, right| left.as_os_str().cmp(right.as_os_str()));
+    Ok(result)
+}
+
+/// Finds artwork files in one series directory using Komga's filename policy.
+///
+/// # Errors
+///
+/// Returns an I/O error when the series directory cannot be listed.
+pub fn scan_series_sidecars(series_path: &Path) -> std::io::Result<Vec<PathBuf>> {
+    let mut result = Vec::new();
+    for entry in fs::read_dir(series_path)? {
+        let entry = entry?;
+        let path = entry.path();
+        let file_type = entry.file_type()?;
+        if (!file_type.is_file() && !file_type.is_symlink()) || !is_artwork_extension(&path) {
+            continue;
+        }
+        let Some(candidate) = path.file_stem().and_then(|value| value.to_str()) else {
+            continue;
+        };
+        if matches!(
+            candidate.to_ascii_lowercase().as_str(),
+            "cover" | "default" | "folder" | "poster" | "series"
+        ) {
             result.push(path);
         }
     }
@@ -554,5 +605,92 @@ mod tests {
                 .iter()
                 .all(|sidecar| sidecar.parent_url.as_str().ends_with("Book%202.cbz"))
         );
+    }
+
+    #[test]
+    fn discovers_series_artwork_filename_matrix_case_insensitively_in_stable_order() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("library");
+        let series = root.join("Series");
+        fs::create_dir_all(&series).unwrap();
+        fs::write(series.join("Volume.cbz"), b"book").unwrap();
+        for basename in ["cover", "default", "folder", "poster", "series"] {
+            for extension in ["png", "jpeg", "jpg", "tbn", "webp", "gif"] {
+                fs::write(series.join(format!("{basename}.{extension}")), b"art").unwrap();
+            }
+        }
+        fs::write(series.join("COVER.JPG"), b"art").unwrap();
+        for invalid in ["banner.jpg", "cover.bmp", "cover-1.jpg", "cover.jpg.txt"] {
+            fs::write(series.join(invalid), b"ignored").unwrap();
+        }
+
+        let paths = scan_series_sidecars(&series).unwrap();
+        assert_eq!(paths.len(), 31);
+        assert!(
+            paths
+                .windows(2)
+                .all(|paths| paths[0].as_os_str() <= paths[1].as_os_str())
+        );
+
+        let result = scan_library_files(&library(&root), || false).unwrap();
+        let artwork = result
+            .sidecars
+            .iter()
+            .filter(|sidecar| sidecar.source == SidecarSource::Series && sidecar.sidecar_type == SidecarType::Artwork)
+            .collect::<Vec<_>>();
+        assert_eq!(artwork.len(), 31);
+        assert!(
+            artwork
+                .iter()
+                .all(|sidecar| sidecar.parent_url == result.series[0].series.url)
+        );
+        assert!(
+            artwork
+                .windows(2)
+                .all(|sidecars| sidecars[0].url.as_str() <= sidecars[1].url.as_str())
+        );
+    }
+
+    #[test]
+    fn excludes_series_artwork_for_oneshots_and_symbolic_links() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("library");
+        let series = root.join("One Shots");
+        fs::create_dir_all(&series).unwrap();
+        fs::write(series.join("Volume.cbz"), b"book").unwrap();
+        fs::write(series.join("cover.jpg"), b"art").unwrap();
+        let mut config = library(&root);
+        config.oneshots_directory = Some("one shots".into());
+
+        let result = scan_library_files(&config, || false).unwrap();
+        assert!(
+            result
+                .sidecars
+                .iter()
+                .all(|sidecar| sidecar.source != SidecarSource::Series)
+        );
+
+        #[cfg(unix)]
+        {
+            let regular = series.join("poster.jpg");
+            let symlink = series.join("folder.jpg");
+            fs::write(&regular, b"art").unwrap();
+            std::os::unix::fs::symlink(&regular, &symlink).unwrap();
+            config.oneshots_directory = None;
+            let result = scan_library_files(&config, || false).unwrap();
+            let series_artwork = result
+                .sidecars
+                .iter()
+                .filter(|sidecar| {
+                    sidecar.source == SidecarSource::Series && sidecar.sidecar_type == SidecarType::Artwork
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(series_artwork.len(), 2);
+            assert!(
+                series_artwork
+                    .iter()
+                    .all(|sidecar| !sidecar.url.path().ends_with("folder.jpg"))
+            );
+        }
     }
 }
