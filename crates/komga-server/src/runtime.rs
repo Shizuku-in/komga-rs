@@ -24,12 +24,14 @@ mod duplicate_pages;
 mod hashing;
 mod koreader_hashing;
 mod lifecycle;
+mod local_artwork;
 mod maintenance;
 mod metadata;
 mod page_hashing;
 mod scan;
 mod scheduler;
 mod source_deletion;
+mod source_import;
 mod thumbnail;
 
 use analysis::process_analyze_book_task;
@@ -37,12 +39,14 @@ use duplicate_pages::{process_find_duplicate_pages_task, process_remove_hashed_p
 use hashing::process_hash_book_task;
 use koreader_hashing::process_hash_book_koreader_task;
 use lifecycle::{perform_empty_trash, process_empty_trash_task};
+use local_artwork::process_refresh_book_local_artwork_task;
 use maintenance::{process_aggregate_series_metadata_task, process_find_thumbnails_task};
 use metadata::{process_refresh_book_metadata_task, process_refresh_series_metadata_task};
 use page_hashing::{process_find_missing_page_hashes_task, process_hash_book_pages_task};
 use scan::process_scan_task;
 use scheduler::scheduler_loop;
 use source_deletion::{process_delete_book_task, process_delete_series_task};
+use source_import::process_import_book_task;
 use thumbnail::process_generate_thumbnail_task;
 
 /// Cloneable control used to coordinate HTTP and background-service shutdown.
@@ -201,7 +205,7 @@ pub(super) enum TaskOutcome {
     Retry,
 }
 
-const SUPPORTED_TASK_TYPES: [&str; 18] = [
+const SUPPORTED_TASK_TYPES: [&str; 20] = [
     "ScanLibrary",
     "EmptyTrash",
     "AnalyzeBook",
@@ -220,6 +224,8 @@ const SUPPORTED_TASK_TYPES: [&str; 18] = [
     "UpgradeIndex",
     "DeleteBook",
     "DeleteSeries",
+    "ImportBook",
+    "RefreshBookLocalArtwork",
 ];
 
 async fn worker_loop(state: AppState, index: usize) {
@@ -282,6 +288,8 @@ async fn process_task(state: &AppState, task: &TaskRecord) -> TaskOutcome {
         "FindBookThumbnailsToRegenerate" => process_find_thumbnails_task(state, task).await,
         "DeleteBook" => process_delete_book_task(state, task).await,
         "DeleteSeries" => process_delete_series_task(state, task).await,
+        "ImportBook" => process_import_book_task(state, task).await,
+        "RefreshBookLocalArtwork" => process_refresh_book_local_artwork_task(state, task).await,
         "RebuildIndex" => {
             let payload = match serde_json::from_str::<RebuildIndexPayload>(&task.payload) {
                 Ok(payload) => payload,

@@ -54,6 +54,8 @@ mod progress_cases;
 mod referential_cases;
 #[path = "api_cases/source_deletion.rs"]
 mod source_deletion_cases;
+#[path = "api_cases/source_import.rs"]
+mod source_import_cases;
 #[path = "api_cases/sse.rs"]
 mod sse_cases;
 #[path = "api_cases/webpub.rs"]

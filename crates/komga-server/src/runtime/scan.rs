@@ -115,6 +115,15 @@ pub(super) async fn process_scan_task(state: &AppState, task: &TaskRecord) -> Ta
                     return TaskOutcome::Retry;
                 }
             }
+            for book_id in stats.book_artwork_changed {
+                if let Err(error) = state
+                    .enqueue_task(&TaskRecord::refresh_book_local_artwork(&book_id, task.priority))
+                    .await
+                {
+                    tracing::error!(%error, %book_id, "could not enqueue local artwork refresh");
+                    return TaskOutcome::Retry;
+                }
+            }
         }
         Err(error) => {
             tracing::error!(%error, library_id = %payload.library_id, "could not persist library scan");

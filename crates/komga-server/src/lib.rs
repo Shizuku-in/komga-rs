@@ -39,6 +39,7 @@ mod search_query;
 mod search_sync;
 mod settings_routes;
 mod source_file_routes;
+mod source_import_routes;
 mod sse_routes;
 mod thumbnail_routes;
 mod webpub_routes;
