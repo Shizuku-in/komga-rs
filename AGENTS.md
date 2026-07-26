@@ -11,6 +11,7 @@ This Rust 2024 workspace is an incremental port of Komga. The local `komga/` Kot
 - `crates/komga-server`: Axum routes, authentication, configuration, and workers.
 - `crates/komga-server/tests`: HTTP and runtime integration tests.
 - `crates/komga-storage/tests/fixtures`: Kotlin-compatible database fixtures.
+- `webui`: maintained Vue 2 Web UI source imported from the pinned Komga baseline.
 - `docs/MIGRATION.md`: implemented compatibility and known gaps.
 
 ## Build, Test, and Development Commands

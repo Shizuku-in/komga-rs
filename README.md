@@ -1,6 +1,6 @@
 # komga-rs
 
-An incremental Rust port of the [Komga](https://github.com/gotson/komga) backend. The Kotlin source pinned as the `komga/` Git submodule is the behavioral and Web UI reference; the Rust implementation is a separate workspace at the repository root.
+An incremental Rust port of the [Komga](https://github.com/gotson/komga) backend. The Kotlin source pinned as the `komga/` Git submodule is the behavioral reference; the Rust implementation and its maintained Web UI source live in the repository root.
 
 > The core headless backend is usable, but this is not yet a drop-in replacement for a complete Komga server. Users and permissions, library scanning, content browsing and reading, progress, collections and read lists, search, media delivery, metadata, and persistent background tasks are implemented. See [the migration matrix](docs/MIGRATION.md) for exact coverage.
 
@@ -185,7 +185,7 @@ OPDS 1.2 serves Atom navigation and acquisition feeds, OpenSearch discovery, PSE
 
 ## Develop
 
-Initialize the pinned Kotlin and Web UI reference after cloning:
+Initialize the pinned Kotlin behavioral reference after cloning:
 
 ```bash
 git submodule update --init komga

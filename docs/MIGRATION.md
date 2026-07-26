@@ -1,6 +1,6 @@
 # Migration status
 
-The `komga/` Git submodule pins the reference baseline at Komga commit `4ef86df`. Porting is organized as vertical slices so every completed stage can start, persist data, and pass HTTP-level tests.
+The `komga/` Git submodule pins the behavioral reference baseline at Komga commit `4ef86df`. The root `webui/` directory is the maintained Web UI source imported from that baseline. Porting is organized as vertical slices so every completed stage can start, persist data, and pass HTTP-level tests.
 
 | Area | Status | Notes |
 | --- | --- | --- |
@@ -16,7 +16,7 @@ The `komga/` Git submodule pins the reference baseline at Komga commit `4ef86df`
 | OPDS | Implemented | OPDS 1.2 Atom/OpenSearch catalogs with PSE acquisition links and OPDS 2 catalogs, authentication, publications, manifests, resources, browse facets, grouped search, and progression aliases. |
 | Device sync | Implemented | KOReader API-key authentication, partial-MD5 document matching, and Divina/PDF/EPUB reading-progress synchronization are implemented. Kobo path-key authentication, SyncPoint library and On Deck synchronization, bidirectional progress, initialization, metadata, original and converted KEPUB delivery, JPEG covers, optional Store merging/proxying, and public-port URL correction are implemented. |
 | Operations | Implemented | Persistent task storage, atomic worker ownership, startup recovery, dynamically resizable task processing, scan/media/file-hash/KOReader-hash/page-hash/duplicate-page-removal/source-deletion/source-import/RAR-conversion/extension-repair/local-artwork/thumbnail/metadata-refresh/metadata-aggregation workers, library scheduling, task-status and content-domain SSE, historical-event administration, task clearing, client and server settings, application metrics, announcements, release checks, and bundled/local reader fonts are implemented. |
-| Web UI packaging | Pending | Static asset build/embedding and SPA fallback. |
+| Web UI packaging | Pending | The source is maintained in root `webui/`; static asset build/embedding and SPA fallback are pending. |
 
 ## Compatibility rules
 
