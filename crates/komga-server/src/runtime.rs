@@ -20,6 +20,7 @@ use tokio_util::sync::CancellationToken;
 use crate::AppState;
 
 mod analysis;
+mod conversion;
 mod duplicate_pages;
 mod hashing;
 mod koreader_hashing;
@@ -35,6 +36,8 @@ mod source_import;
 mod thumbnail;
 
 use analysis::process_analyze_book_task;
+pub(crate) use conversion::enqueue_extension_repairs;
+use conversion::{process_convert_book_task, process_find_books_to_convert_task, process_repair_extension_task};
 use duplicate_pages::{process_find_duplicate_pages_task, process_remove_hashed_pages_task};
 use hashing::process_hash_book_task;
 use koreader_hashing::process_hash_book_koreader_task;
@@ -205,8 +208,11 @@ pub(super) enum TaskOutcome {
     Retry,
 }
 
-const SUPPORTED_TASK_TYPES: [&str; 20] = [
+const SUPPORTED_TASK_TYPES: [&str; 23] = [
     "ScanLibrary",
+    "FindBooksToConvert",
+    "ConvertBook",
+    "RepairExtension",
     "EmptyTrash",
     "AnalyzeBook",
     "HashBook",
@@ -273,6 +279,9 @@ async fn worker_loop(state: AppState, index: usize) {
 async fn process_task(state: &AppState, task: &TaskRecord) -> TaskOutcome {
     match task.simple_type.as_str() {
         "ScanLibrary" => process_scan_task(state, task).await,
+        "FindBooksToConvert" => process_find_books_to_convert_task(state, task).await,
+        "ConvertBook" => process_convert_book_task(state, task).await,
+        "RepairExtension" => process_repair_extension_task(state, task).await,
         "EmptyTrash" => process_empty_trash_task(state, task).await,
         "AnalyzeBook" => process_analyze_book_task(state, task).await,
         "HashBook" => process_hash_book_task(state, task).await,

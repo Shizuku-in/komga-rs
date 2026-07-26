@@ -344,7 +344,7 @@ fn classify_rar_error(error: rars::Error) -> RarAnalysisError {
     }
 }
 
-fn rar_error_is_cancelled(error: &rars::Error) -> bool {
+pub(crate) fn rar_error_is_cancelled(error: &rars::Error) -> bool {
     match error {
         rars::Error::Cancelled => true,
         rars::Error::AtArchiveOffset { source, .. } | rars::Error::AtEntry { source, .. } => {

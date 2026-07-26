@@ -22,6 +22,8 @@ pub(super) async fn process_scan_task(state: &AppState, task: &TaskRecord) -> Ta
     let empty_trash_after_scan = library.empty_trash_after_scan;
     let hash_files = library.hash_files;
     let hash_koreader = library.hash_koreader;
+    let repair_extensions = library.repair_extensions;
+    let convert_to_cbz = library.convert_to_cbz;
     let cancellation = state.shutdown.clone();
     let scan = tokio::task::spawn_blocking(move || scan_library_files(&library, || cancellation.is_cancelled())).await;
     let mut scan = match scan {
@@ -184,6 +186,18 @@ pub(super) async fn process_scan_task(state: &AppState, task: &TaskRecord) -> Ta
             tracing::error!(%error, %book_id, "could not enqueue book analysis");
             return TaskOutcome::Retry;
         }
+    }
+    if repair_extensions && let Err(error) = enqueue_extension_repairs(state, &payload.library_id, 2).await {
+        tracing::error!(%error, library_id = %payload.library_id, "could not enqueue extension repairs");
+        return TaskOutcome::Retry;
+    }
+    if convert_to_cbz
+        && let Err(error) = state
+            .enqueue_task(&TaskRecord::find_books_to_convert(&payload.library_id, 0))
+            .await
+    {
+        tracing::error!(%error, library_id = %payload.library_id, "could not enqueue conversion discovery");
+        return TaskOutcome::Retry;
     }
     if payload.scan_deep {
         let targets = match state.storage.list_ready_books_by_library_id(&payload.library_id).await {

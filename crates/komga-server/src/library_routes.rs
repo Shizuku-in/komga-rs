@@ -273,6 +273,14 @@ pub(crate) async fn update_library(
             .enqueue_task(&TaskRecord::find_books_with_missing_page_hash(&library_id, 0))
             .await?;
     }
+    if !current.repair_extensions && updated.repair_extensions {
+        crate::runtime::enqueue_extension_repairs(&state, &library_id, 0).await?;
+    }
+    if !current.convert_to_cbz && updated.convert_to_cbz {
+        state
+            .enqueue_task(&TaskRecord::find_books_to_convert(&library_id, 0))
+            .await?;
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 

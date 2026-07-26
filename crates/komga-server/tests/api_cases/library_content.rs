@@ -241,6 +241,65 @@ async fn enabling_page_hashing_enqueues_kotlin_discovery_without_rescanning() {
 }
 
 #[tokio::test]
+async fn enabling_conversion_and_extension_repair_enqueues_kotlin_tasks_without_rescanning() {
+    let storage = Storage::connect_memory().await.unwrap();
+    let tasks = TaskStorage::connect_memory().await.unwrap();
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path().join("library");
+    fs::create_dir_all(root.join("Series")).unwrap();
+    let fixture =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../komga/komga/src/test/resources/archives/rar4.rar");
+    fs::copy(fixture, root.join("Series/Volume.rar")).unwrap();
+    let library = Library::new("Library".into(), Url::from_directory_path(&root).unwrap());
+    storage.create_library(&library).await.unwrap();
+    storage
+        .apply_library_scan(&library.id, &scan_library_files(&library, || false).unwrap(), false)
+        .await
+        .unwrap();
+    let book = storage
+        .list_active_books_by_library_id(&library.id)
+        .await
+        .unwrap()
+        .remove(0);
+    storage
+        .replace_media_analysis(&analyze_book(&book, false, || false).unwrap())
+        .await
+        .unwrap();
+    let app = build_app(AppState::new(storage, tasks.clone()).await.unwrap());
+    claim(&app).await;
+
+    let response = app
+        .oneshot(
+            Request::patch(format!("/api/v1/libraries/{}", library.id))
+                .header(header::AUTHORIZATION, basic("admin@example.org", "password"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(r#"{"convertToCbz":true,"repairExtensions":true}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    let queued = tasks.list().await.unwrap();
+    assert_eq!(queued.len(), 2);
+    let discovery = queued
+        .iter()
+        .find(|task| task.simple_type == "FindBooksToConvert")
+        .unwrap();
+    assert_eq!(discovery.id, format!("FIND_BOOKS_TO_CONVERT_{}", library.id));
+    assert_eq!(discovery.priority, 0);
+    assert_eq!(discovery.group_id, None);
+    let repair = queued
+        .iter()
+        .find(|task| task.simple_type == "RepairExtension")
+        .unwrap();
+    assert_eq!(repair.id, format!("REPAIR_EXTENSION_{}", book.id));
+    assert_eq!(repair.priority, 0);
+    assert_eq!(repair.group_id.as_deref(), Some(book.series_id.as_str()));
+    assert!(queued.iter().all(|task| task.simple_type != "ScanLibrary"));
+}
+
+#[tokio::test]
 async fn content_queries_page_filter_restrict_and_navigate_books() {
     let storage = Storage::connect_memory().await.unwrap();
     let temporary = tempfile::tempdir().unwrap();

@@ -1,6 +1,7 @@
 use std::{fs, fs::File, io::Write, path::PathBuf, time::Duration};
 
 use komga_core::{BookMetadataPatch, Library, MetadataUpdate, PageRequest, ScanInterval, User, scan_library_files};
+use komga_media::analyze_book;
 use komga_search::{EntityKind, IndexState, SearchIndex};
 use komga_server::AppState;
 use komga_storage::{Storage, TaskRecord, TaskStorage};
@@ -140,6 +141,141 @@ async fn owned_source_deletion_tasks_resume_after_task_storage_reconnect() {
             .deleted_date
             .is_some()
     );
+    runtime.shutdown().await;
+}
+
+#[tokio::test]
+async fn owned_conversion_tasks_resume_and_replace_rar_with_audited_cbz() {
+    let storage = Storage::connect_memory().await.unwrap();
+    let task_directory = tempfile::tempdir().unwrap();
+    let task_path = task_directory.path().join("tasks.sqlite");
+    let tasks = TaskStorage::connect_path(&task_path).await.unwrap();
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path().join("library");
+    let series_path = root.join("Series");
+    fs::create_dir_all(&series_path).unwrap();
+    let fixture =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../komga/komga/src/test/resources/archives/rar4-solid.rar");
+    let source = series_path.join("Volume.cbr");
+    fs::copy(fixture, &source).unwrap();
+    let mut library = Library::new("Conversion".into(), Url::from_directory_path(&root).unwrap());
+    library.convert_to_cbz = true;
+    library.hash_files = false;
+    library.hash_koreader = false;
+    storage.create_library(&library).await.unwrap();
+    storage
+        .apply_library_scan(&library.id, &scan_library_files(&library, || false).unwrap(), false)
+        .await
+        .unwrap();
+    let book = storage
+        .list_active_books_by_library_id(&library.id)
+        .await
+        .unwrap()
+        .remove(0);
+    let media = analyze_book(&book, true, || false).unwrap();
+    storage.replace_media_analysis(&media).await.unwrap();
+    tasks
+        .save(&TaskRecord::convert_book(&book.id, &book.series_id, 1))
+        .await
+        .unwrap();
+    assert!(
+        tasks
+            .take_first_of_type("stopped-worker", "ConvertBook")
+            .await
+            .unwrap()
+            .is_some()
+    );
+    drop(tasks);
+
+    let tasks = TaskStorage::connect_path(&task_path).await.unwrap();
+    assert_eq!(tasks.list().await.unwrap()[0].owner, None);
+    let search = SearchIndex::in_memory().unwrap();
+    let state = AppState::with_search(storage.clone(), tasks.clone(), search.clone())
+        .await
+        .unwrap();
+    let runtime = state.start_runtime().await.unwrap();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while !tasks.list().await.unwrap().is_empty() {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("resumed conversion task did not complete");
+
+    let converted = storage.find_book_by_id(&book.id).await.unwrap().unwrap();
+    let target = series_path.join("Volume.cbz");
+    assert_eq!(converted.url.to_file_path().unwrap(), target);
+    assert!(!source.exists());
+    assert!(target.exists());
+    assert_eq!(converted.number, book.number);
+    let converted_media = storage.find_media_by_book_id(&book.id).await.unwrap().unwrap();
+    assert_eq!(converted_media.media_type.as_deref(), Some("application/zip"));
+    assert_eq!(converted_media.page_count, media.page_count);
+    let history = storage
+        .list_historical_events(&PageRequest {
+            unpaged: true,
+            ..PageRequest::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(history.total_elements, 2);
+    assert!(history.content.iter().any(|event| event.event_type == "BookConverted"));
+    assert!(history.content.iter().any(|event| {
+        event.event_type == "BookFileDeleted"
+            && event.properties["reason"] == "File was deleted after conversion to CBZ"
+    }));
+    assert_eq!(search.search(EntityKind::Book, "Volume")[0].id, book.id);
+    runtime.shutdown().await;
+}
+
+#[tokio::test]
+async fn extension_repair_renames_zip_but_preserves_epub_detected_as_zip() {
+    let storage = Storage::connect_memory().await.unwrap();
+    let tasks = TaskStorage::connect_memory().await.unwrap();
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path().join("library");
+    let series_path = root.join("Series");
+    fs::create_dir_all(&series_path).unwrap();
+    let fixture =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../komga/komga/src/test/resources/archives/zip.zip");
+    let zip_source = series_path.join("Volume.zip");
+    let epub_source = series_path.join("Fake.epub");
+    fs::copy(&fixture, &zip_source).unwrap();
+    fs::copy(&fixture, &epub_source).unwrap();
+    let mut library = Library::new("Repair".into(), Url::from_directory_path(&root).unwrap());
+    library.repair_extensions = true;
+    library.hash_files = false;
+    storage.create_library(&library).await.unwrap();
+    storage
+        .apply_library_scan(&library.id, &scan_library_files(&library, || false).unwrap(), false)
+        .await
+        .unwrap();
+    let books = storage.list_active_books_by_library_id(&library.id).await.unwrap();
+    for book in &books {
+        storage
+            .replace_media_analysis(&analyze_book(book, false, || false).unwrap())
+            .await
+            .unwrap();
+        tasks
+            .save(&TaskRecord::repair_extension(&book.id, &book.series_id, 2))
+            .await
+            .unwrap();
+    }
+
+    let state = AppState::new(storage.clone(), tasks.clone()).await.unwrap();
+    let runtime = state.start_runtime().await.unwrap();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while !tasks.list().await.unwrap().is_empty() {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("extension-repair tasks did not complete");
+
+    assert!(!zip_source.exists());
+    assert!(series_path.join("Volume.cbz").exists());
+    assert!(epub_source.exists());
+    assert!(!series_path.join("Fake.cbz").exists());
     runtime.shutdown().await;
 }
 
