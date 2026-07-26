@@ -345,6 +345,7 @@ pub(super) fn metadata(
     cover_image_id: Option<String>,
     file_size: i64,
     download_url: String,
+    kepub_conversion_available: bool,
 ) -> KoboBookMetadataDto {
     let publication = projection
         .release_date
@@ -352,7 +353,7 @@ pub(super) fn metadata(
         .unwrap_or(projection.metadata_created_date);
     let format = if projection.epub_is_fixed_layout {
         FormatDto::Epub3Fl
-    } else if projection.epub_is_kepub {
+    } else if projection.epub_is_kepub || kepub_conversion_available {
         FormatDto::Kepub
     } else {
         FormatDto::Epub3
@@ -421,6 +422,10 @@ pub(super) fn metadata(
         title: projection.title.clone(),
         work_id: projection.book_id.clone(),
     }
+}
+
+pub(super) fn should_convert_kepub(projection: &SyncBookProjection, kepub_conversion_available: bool) -> bool {
+    !projection.epub_is_fixed_layout && !projection.epub_is_kepub && kepub_conversion_available
 }
 
 pub(super) fn removed_metadata(book_id: &str) -> KoboBookMetadataDto {

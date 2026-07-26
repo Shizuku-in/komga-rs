@@ -7,9 +7,9 @@ use komga_core::{
     MetadataUpdate, ScanError, SeriesEvent, SeriesMetadataPatch, ThumbnailBook, new_id, scan_library_files,
 };
 use komga_media::{
-    FileHashError, MediaAnalysisError, MediaOperationError, analyze_book, extract_comic_info_metadata,
-    extract_epub_metadata, extract_mylar_metadata, generate_thumbnail, hash_file, image_dimension,
-    reconcile_scan_hashes,
+    FileHashError, KepubSpanError, MediaAnalysisError, MediaOperationError, analyze_book, enrich_kobo_spans,
+    extract_comic_info_metadata, extract_epub_metadata, extract_mylar_metadata, generate_thumbnail, hash_file,
+    image_dimension, reconcile_scan_hashes,
 };
 use komga_search::EntityKind;
 use komga_storage::{RebuildIndexEntity, StorageError, TaskRecord};

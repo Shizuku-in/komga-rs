@@ -25,12 +25,15 @@ komga-media = { path = "../komga-media" }
 komga-search = { path = "../komga-search" }
 komga-storage = { path = "../komga-storage" }
 mediatype.workspace = true
+moka.workspace = true
 rand.workspace = true
 quick-xml.workspace = true
 regex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
+tempfile.workspace = true
+thiserror.workspace = true
 tokio.workspace = true
 tokio-util = { workspace = true, features = ["io", "io-util"] }
 tower-http.workspace = true
@@ -43,5 +46,4 @@ zip.workspace = true
 [dev-dependencies]
 http-body-util.workspace = true
 roxmltree.workspace = true
-tempfile.workspace = true
 tower.workspace = true

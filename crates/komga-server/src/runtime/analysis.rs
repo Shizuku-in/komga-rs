@@ -41,7 +41,7 @@ pub(super) async fn process_analyze_book_task(state: &AppState, task: &TaskRecor
         })
     })
     .await;
-    let media = match result {
+    let mut media = match result {
         Ok(Ok(media)) => media,
         Ok(Err(MediaAnalysisError::Cancelled)) => return TaskOutcome::Cancelled,
         Err(error) => {
@@ -51,6 +51,35 @@ pub(super) async fn process_analyze_book_task(state: &AppState, task: &TaskRecor
     };
     if state.shutdown.is_cancelled() {
         return TaskOutcome::Cancelled;
+    }
+    if needs_converted_kobo_spans(&media) && state.kobo_kepub.is_available() {
+        match state.kobo_kepub.get_or_convert(&book, &state.shutdown).await {
+            Ok(converted) => {
+                let mut enriched = media.clone();
+                let converted_path = converted.path.clone();
+                let cancellation = state.shutdown.clone();
+                let result = tokio::task::spawn_blocking(move || {
+                    let result = enrich_kobo_spans(&mut enriched, &converted_path, || cancellation.is_cancelled());
+                    (enriched, result)
+                })
+                .await;
+                match result {
+                    Ok((updated, Ok(()))) => media = updated,
+                    Ok((_, Err(KepubSpanError::Cancelled))) => return TaskOutcome::Cancelled,
+                    Ok((_, Err(error))) => {
+                        tracing::warn!(%error, book_id = %book.id, "could not add converted KEPUB positions");
+                    }
+                    Err(error) => {
+                        tracing::error!(%error, book_id = %book.id, "KEPUB position enrichment panicked");
+                        return TaskOutcome::Retry;
+                    }
+                }
+            }
+            Err(super::super::kobo::kepub::KepubConversionError::Cancelled) => return TaskOutcome::Cancelled,
+            Err(error) => {
+                tracing::warn!(%error, book_id = %book.id, "could not convert EPUB while analyzing Kobo positions");
+            }
+        }
     }
     if let Err(error) = state.storage.replace_media_analysis(&media).await {
         tracing::error!(%error, book_id = %book.id, "could not persist media analysis");
@@ -87,4 +116,14 @@ pub(super) async fn process_analyze_book_task(state: &AppState, task: &TaskRecor
     }
     tracing::info!(book_id = %book.id, status = media.status.as_str(), pages = media.page_count, "book analysis completed");
     TaskOutcome::Completed
+}
+
+fn needs_converted_kobo_spans(media: &komga_core::Media) -> bool {
+    media.status == MediaStatus::Ready
+        && media.media_type.as_deref() == Some(komga_core::EPUB_MEDIA_TYPE)
+        && !media.epub_is_kepub
+        && matches!(
+            media.extension.as_ref(),
+            Some(komga_core::MediaExtension::Epub(extension)) if !extension.is_fixed_layout
+        )
 }

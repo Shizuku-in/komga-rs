@@ -47,7 +47,9 @@ async fn main() -> anyhow::Result<()> {
     let state = AppState::with_file_search(storage, tasks, search)
         .await?
         .with_page_hashing(config.page_hashing)
-        .with_kobo_sync_item_limit(config.kobo_sync_item_limit);
+        .with_kobo_sync_item_limit(config.kobo_sync_item_limit)
+        .with_kobo_kepubify_path(config.kobo_kepubify_path)
+        .await;
     let runtime = state.start_runtime().await?;
     let signal_shutdown = runtime.shutdown_handle();
     let server_shutdown = runtime.shutdown_handle();

@@ -45,7 +45,7 @@ mod webpub_routes;
 pub use auth::{REMEMBER_ME_COOKIE, SESSION_COOKIE, SESSION_HEADER};
 pub use runtime::{AppRuntime, ShutdownHandle};
 
-use std::{num::NonZeroUsize, sync::Arc};
+use std::{num::NonZeroUsize, path::PathBuf, sync::Arc};
 
 use auth::SessionStore;
 use axum::Router;
@@ -73,6 +73,7 @@ pub struct AppState {
     shutdown: CancellationToken,
     page_hashing: NonZeroUsize,
     kobo_sync_item_limit: NonZeroUsize,
+    kobo_kepub: kobo::kepub::KepubService,
 }
 
 impl AppState {
@@ -126,6 +127,7 @@ impl AppState {
             shutdown: CancellationToken::new(),
             page_hashing: NonZeroUsize::new(3).expect("page hashing default is nonzero"),
             kobo_sync_item_limit: NonZeroUsize::new(100).expect("Kobo sync default is nonzero"),
+            kobo_kepub: kobo::kepub::KepubService::disabled(),
         })
     }
 
@@ -140,6 +142,16 @@ impl AppState {
     #[must_use]
     pub fn with_kobo_sync_item_limit(mut self, limit: NonZeroUsize) -> Self {
         self.kobo_sync_item_limit = limit;
+        self
+    }
+
+    /// Configures the optional external kepubify process used by Kobo clients.
+    ///
+    /// An invalid or unavailable executable leaves conversion disabled and does
+    /// not prevent the application from starting.
+    #[must_use]
+    pub async fn with_kobo_kepubify_path(mut self, path: Option<PathBuf>) -> Self {
+        self.kobo_kepub = kobo::kepub::KepubService::configure(path).await;
         self
     }
 

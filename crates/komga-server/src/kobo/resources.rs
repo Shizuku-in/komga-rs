@@ -1,17 +1,21 @@
+use std::{future::poll_fn, pin::Pin};
+
 use axum::{
     Json,
-    body::Bytes,
+    body::{Body, Bytes},
     extract::{Extension, Path, Query, State},
-    http::{HeaderMap, HeaderValue, Uri},
+    http::{HeaderMap, HeaderValue, Uri, header},
     response::{IntoResponse, Response},
 };
 use chrono::Utc;
+use futures_core::Stream;
 use komga_core::{
-    DomainEvent, MediaExtension, R2Device, R2Location, R2Locator, R2Progression, ReadProgressEvent, SeriesDto, User,
-    UserRole, progression,
+    DomainEvent, EPUB_MEDIA_TYPE, MediaExtension, MediaStatus, R2Device, R2Location, R2Locator, R2Progression,
+    ReadProgressEvent, SeriesDto, User, UserRole, progression,
 };
 use rand::distr::{Alphanumeric, SampleString};
 use serde::Deserialize;
+use tokio_util::io::ReaderStream;
 
 use crate::{
     AppState, book_file_routes, content_access::load_visible_book, error::ApiError, routes::ApiJson, thumbnail_routes,
@@ -23,6 +27,7 @@ use super::{
     dto::{
         AuthDto, KoboBookMetadataDto, ReadingStateUpdateDto, ReadingStateUpdateResultDto, RequestResultDto,
         ResourcesDto, ResultDto, StatusDto, WrappedResultDto, metadata as metadata_dto, reading_state,
+        should_convert_kepub,
     },
 };
 
@@ -99,11 +104,14 @@ pub(super) async fn metadata(
         .find_book_by_id(&book_id)
         .await?
         .ok_or_else(|| ApiError::not_found("Book not found"))?;
+    let conversion_available = state.kobo_kepub.is_available();
+    let convert_kepub = should_convert_kepub(&projection, conversion_available);
     Ok(Json(vec![metadata_dto(
         &projection,
         thumbnail_id,
         book.file_size,
-        download_url(&headers, &uri, &auth.auth_token, &book_id)?,
+        download_url(&headers, &uri, &auth.auth_token, &book_id, convert_kepub)?,
+        conversion_available,
     )]))
 }
 
@@ -270,10 +278,67 @@ pub(super) async fn book_file(
         return Err(ApiError::forbidden());
     }
     load_visible_book(&state, &auth.user, &book_id).await?;
-    if query.convert_kepub {
-        return Err(ApiError::service_unavailable("Kepub conversion is not available"));
+    if !query.convert_kepub {
+        return book_file_routes::download_for_user(&state, &auth.user, &book_id).await;
     }
-    book_file_routes::download_for_user(&state, &auth.user, &book_id).await
+    let book = state
+        .storage
+        .find_book_by_id(&book_id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("Book not found"))?;
+    let media = state
+        .storage
+        .find_media_by_book_id(&book_id)
+        .await?
+        .ok_or_else(|| ApiError::service_unavailable("Kepub conversion failed"))?;
+    if media.status != MediaStatus::Ready || media.media_type.as_deref() != Some(EPUB_MEDIA_TYPE) || media.epub_is_kepub
+    {
+        return Err(ApiError::service_unavailable("Kepub conversion failed"));
+    }
+    let converted = state
+        .kobo_kepub
+        .get_or_convert(&book, &state.shutdown)
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, %book_id, "could not convert Kobo book to KEPUB");
+            ApiError::service_unavailable("Kepub conversion failed")
+        })?;
+    let file = tokio::fs::File::open(&converted.path).await.map_err(|error| {
+        tracing::error!(%error, %book_id, path = %converted.path.display(), "could not open cached KEPUB");
+        ApiError::service_unavailable("Kepub conversion failed")
+    })?;
+    let file_name = book
+        .url
+        .to_file_path()
+        .ok()
+        .and_then(|path| {
+            path.file_stem()
+                .map(|stem| format!("{}.kepub.epub", stem.to_string_lossy()))
+        })
+        .unwrap_or_else(|| format!("{}.kepub.epub", book.name));
+    let length = converted.length;
+    let mut reader = ReaderStream::with_capacity(file, 8 * 1024);
+    let stream = async_stream::stream! {
+        let _keepalive = converted;
+        while let Some(chunk) = poll_fn(|context| Pin::new(&mut reader).poll_next(context)).await {
+            yield chunk;
+        }
+    };
+    let mut response = Body::from_stream(stream).into_response();
+    response
+        .headers_mut()
+        .insert(header::CONTENT_TYPE, HeaderValue::from_static(EPUB_MEDIA_TYPE));
+    response.headers_mut().insert(
+        header::CONTENT_LENGTH,
+        HeaderValue::from_str(&length.to_string())
+            .map_err(|_| ApiError::internal("Could not encode KEPUB file length"))?,
+    );
+    response.headers_mut().insert(
+        header::CONTENT_DISPOSITION,
+        book_file_routes::content_disposition(&file_name)
+            .map_err(|_| ApiError::internal("Could not encode KEPUB attachment filename"))?,
+    );
+    Ok(response)
 }
 
 pub(super) async fn cover(
@@ -356,9 +421,10 @@ pub(super) fn download_url(
     uri: &Uri,
     auth_token: &str,
     book_id: &str,
+    convert_kepub: bool,
 ) -> Result<String, ApiError> {
     Ok(format!(
-        "{}?convert_kepub=false",
+        "{}?convert_kepub={convert_kepub}",
         ManifestUrls::from_request_with_prefix(headers, uri, &[])?
             .absolute_path(&["kobo", auth_token, "v1", "books", book_id, "file", "epub",])
     ))

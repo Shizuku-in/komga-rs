@@ -12,7 +12,7 @@ use super::{
     auth::KoboAuthContext,
     dto::{
         BookEntitlementContainerDto, SyncResultDto, WrappedReadingStateDto, entitlement, metadata, reading_state,
-        removed_metadata, wrapped_tag,
+        removed_metadata, should_convert_kepub, wrapped_tag,
     },
     resources::download_url,
     token,
@@ -48,10 +48,11 @@ pub(super) async fn library_sync(
             state.kobo_sync_item_limit,
         )
         .await?;
+    let conversion_available = state.kobo_kepub.is_available();
     let mut results = if from_point.is_some() {
-        incremental_results(&headers, &uri, &auth, &batch.books)?
+        incremental_results(&headers, &uri, &auth, &batch.books, conversion_available)?
     } else {
-        initial_results(&headers, &uri, &auth, &batch.books)?
+        initial_results(&headers, &uri, &auth, &batch.books, conversion_available)?
     };
     append_tag_results(&mut results, &batch.read_lists);
 
@@ -102,6 +103,7 @@ fn initial_results(
     uri: &Uri,
     auth: &KoboAuthContext,
     books: &[SyncBookChange],
+    conversion_available: bool,
 ) -> Result<Vec<SyncResultDto>, ApiError> {
     books
         .iter()
@@ -114,7 +116,14 @@ fn initial_results(
                         projection,
                         change.snapshot.thumbnail_id.clone(),
                         change.snapshot.file_size,
-                        download_url(headers, uri, &auth.auth_token, &change.snapshot.book_id)?,
+                        download_url(
+                            headers,
+                            uri,
+                            &auth.auth_token,
+                            &change.snapshot.book_id,
+                            should_convert_kepub(projection, conversion_available),
+                        )?,
+                        conversion_available,
                     ),
                     reading_state: Some(reading_state(
                         change.read_progress.as_ref(),
@@ -132,6 +141,7 @@ fn incremental_results(
     uri: &Uri,
     auth: &KoboAuthContext,
     books: &[SyncBookChange],
+    conversion_available: bool,
 ) -> Result<Vec<SyncResultDto>, ApiError> {
     let mut output = Vec::new();
     for change in books.iter().filter(|book| book.kind == SyncChangeKind::Added) {
@@ -143,7 +153,14 @@ fn incremental_results(
                     projection,
                     change.snapshot.thumbnail_id.clone(),
                     change.snapshot.file_size,
-                    download_url(headers, uri, &auth.auth_token, &change.snapshot.book_id)?,
+                    download_url(
+                        headers,
+                        uri,
+                        &auth.auth_token,
+                        &change.snapshot.book_id,
+                        should_convert_kepub(projection, conversion_available),
+                    )?,
+                    conversion_available,
                 ),
                 reading_state: Some(reading_state(
                     change.read_progress.as_ref(),
@@ -162,7 +179,14 @@ fn incremental_results(
                     projection,
                     change.snapshot.thumbnail_id.clone(),
                     change.snapshot.file_size,
-                    download_url(headers, uri, &auth.auth_token, &change.snapshot.book_id)?,
+                    download_url(
+                        headers,
+                        uri,
+                        &auth.auth_token,
+                        &change.snapshot.book_id,
+                        should_convert_kepub(projection, conversion_available),
+                    )?,
+                    conversion_available,
                 ),
                 reading_state: Some(reading_state(
                     change.read_progress.as_ref(),
@@ -178,7 +202,14 @@ fn incremental_results(
                 projection(change)?,
                 change.snapshot.thumbnail_id.clone(),
                 change.snapshot.file_size,
-                download_url(headers, uri, &auth.auth_token, &change.snapshot.book_id)?,
+                download_url(
+                    headers,
+                    uri,
+                    &auth.auth_token,
+                    &change.snapshot.book_id,
+                    should_convert_kepub(projection(change)?, conversion_available),
+                )?,
+                conversion_available,
             ),
         });
     }

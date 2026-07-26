@@ -36,6 +36,10 @@ pub struct Config {
     #[arg(long, env = "KOMGA_KOBO_SYNC_ITEM_LIMIT", default_value = "100")]
     pub kobo_sync_item_limit: NonZeroUsize,
 
+    /// Path or command name for the optional external kepubify executable.
+    #[arg(long, env = "KOMGA_KOBO_KEPUBIFY_PATH")]
+    pub kobo_kepubify_path: Option<PathBuf>,
+
     /// Address on which the HTTP server listens.
     #[arg(long, env = "KOMGA_HOST", default_value = "0.0.0.0")]
     pub host: IpAddr,
@@ -90,6 +94,7 @@ mod tests {
         let config = Config::try_parse_from(["komga-server"]).unwrap();
         assert_eq!(config.page_hashing.get(), 3);
         assert_eq!(config.kobo_sync_item_limit.get(), 100);
+        assert!(config.kobo_kepubify_path.is_none());
         assert!(Config::try_parse_from(["komga-server", "--page-hashing", "0"]).is_err());
         assert!(Config::try_parse_from(["komga-server", "--kobo-sync-item-limit", "0"]).is_err());
     }
