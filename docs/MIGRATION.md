@@ -45,6 +45,33 @@ The reference baseline is Komga commit `4ef86df`. Porting is organized as vertic
 
 The next compatibility slice can add file deletion/import/conversion workflows that produce the remaining historical event types. Page removal for non-ZIP formats, a dedicated Kobo listener, and database-backed dynamic server settings remain later work.
 
+### Planned in-process KEPUB conversion
+
+Replace the optional external `kepubify` process with a Rust implementation after the current Kobo synchronization
+surface has stabilized. This is a compatibility port for Komga's conversion needs, not initially a port of the complete
+`kepubify` command-line interface or its optional typography and text-replacement features.
+
+The converter should live in `komga-media` and expose a reader/writer API with cooperative cancellation. It must preserve
+the EPUB package structure and ZIP requirements, update the OPF where required, and transform reflowable spine documents
+with Kobo styles, `book-columns`/`book-inner` wrappers, and deterministic `kobo.*` spans. The XHTML path must tolerate the
+malformed HTML/XML commonly accepted by `kepubify` and emit compatible polyglot XHTML without needlessly rewriting valid
+input. Native KEPUB and fixed-layout detection remains outside the converter and continues to use the existing media
+analysis policy.
+
+Implementation should proceed behind the existing KEPUB service boundary:
+
+1. Add the conversion library and mandatory EPUB/OPF/XHTML transformations to `komga-media`.
+2. Port or adapt upstream fixtures and run differential tests against the official `kepubify` output. Compare package
+   semantics, transformed markup, and Kobo span identities rather than compressed ZIP bytes.
+3. Switch server conversion and media-analysis enrichment to the in-process converter while retaining the external
+   executable as a temporary fallback and comparison oracle. Remove `KOMGA_KOBO_KEPUBIFY_PATH` only after the compatibility
+   corpus and Kobo device tests pass without the fallback.
+
+The test corpus should cover EPUB2 and EPUB3, malformed XHTML, XML declarations and processing instructions, namespaces,
+SVG and MathML, right-to-left and Unicode text, pre-existing Kobo spans, navigation variants, fixed-layout publications,
+ZIP entry metadata, cancellation, and hostile archive limits. Since `kepubify` is MIT-licensed, any translated source or
+adapted fixtures must retain its copyright and license notice.
+
 Book and series metadata can be patched through the Kotlin-compatible administrator routes. The HTTP boundary preserves
 each field's distinct omitted-versus-null behavior, while `komga-core` owns normalization and validation. Bulk book
 updates validate before writing, ignore missing IDs, and enqueue one deduplicated `AggregateSeriesMetadata` task per
