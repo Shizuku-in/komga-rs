@@ -30,6 +30,8 @@ mod auth_cases;
 mod book_file_cases;
 #[path = "api_cases/duplicates.rs"]
 mod duplicate_cases;
+#[path = "api_cases/fonts.rs"]
+mod font_cases;
 #[path = "api_cases/history.rs"]
 mod history_cases;
 #[path = "api_cases/kobo.rs"]

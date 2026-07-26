@@ -28,6 +28,10 @@ pub struct Config {
     #[arg(long, env = "KOMGA_SEARCH_DIRECTORY")]
     pub search_directory: Option<PathBuf>,
 
+    /// Override the directory containing additional font-family directories.
+    #[arg(long, env = "KOMGA_FONTS_DIRECTORY")]
+    pub fonts_directory: Option<PathBuf>,
+
     /// Number of pages hashed from both the start and end of ZIP books.
     #[arg(long, env = "KOMGA_PAGE_HASHING", default_value = "3")]
     pub page_hashing: NonZeroUsize,
@@ -97,6 +101,13 @@ impl Config {
             .clone()
             .unwrap_or_else(|| self.config_dir().join("search"))
     }
+
+    /// Returns the explicit fonts directory or `fonts` in the config directory.
+    pub fn fonts_directory(&self) -> PathBuf {
+        self.fonts_directory
+            .clone()
+            .unwrap_or_else(|| self.config_dir().join("fonts"))
+    }
 }
 
 #[cfg(test)]
@@ -111,6 +122,7 @@ mod tests {
         assert!(config.kobo_kepubify_path.is_none());
         assert!(!config.kobo_proxy);
         assert!(config.context_path.is_none());
+        assert_eq!(config.fonts_directory(), config.config_dir().join("fonts"));
         let kobo = Config::try_parse_from([
             "komga-server",
             "--kobo-kepubify-path",
@@ -133,5 +145,7 @@ mod tests {
             Some("/komga/sub-path")
         );
         assert!(Config::try_parse_from(["komga-server", "--context-path", "/bad/"]).is_err());
+        let fonts = Config::try_parse_from(["komga-server", "--fonts-directory", "/srv/fonts"]).unwrap();
+        assert_eq!(fonts.fonts_directory(), std::path::Path::new("/srv/fonts"));
     }
 }

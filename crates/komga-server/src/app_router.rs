@@ -16,10 +16,11 @@ use tower_http::{
 };
 
 use crate::{
-    AppState, auth, book_file_routes, container_routes, content_routes, filesystem_routes, history_routes, kobo,
-    koreader_routes, library_routes, media_routes, metadata_routes, metrics_routes, opds_router, operations_routes,
-    page_hash_routes, read_list_file_routes, read_list_match_routes, read_progress_routes, referential_routes, routes,
-    settings_routes, source_file_routes, source_import_routes, sse_routes, thumbnail_routes, webpub_routes,
+    AppState, auth, book_file_routes, container_routes, content_routes, filesystem_routes, font_routes, history_routes,
+    kobo, koreader_routes, library_routes, media_routes, metadata_routes, metrics_routes, opds_router,
+    operations_routes, page_hash_routes, read_list_file_routes, read_list_match_routes, read_progress_routes,
+    referential_routes, routes, settings_routes, source_file_routes, source_import_routes, sse_routes,
+    thumbnail_routes, webpub_routes,
 };
 
 pub(crate) fn build(state: AppState) -> Router {
@@ -130,6 +131,7 @@ fn protected_api() -> Router<AppState> {
             get(operations_routes::announcements).put(operations_routes::mark_announcements_read),
         )
         .route("/api/v1/releases", get(operations_routes::releases))
+        .route("/api/v1/fonts/families", get(font_routes::families))
         .route("/api/v2/users/me", get(routes::current_user))
         .route("/api/v2/users/me/password", patch(routes::update_my_password))
         .route(
@@ -471,6 +473,8 @@ fn public_api() -> Router<AppState> {
             get(settings_routes::list_global_settings),
         )
         .route("/api/v1/oauth2/providers", get(settings_routes::oauth_providers))
+        .route("/api/v1/fonts/resource/{family}/css", get(font_routes::css))
+        .route("/api/v1/fonts/resource/{family}/{file}", get(font_routes::resource))
         .route(
             "/api/v1/books/{book_id}/resource/{*resource}",
             get(media_routes::get_epub_resource),

@@ -17,6 +17,7 @@ mod content_routes;
 mod dto;
 mod error;
 mod filesystem_routes;
+mod font_routes;
 mod history_routes;
 mod kobo;
 mod koreader_routes;
@@ -90,6 +91,7 @@ pub struct AppState {
     kobo_port: Arc<AtomicU16>,
     task_metrics: metrics_routes::TaskMetrics,
     operations: operations_routes::OperationsService,
+    fonts: font_routes::FontCatalog,
     database_kobo_proxy: Option<bool>,
     database_kepubify_path: Option<PathBuf>,
     configuration_server_port: u16,
@@ -173,6 +175,7 @@ impl AppState {
             kobo_port: Arc::new(AtomicU16::new(server_settings.kobo_port.unwrap_or(0))),
             task_metrics: metrics_routes::TaskMetrics::default(),
             operations: operations_routes::OperationsService::default(),
+            fonts: font_routes::FontCatalog::default(),
             database_kobo_proxy: server_settings.kobo_proxy,
             database_kepubify_path: server_settings.kepubify_path.map(PathBuf::from),
             configuration_server_port: 25_600,
@@ -195,6 +198,16 @@ impl AppState {
     #[must_use]
     pub fn with_kobo_sync_item_limit(mut self, limit: NonZeroUsize) -> Self {
         self.kobo_sync_item_limit = limit;
+        self
+    }
+
+    /// Discovers additional startup-only font families below one directory.
+    ///
+    /// Each immediate child directory is a family. Valid local families replace
+    /// bundled families with the same name.
+    #[must_use]
+    pub fn with_fonts_directory(mut self, directory: PathBuf) -> Self {
+        self.fonts = font_routes::FontCatalog::load(&directory);
         self
     }
 

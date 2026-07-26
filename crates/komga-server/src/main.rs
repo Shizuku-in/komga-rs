@@ -21,6 +21,7 @@ async fn main() -> anyhow::Result<()> {
     let database_file = config.database_file();
     let tasks_database_file = config.tasks_database_file();
     let search_directory = config.search_directory();
+    let fonts_directory = config.fonts_directory();
     if let Some(parent) = database_file.parent() {
         tokio::fs::create_dir_all(parent)
             .await
@@ -54,6 +55,7 @@ async fn main() -> anyhow::Result<()> {
         .await?
         .with_page_hashing(config.page_hashing)
         .with_kobo_sync_item_limit(config.kobo_sync_item_limit)
+        .with_fonts_directory(fonts_directory)
         .with_kobo_proxy(config.kobo_proxy)
         .with_kobo_kepubify_path(config.kobo_kepubify_path)
         .await

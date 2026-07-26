@@ -27,6 +27,7 @@ komga-search = { path = "../komga-search" }
 komga-storage = { path = "../komga-storage" }
 mediatype.workspace = true
 moka.workspace = true
+percent-encoding.workspace = true
 rand.workspace = true
 quick-xml.workspace = true
 regex.workspace = true

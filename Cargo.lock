@@ -2110,6 +2110,7 @@ dependencies = [
  "komga-storage",
  "mediatype",
  "moka",
+ "percent-encoding",
  "quick-xml",
  "rand 0.9.5",
  "regex",
