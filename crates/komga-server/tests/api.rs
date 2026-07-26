@@ -34,6 +34,8 @@ mod duplicate_cases;
 mod font_cases;
 #[path = "api_cases/history.rs"]
 mod history_cases;
+#[path = "api_cases/info_analysis.rs"]
+mod info_analysis_cases;
 #[path = "api_cases/kobo.rs"]
 mod kobo_cases;
 #[path = "api_cases/koreader.rs"]
@@ -66,6 +68,8 @@ mod source_deletion_cases;
 mod source_import_cases;
 #[path = "api_cases/sse.rs"]
 mod sse_cases;
+#[path = "api_cases/transient_books.rs"]
+mod transient_book_cases;
 #[path = "api_cases/webpub.rs"]
 mod webpub_cases;
 #[cfg(feature = "webui")]

@@ -19,6 +19,7 @@ mod error;
 mod filesystem_routes;
 mod font_routes;
 mod history_routes;
+mod info_routes;
 mod kobo;
 mod koreader_routes;
 mod legacy_content_query;
@@ -45,6 +46,7 @@ mod source_file_routes;
 mod source_import_routes;
 mod sse_routes;
 mod thumbnail_routes;
+mod transient_book_routes;
 mod webpub_routes;
 #[cfg(feature = "webui")]
 mod webui_routes;
@@ -94,6 +96,7 @@ pub struct AppState {
     task_metrics: metrics_routes::TaskMetrics,
     operations: operations_routes::OperationsService,
     fonts: font_routes::FontCatalog,
+    transient_books: transient_book_routes::TransientBookCache,
     database_kobo_proxy: Option<bool>,
     database_kepubify_path: Option<PathBuf>,
     configuration_server_port: u16,
@@ -178,6 +181,7 @@ impl AppState {
             task_metrics: metrics_routes::TaskMetrics::default(),
             operations: operations_routes::OperationsService::default(),
             fonts: font_routes::FontCatalog::default(),
+            transient_books: transient_book_routes::TransientBookCache::new(),
             database_kobo_proxy: server_settings.kobo_proxy,
             database_kepubify_path: server_settings.kepubify_path.map(PathBuf::from),
             configuration_server_port: 25_600,

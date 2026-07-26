@@ -2,12 +2,14 @@ use std::{
     env, fs, io,
     path::{Path, PathBuf},
     process::{Command, ExitStatus},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 const BASE_URL_TOKEN: &str = "__KOMGA_BASE_URL__";
 const PREBUILT_ENV: &str = "KOMGA_WEBUI_DIST_DIR";
 
 fn main() {
+    emit_build_information();
     println!("cargo::rerun-if-env-changed={PREBUILT_ENV}");
     if env::var_os("CARGO_FEATURE_WEBUI").is_none() {
         return;
@@ -16,6 +18,71 @@ fn main() {
     if let Err(error) = package_webui() {
         panic!("failed to package WebUI: {error}");
     }
+}
+
+fn emit_build_information() {
+    let manifest_dir = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap_or_default());
+    let workspace_dir = manifest_dir.join("../..");
+    let has_git_metadata = workspace_dir.join(".git").exists();
+    let branch = has_git_metadata
+        .then(|| git_output(&workspace_dir, &["rev-parse", "--abbrev-ref", "HEAD"]))
+        .flatten();
+    let commit_id = has_git_metadata
+        .then(|| git_output(&workspace_dir, &["rev-parse", "HEAD"]))
+        .flatten();
+    let commit_time = has_git_metadata
+        .then(|| git_output(&workspace_dir, &["show", "-s", "--format=%cI", "HEAD"]))
+        .flatten();
+    let build_time = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    println!(
+        "cargo::rustc-env=KOMGA_GIT_BRANCH={}",
+        branch.as_deref().unwrap_or("unknown")
+    );
+    println!(
+        "cargo::rustc-env=KOMGA_GIT_COMMIT_ID={}",
+        commit_id.as_deref().unwrap_or("unknown")
+    );
+    println!(
+        "cargo::rustc-env=KOMGA_GIT_COMMIT_TIME={}",
+        commit_time.as_deref().unwrap_or("1970-01-01T00:00:00Z")
+    );
+    println!("cargo::rustc-env=KOMGA_BUILD_TIME={build_time}");
+    if has_git_metadata {
+        emit_git_rerun_path(&workspace_dir, "HEAD");
+        emit_git_rerun_path(&workspace_dir, "refs/heads");
+    }
+}
+
+fn emit_git_rerun_path(workspace_dir: &Path, git_path: &str) {
+    let Some(path) = git_output(workspace_dir, &["rev-parse", "--git-path", git_path]) else {
+        return;
+    };
+    let path = PathBuf::from(path);
+    let path = if path.is_absolute() {
+        path
+    } else {
+        workspace_dir.join(path)
+    };
+    println!("cargo::rerun-if-changed={}", path.display());
+}
+
+fn git_output(workspace_dir: &Path, args: &[&str]) -> Option<String> {
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(workspace_dir)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8(output.stdout)
+        .ok()
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
 }
 
 fn package_webui() -> Result<(), String> {

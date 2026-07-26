@@ -19,10 +19,10 @@ use tower_http::{
 use crate::webui_routes;
 use crate::{
     AppState, auth, book_file_routes, container_routes, content_routes, filesystem_routes, font_routes, history_routes,
-    kobo, koreader_routes, library_routes, media_routes, metadata_routes, metrics_routes, opds_router,
+    info_routes, kobo, koreader_routes, library_routes, media_routes, metadata_routes, metrics_routes, opds_router,
     operations_routes, page_hash_routes, read_list_file_routes, read_list_match_routes, read_progress_routes,
     referential_routes, routes, settings_routes, source_file_routes, source_import_routes, sse_routes,
-    thumbnail_routes, webpub_routes,
+    thumbnail_routes, transient_book_routes, webpub_routes,
 };
 
 pub(crate) fn build(state: AppState) -> Router {
@@ -148,6 +148,7 @@ fn redacted_request_uri(uri: &Uri) -> String {
 
 fn protected_api() -> Router<AppState> {
     Router::new()
+        .route("/actuator/info", get(info_routes::info))
         .route("/actuator/metrics", get(metrics_routes::list))
         .route("/actuator/metrics/{metric}", get(metrics_routes::get))
         .route(
@@ -202,6 +203,7 @@ fn protected_api() -> Router<AppState> {
         .route("/api/v1/series/new", get(content_routes::new_series))
         .route("/api/v1/series/updated", get(content_routes::updated_series))
         .route("/api/v1/series/{series_id}", get(content_routes::get_series))
+        .route("/api/v1/series/{series_id}/analyze", post(media_routes::analyze_series))
         .route(
             "/api/v1/series/{series_id}/file",
             axum::routing::delete(source_file_routes::delete_series_files),
@@ -248,6 +250,15 @@ fn protected_api() -> Router<AppState> {
         )
         .route("/api/v1/books/list", post(content_routes::list_books))
         .route("/api/v1/books/import", post(source_import_routes::import_books))
+        .route("/api/v1/transient-books", post(transient_book_routes::scan))
+        .route(
+            "/api/v1/transient-books/{id}/analyze",
+            post(transient_book_routes::analyze),
+        )
+        .route(
+            "/api/v1/transient-books/{id}/pages/{page}",
+            get(transient_book_routes::page),
+        )
         .route("/api/v1/books", get(content_routes::legacy_list_books))
         .route("/api/v1/books/latest", get(content_routes::latest_books))
         .route("/api/v1/books/ondeck", get(content_routes::books_on_deck))
@@ -458,6 +469,10 @@ fn protected_api() -> Router<AppState> {
         .route(
             "/api/v1/libraries/{library_id}/scan",
             post(library_routes::scan_library),
+        )
+        .route(
+            "/api/v1/libraries/{library_id}/analyze",
+            post(media_routes::analyze_library),
         )
         .route(
             "/api/v1/libraries/{library_id}/metadata/refresh",

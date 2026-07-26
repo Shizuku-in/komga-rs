@@ -64,3 +64,36 @@ jobs:
       - run: cargo doc --workspace --no-deps
         env:
           RUSTDOCFLAGS: -D warnings
+
+  e2e:
+    needs: webui
+    runs-on: ubuntu-latest
+    env:
+      KOMGA_WEBUI_DIST_DIR: webui/dist
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: webui-dist
+          path: webui/dist
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: webui/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: npm ci
+        working-directory: webui
+      - run: npx playwright install --with-deps chromium
+        working-directory: webui
+      - run: npm run test:e2e
+        working-directory: webui
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: |
+            webui/playwright-report
+            webui/test-results
+          if-no-files-found: ignore

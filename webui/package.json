@@ -8,6 +8,7 @@
   "scripts": {
     "serve": "vue-cli-service serve --port 8081",
     "build": "vue-cli-service build",
+    "test:e2e": "playwright test",
     "test:unit": "vue-cli-service test:unit",
     "lint": "vue-cli-service lint --mode production"
   },
@@ -42,6 +43,7 @@
   },
   "devDependencies": {
     "@mdi/font": "^7.2.96",
+    "@playwright/test": "^1.62.0",
     "@types/chart.js": "^2.9.36",
     "@types/jest": "^27.0.1",
     "@types/lodash": "^4.14.198",

@@ -2164,6 +2164,7 @@ dependencies = [
  "mediatype",
  "mime_guess",
  "moka",
+ "pdf-writer",
  "percent-encoding",
  "quick-xml",
  "rand 0.9.5",
@@ -2183,6 +2184,7 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "uuid",
+ "walkdir",
  "zip",
 ]
 
