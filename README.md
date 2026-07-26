@@ -13,6 +13,12 @@ The migration matrix currently tracks 13 functional areas: 6 are implemented or 
 | Implemented / core-complete | Claim and users; collections and read lists; OPDS; device sync; operations; Web UI packaging |
 | Partial | Process and configuration; SQLite; authentication; libraries and scanner; Series, Books, and progress; media; search |
 
+## Compatibility target
+
+`komga-rs` targets fresh Rust installations and the behavior of the pinned Komga baseline at commit `4ef86df`. Database compatibility is limited to the parts of that baseline schema explicitly covered by the [migration matrix](docs/MIGRATION.md).
+
+The project does not promise direct migration from every historical Kotlin Komga database or reproduce every Flyway migration path. Before switching an existing installation, back up its database and use Kotlin Komga to bring it to the supported baseline; databases from other versions are unsupported unless they are explicitly listed and tested.
+
 Recent content work added modern and deprecated Series/Book queries, legacy regex search, duplicate-book discovery, book-file hashing, configurable ZIP edge-page hashing, PageHash administration, safe duplicate-page removal from CBZ files with historical auditing, RAR/CBR-to-CBZ conversion, source-extension repair, authenticated OPDS 1.2 and OPDS 2 catalogs, Kotlin-compatible content-domain SSE, KOReader and Kobo synchronization, application metrics, announcements, release checks, and bundled and local reader fonts.
 
 ## Run
@@ -75,7 +81,7 @@ KOMGA_PORT=25601 KOMGA_CONTEXT_PATH=/komga \
 `--kobo-kepubify-path` and `KOMGA_KOBO_KEPUBIFY_PATH` are optional compatibility fallbacks. The
 in-process converter remains the primary implementation when either setting is present.
 
-Do not run the Kotlin and Rust servers against the same SQLite file at the same time. Back up an existing database before the first Rust start.
+Do not run the Kotlin and Rust servers against the same SQLite file at the same time. Back up an existing database before the first Rust start. Historical Kotlin database migration is outside the compatibility target; only explicitly documented and tested schemas are supported.
 Migration `0011_page_hashing` deliberately clears existing `PAGE_HASH` rules and thumbnails and resets JPEG page hashes because Rust uses a versioned RGB24 pixel hash instead of Java ImageIO's encoder-dependent bytes.
 
 ## Implemented API

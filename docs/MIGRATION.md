@@ -1,11 +1,13 @@
 # Migration status
 
-The `komga/` Git submodule pins the behavioral reference baseline at Komga commit `4ef86df`. The root `webui/` directory is the maintained Web UI source imported from that baseline. Porting is organized as vertical slices so every completed stage can start, persist data, and pass HTTP-level tests.
+The `komga/` Git submodule pins the behavioral and schema reference baseline at Komga commit `4ef86df`. The root `webui/` directory is the maintained Web UI source imported from that baseline. Porting is organized as vertical slices so every completed stage can start, persist data, and pass HTTP-level tests.
+
+Compatibility targets fresh Rust installations and the explicitly covered parts of this fixed baseline. The project does not promise direct migration from arbitrary historical Kotlin databases or implementation of every Flyway migration path. Existing installations must first be upgraded with Kotlin Komga to a schema explicitly documented as supported, and must be backed up before being opened by Rust.
 
 | Area | Status | Notes |
 | --- | --- | --- |
 | Process/configuration | Partial | Default config directory, main/task database files, search/font directories, address/context path, Kobo sync page limit, coordinated background-service shutdown, tracing, and Kotlin-compatible database/REST server settings are implemented. Spring YAML remains pending. |
-| SQLite | Partial | User, library, settings, task queue, Series/Book, media pages/files, book/series thumbnails, metadata relations, read progress, SyncPoint snapshots, announcement read state, and historical events are compatible with current Flyway databases. The complete schema and all historical migration paths are pending. |
+| SQLite | Partial | User, library, settings, task queue, Series/Book, media pages/files, book/series thumbnails, metadata relations, read progress, SyncPoint snapshots, announcement read state, and historical events are compatible with the covered fixed-baseline schema. Complete historical Flyway migration compatibility is explicitly out of scope. |
 | Claim and users | Implemented | Claim, current user, CRUD, roles, library sharing fields, age/label restrictions, and password changes. |
 | Authentication | Partial | Basic, in-memory sessions, remember-me cookie, header sessions, logout, and REST API keys are implemented. OAuth2 and authentication activity are pending. |
 | Libraries and scanner | Partial | Library CRUD with database cascade deletion, filesystem browsing, scan workers, startup/periodic scheduling, Series/Book discovery, change reconciliation, soft deletion, EmptyTrash/automatic cleanup, Kotlin-compatible Book/Series source-file deletion tasks, RAR/CBR-to-CBZ conversion and source-extension repair scheduling, automatic CBZ/CBR/PDF/EPUB analysis, ComicInfo/EPUB metadata import, Mylar `series.json`, and Book/Series artwork sidecars are implemented. |
@@ -21,10 +23,11 @@ The `komga/` Git submodule pins the behavioral reference baseline at Komga commi
 ## Compatibility rules
 
 1. Preserve public paths, status codes, JSON field names, headers, and media types before optimizing internals.
-2. Read the current Kotlin schema directly. Rust migrations must be additive and safe when Flyway tables already exist.
-3. Keep domain policy independent from Axum and SQLx so Kotlin unit cases can be ported without HTTP or database setup.
-4. Add HTTP contract tests for each controller before marking a row implemented.
-5. Do not perform irreversible database conversions without an explicitly accepted and documented compatibility reset; `0011_page_hashing` is the current exception and requires a backup.
+2. Support fresh Rust databases and the explicitly covered schema at the pinned Kotlin baseline. Rust migrations must be additive and safe when supported Flyway tables already exist.
+3. Do not treat arbitrary historical Kotlin database migration paths as a completion requirement. A schema is supported only when it is documented and covered by compatibility tests.
+4. Keep domain policy independent from Axum and SQLx so Kotlin unit cases can be ported without HTTP or database setup.
+5. Add HTTP contract tests for each controller before marking a row implemented.
+6. Do not perform irreversible database conversions without an explicitly accepted and documented compatibility reset; `0011_page_hashing` is the current exception and requires a backup.
 
 ## Current limitations
 
