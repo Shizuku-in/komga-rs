@@ -328,7 +328,9 @@ async fn worker_loop(state: AppState, index: usize, stop: CancellationToken) {
         }
         match state.tasks.take_first_of_types(&owner, &SUPPORTED_TASK_TYPES).await {
             Ok(Some(task)) => {
+                let started = std::time::Instant::now();
                 let outcome = process_task(&state, &task).await;
+                record_task_metrics(&state.task_metrics, &task.simple_type, outcome, started.elapsed());
                 let result = match outcome {
                     TaskOutcome::Completed => state.tasks.delete(&task.id).await,
                     TaskOutcome::Cancelled | TaskOutcome::Retry => state.tasks.release(&task.id, &owner).await,
@@ -360,6 +362,19 @@ async fn worker_loop(state: AppState, index: usize, stop: CancellationToken) {
                 }
             }
         }
+    }
+}
+
+fn record_task_metrics(
+    metrics: &crate::metrics_routes::TaskMetrics,
+    task_type: &str,
+    outcome: TaskOutcome,
+    elapsed: Duration,
+) {
+    match outcome {
+        TaskOutcome::Completed => metrics.record_execution(task_type, elapsed),
+        TaskOutcome::Retry => metrics.record_failure(task_type),
+        TaskOutcome::Cancelled => {}
     }
 }
 
@@ -444,6 +459,17 @@ mod tests {
     use url::Url;
 
     use super::*;
+
+    #[test]
+    fn task_metrics_record_success_failure_and_ignore_cancellation() {
+        let metrics = crate::metrics_routes::TaskMetrics::default();
+        record_task_metrics(&metrics, "Completed", TaskOutcome::Completed, Duration::from_secs(1));
+        record_task_metrics(&metrics, "Retry", TaskOutcome::Retry, Duration::from_secs(1));
+        record_task_metrics(&metrics, "Cancelled", TaskOutcome::Cancelled, Duration::from_secs(1));
+        assert_eq!(metrics.counts("Completed"), (1, 0));
+        assert_eq!(metrics.counts("Retry"), (0, 1));
+        assert_eq!(metrics.counts("Cancelled"), (0, 0));
+    }
 
     #[tokio::test]
     async fn task_workers_resize_up_and_retire_without_cancelling_active_work() {

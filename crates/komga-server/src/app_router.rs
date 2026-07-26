@@ -17,7 +17,7 @@ use tower_http::{
 
 use crate::{
     AppState, auth, book_file_routes, container_routes, content_routes, filesystem_routes, history_routes, kobo,
-    koreader_routes, library_routes, media_routes, metadata_routes, opds_router, page_hash_routes,
+    koreader_routes, library_routes, media_routes, metadata_routes, metrics_routes, opds_router, page_hash_routes,
     read_list_file_routes, read_list_match_routes, read_progress_routes, referential_routes, routes, settings_routes,
     source_file_routes, source_import_routes, sse_routes, thumbnail_routes, webpub_routes,
 };
@@ -123,6 +123,8 @@ fn redacted_request_uri(uri: &Uri) -> String {
 
 fn protected_api() -> Router<AppState> {
     Router::new()
+        .route("/actuator/metrics", get(metrics_routes::list))
+        .route("/actuator/metrics/{metric}", get(metrics_routes::get))
         .route("/api/v2/users/me", get(routes::current_user))
         .route("/api/v2/users/me/password", patch(routes::update_my_password))
         .route(

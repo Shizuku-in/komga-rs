@@ -24,6 +24,7 @@ mod legacy_content_query;
 mod library_routes;
 mod media_routes;
 mod metadata_routes;
+mod metrics_routes;
 mod opds_router;
 mod opds_v1;
 mod opds_v2;
@@ -86,6 +87,7 @@ pub struct AppState {
     kobo_kepub: kobo::kepub::KepubService,
     kobo_proxy: kobo::proxy::KoboProxy,
     kobo_port: Arc<AtomicU16>,
+    task_metrics: metrics_routes::TaskMetrics,
     database_kobo_proxy: Option<bool>,
     database_kepubify_path: Option<PathBuf>,
     configuration_server_port: u16,
@@ -167,6 +169,7 @@ impl AppState {
                 .await,
             kobo_proxy: kobo::proxy::KoboProxy::new(server_settings.kobo_proxy.unwrap_or(false)),
             kobo_port: Arc::new(AtomicU16::new(server_settings.kobo_port.unwrap_or(0))),
+            task_metrics: metrics_routes::TaskMetrics::default(),
             database_kobo_proxy: server_settings.kobo_proxy,
             database_kepubify_path: server_settings.kepubify_path.map(PathBuf::from),
             configuration_server_port: 25_600,

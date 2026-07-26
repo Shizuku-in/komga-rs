@@ -44,6 +44,8 @@ mod library_content_cases;
 mod lifecycle_cases;
 #[path = "api_cases/media.rs"]
 mod media_cases;
+#[path = "api_cases/metrics.rs"]
+mod metrics_cases;
 #[path = "api_cases/opds.rs"]
 mod opds_cases;
 #[path = "api_cases/page_hashes.rs"]
