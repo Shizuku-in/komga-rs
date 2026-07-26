@@ -16,6 +16,7 @@ mod library;
 mod lifecycle;
 mod media;
 mod metadata;
+mod operations;
 mod page_hash;
 mod query_support;
 mod read_progress;
@@ -34,6 +35,7 @@ pub use content_queries::{LegacySeriesRegex, LegacySeriesRegexField, ReadListFil
 pub use library::DeleteLibraryResult;
 pub use lifecycle::{EmptyTrashResult, NumberingRefreshTarget};
 pub use media::{PageHashTarget, PageHashUpdate};
+pub use operations::ContentMetricsSnapshot;
 pub use referential::{ReferentialScope, author_page_request};
 pub use settings::{ClientSetting, ServerSettings, ServerSettingsPatch, SettingUpdate};
 pub use source_import::BookImportCommitResult;
