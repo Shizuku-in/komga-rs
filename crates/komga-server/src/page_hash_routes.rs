@@ -7,8 +7,8 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use komga_core::{
-    HashedPageTarget, Media, MediaStatus, PDF_MEDIA_TYPE, PageHashAction, PageHashMatch, PageRequest, RAR4_MEDIA_TYPE,
-    RAR5_MEDIA_TYPE, SortDirection, SortOrder, ZIP_MEDIA_TYPE,
+    EPUB_MEDIA_TYPE, HashedPageTarget, Media, MediaStatus, PDF_MEDIA_TYPE, PageHashAction, PageHashMatch, PageRequest,
+    RAR4_MEDIA_TYPE, RAR5_MEDIA_TYPE, SortDirection, SortOrder, ZIP_MEDIA_TYPE,
 };
 use komga_media::{ImageOutput, convert_image, extract_page};
 use komga_storage::TaskRecord;
@@ -190,10 +190,10 @@ pub(crate) async fn delete_match(
 
 fn supports_page_removal(media: &Media) -> bool {
     media.status == MediaStatus::Ready
-        && matches!(
+        && (matches!(
             media.media_type.as_deref(),
             Some(ZIP_MEDIA_TYPE | RAR4_MEDIA_TYPE | RAR5_MEDIA_TYPE | PDF_MEDIA_TYPE)
-        )
+        ) || (media.media_type.as_deref() == Some(EPUB_MEDIA_TYPE) && media.epub_divina_compatible))
 }
 
 fn target(page_hash: &str, matched: PageHashMatch) -> HashedPageTarget {

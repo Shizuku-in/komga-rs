@@ -431,8 +431,10 @@ impl Storage {
             || updated_media.book_id != original_book.id
             || !matches!(
                 original_media_type,
-                komga_core::ZIP_MEDIA_TYPE | komga_core::PDF_MEDIA_TYPE
+                komga_core::ZIP_MEDIA_TYPE | komga_core::PDF_MEDIA_TYPE | komga_core::EPUB_MEDIA_TYPE
             )
+            || (original_media_type == komga_core::EPUB_MEDIA_TYPE
+                && (!original_media.epub_divina_compatible || !updated_media.epub_divina_compatible))
             || removed.is_empty()
             || original_media.pages.len() != updated_media.pages.len() + removed.len()
             || usize::try_from(original_media.page_count).ok() != Some(original_media.pages.len())

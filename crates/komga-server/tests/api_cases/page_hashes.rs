@@ -351,7 +351,7 @@ async fn rar_matches_preview_and_manual_delete_use_existing_page_hash_contract()
 }
 
 #[tokio::test]
-async fn fixed_layout_epub_matches_preview_and_rejects_manual_removal_atomically() {
+async fn fixed_layout_epub_matches_preview_and_accepts_manual_removal() {
     let (temporary, storage, tasks, scanned_book, _) =
         analyzed_media_fixture("archives/epub3.epub", "Fixed.epub").await;
     let book = storage.find_book_by_id(&scanned_book.id).await.unwrap().unwrap();
@@ -463,12 +463,17 @@ async fn fixed_layout_epub_matches_preview_and_rejects_manual_removal_atomically
         )
         .await
         .unwrap();
-    assert_eq!(delete_epub.status(), StatusCode::CONFLICT);
+    assert_eq!(delete_epub.status(), StatusCode::ACCEPTED);
     assert_eq!(
-        body_json(delete_epub).await["message"],
-        "Page removal is not supported for this media"
+        tasks
+            .list()
+            .await
+            .unwrap()
+            .iter()
+            .filter(|task| task.simple_type == "RemoveHashedPages")
+            .count(),
+        1
     );
-    assert!(tasks.list().await.unwrap().is_empty());
 
     let delete_all = app
         .clone()
@@ -480,12 +485,17 @@ async fn fixed_layout_epub_matches_preview_and_rejects_manual_removal_atomically
         )
         .await
         .unwrap();
-    assert_eq!(delete_all.status(), StatusCode::CONFLICT);
+    assert_eq!(delete_all.status(), StatusCode::ACCEPTED);
     assert_eq!(
-        body_json(delete_all).await["message"],
-        "Page removal is not supported for one or more matching media"
+        tasks
+            .list()
+            .await
+            .unwrap()
+            .iter()
+            .filter(|task| task.simple_type == "RemoveHashedPages")
+            .count(),
+        2
     );
-    assert!(tasks.list().await.unwrap().is_empty());
 
     let delete_zip = app
         .oneshot(
@@ -506,7 +516,7 @@ async fn fixed_layout_epub_matches_preview_and_rejects_manual_removal_atomically
             .into_iter()
             .filter(|task| task.simple_type == "RemoveHashedPages")
             .count(),
-        1
+        2
     );
     drop(temporary);
 }

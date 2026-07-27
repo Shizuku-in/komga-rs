@@ -6,9 +6,12 @@
 //! resources are emitted before assets because that order is later reused by
 //! WebPub manifests and Readium positions.
 
+mod edit;
 mod navigation;
 pub(crate) mod package;
 pub(crate) mod positions;
+
+pub use edit::rewrite_hashed_epub_pages;
 
 use std::{collections::BTreeSet, path::Path};
 

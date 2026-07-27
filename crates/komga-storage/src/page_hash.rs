@@ -235,10 +235,14 @@ impl Storage {
             komga_core::RAR4_MEDIA_TYPE,
             komga_core::RAR5_MEDIA_TYPE,
             komga_core::PDF_MEDIA_TYPE,
+            komga_core::EPUB_MEDIA_TYPE,
         ] {
             media_types.push_bind(media_type);
         }
-        media_types.push_unseparated(") ORDER BY mp.BOOK_ID, mp.NUMBER");
+        media_types.push_unseparated(") AND (m.MEDIA_TYPE <> ");
+        query
+            .push_bind(komga_core::EPUB_MEDIA_TYPE)
+            .push(" OR m.EPUB_DIVINA_COMPATIBLE = 1) ORDER BY mp.BOOK_ID, mp.NUMBER");
         let rows = query
             .build_query_as::<(String, String, String, String, i64, i32)>()
             .fetch_all(&self.pool)
@@ -268,13 +272,16 @@ impl Storage {
                 JOIN MEDIA m ON m.BOOK_ID = mp.BOOK_ID
                 WHERE mp.FILE_HASH = ?
                   AND (m.STATUS <> 'READY' OR m.MEDIA_TYPE IS NULL
-                       OR m.MEDIA_TYPE NOT IN (?, ?, ?, ?)))"#,
+                       OR m.MEDIA_TYPE NOT IN (?, ?, ?, ?, ?)
+                       OR (m.MEDIA_TYPE = ? AND m.EPUB_DIVINA_COMPATIBLE = 0)))"#,
         )
         .bind(page_hash)
         .bind(komga_core::ZIP_MEDIA_TYPE)
         .bind(komga_core::RAR4_MEDIA_TYPE)
         .bind(komga_core::RAR5_MEDIA_TYPE)
         .bind(komga_core::PDF_MEDIA_TYPE)
+        .bind(komga_core::EPUB_MEDIA_TYPE)
+        .bind(komga_core::EPUB_MEDIA_TYPE)
         .fetch_one(&self.pool)
         .await?)
     }
@@ -559,7 +566,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn removal_targets_exclude_epub_and_report_mixed_hashes() {
+    async fn removal_targets_include_only_divina_compatible_epub() {
         let storage = Storage::connect_memory().await.unwrap();
         let temporary = tempfile::tempdir().unwrap();
         let root = temporary.path().join("library");
@@ -575,12 +582,15 @@ mod tests {
         let epub = books.iter().find(|book| book.url.path().ends_with(".epub")).unwrap();
         let zip = books.iter().find(|book| book.url.path().ends_with(".cbz")).unwrap();
         for (book, media_type) in [(zip, komga_core::ZIP_MEDIA_TYPE), (epub, komga_core::EPUB_MEDIA_TYPE)] {
-            sqlx::query("UPDATE MEDIA SET STATUS='READY',MEDIA_TYPE=?,PAGE_COUNT=1 WHERE BOOK_ID=?")
-                .bind(media_type)
-                .bind(&book.id)
-                .execute(&storage.pool)
-                .await
-                .unwrap();
+            sqlx::query(
+                "UPDATE MEDIA SET STATUS='READY',MEDIA_TYPE=?,PAGE_COUNT=1,EPUB_DIVINA_COMPATIBLE=? WHERE BOOK_ID=?",
+            )
+            .bind(media_type)
+            .bind(media_type == komga_core::EPUB_MEDIA_TYPE)
+            .bind(&book.id)
+            .execute(&storage.pool)
+            .await
+            .unwrap();
             sqlx::query(
                 "INSERT INTO MEDIA_PAGE (BOOK_ID,NUMBER,FILE_NAME,MEDIA_TYPE,FILE_HASH,FILE_SIZE) VALUES (?,0,'page.jpg','image/jpeg','duplicate',10)",
             )
@@ -598,9 +608,10 @@ mod tests {
             .page_targets_by_actions(&[PageHashAction::DeleteAuto], Some(&library.id))
             .await
             .unwrap();
-        assert_eq!(targets.len(), 1);
-        assert_eq!(targets[0].0, zip.id);
-        assert!(storage.page_hash_has_non_removable_matches("duplicate").await.unwrap());
+        assert_eq!(targets.len(), 2);
+        assert!(targets.iter().any(|target| target.0 == zip.id));
+        assert!(targets.iter().any(|target| target.0 == epub.id));
+        assert!(!storage.page_hash_has_non_removable_matches("duplicate").await.unwrap());
 
         sqlx::query("UPDATE MEDIA_PAGE SET FILE_HASH='epub-only' WHERE BOOK_ID=?")
             .bind(&epub.id)
@@ -612,7 +623,19 @@ mod tests {
             .execute(&storage.pool)
             .await
             .unwrap();
-        assert!(storage.page_hash_has_non_removable_matches("epub-only").await.unwrap());
+        assert!(!storage.page_hash_has_non_removable_matches("epub-only").await.unwrap());
         assert!(!storage.page_hash_has_non_removable_matches("zip-only").await.unwrap());
+
+        sqlx::query("UPDATE MEDIA SET EPUB_DIVINA_COMPATIBLE=0 WHERE BOOK_ID=?")
+            .bind(&epub.id)
+            .execute(&storage.pool)
+            .await
+            .unwrap();
+        assert!(storage.page_hash_has_non_removable_matches("epub-only").await.unwrap());
+        let targets = storage
+            .page_targets_by_actions(&[PageHashAction::DeleteAuto], Some(&library.id))
+            .await
+            .unwrap();
+        assert!(targets.iter().all(|target| target.0 == zip.id));
     }
 }

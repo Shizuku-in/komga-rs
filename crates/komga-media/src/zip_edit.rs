@@ -361,7 +361,7 @@ fn validate_created_media(
     Ok(())
 }
 
-fn source_fingerprint(path: &Path, cancelled: &impl Fn() -> bool) -> Result<String, PageRemovalError> {
+pub(crate) fn source_fingerprint(path: &Path, cancelled: &impl Fn() -> bool) -> Result<String, PageRemovalError> {
     hash_file(path, cancelled).map_err(|error| match error {
         FileHashError::Cancelled => PageRemovalError::Cancelled,
         FileHashError::Io(error) => PageRemovalError::Io(error),
@@ -369,7 +369,7 @@ fn source_fingerprint(path: &Path, cancelled: &impl Fn() -> bool) -> Result<Stri
     })
 }
 
-fn ensure_book_snapshot(book: &Book, metadata: &Metadata) -> Result<(), PageRemovalError> {
+pub(crate) fn ensure_book_snapshot(book: &Book, metadata: &Metadata) -> Result<(), PageRemovalError> {
     let size = i64::try_from(metadata.len()).unwrap_or(i64::MAX);
     if size != book.file_size || scan_timestamp(metadata) != book.file_last_modified {
         return Err(PageRemovalError::Stale(
@@ -379,7 +379,11 @@ fn ensure_book_snapshot(book: &Book, metadata: &Metadata) -> Result<(), PageRemo
     Ok(())
 }
 
-fn ensure_same_metadata(initial: &Metadata, current: &Metadata, path: &Path) -> Result<(), PageRemovalError> {
+pub(crate) fn ensure_same_metadata(
+    initial: &Metadata,
+    current: &Metadata,
+    path: &Path,
+) -> Result<(), PageRemovalError> {
     if initial.len() != current.len() || initial.modified()? != current.modified()? {
         return Err(PageRemovalError::Stale(format!(
             "source metadata changed during rewrite: {}",
@@ -389,7 +393,7 @@ fn ensure_same_metadata(initial: &Metadata, current: &Metadata, path: &Path) -> 
     Ok(())
 }
 
-fn scan_timestamp(metadata: &Metadata) -> chrono::NaiveDateTime {
+pub(crate) fn scan_timestamp(metadata: &Metadata) -> chrono::NaiveDateTime {
     let modified = metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH);
     let created = metadata.created().unwrap_or(modified);
     DateTime::<Local>::from(modified.max(created)).naive_local()

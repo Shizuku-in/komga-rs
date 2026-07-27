@@ -23,6 +23,7 @@ pub(super) struct ManifestItem {
 /// Parsed package structures needed for resources, navigation, and covers.
 #[derive(Debug)]
 pub(super) struct EpubPackage {
+    pub(super) path: String,
     pub(super) manifest: Vec<ManifestItem>,
     pub(super) spine: Vec<ManifestItem>,
     pub(super) fixed_layout: bool,
@@ -38,7 +39,8 @@ pub(super) fn open(path: &Path) -> Result<(ZipArchive<File>, EpubPackage), Strin
     let mut archive = ZipArchive::new(file).map_err(|error| error.to_string())?;
     let package_path = package_path(&mut archive)?;
     let package_xml = read_entry_text(&mut archive, &package_path)?;
-    let package = parse_package(&package_xml, parent(&package_path))?;
+    let mut package = parse_package(&package_xml, parent(&package_path))?;
+    package.path = package_path;
     Ok((archive, package))
 }
 
@@ -59,7 +61,7 @@ pub(super) fn has_epub_mimetype(path: &Path) -> bool {
     read_entry_text(&mut archive, "mimetype").is_ok_and(|value| value.trim() == "application/epub+zip")
 }
 
-fn package_path(archive: &mut ZipArchive<File>) -> Result<String, String> {
+pub(super) fn package_path(archive: &mut ZipArchive<File>) -> Result<String, String> {
     let container = read_entry_text(archive, "META-INF/container.xml")?;
     let document = Document::parse(&container).map_err(|error| error.to_string())?;
     let rootfile = document
@@ -70,7 +72,7 @@ fn package_path(archive: &mut ZipArchive<File>) -> Result<String, String> {
     normalize_href("", rootfile).map(|value| remove_fragment(&value).to_owned())
 }
 
-fn parse_package(xml: &str, base_dir: &str) -> Result<EpubPackage, String> {
+pub(super) fn parse_package(xml: &str, base_dir: &str) -> Result<EpubPackage, String> {
     let document = Document::parse(xml).map_err(|error| error.to_string())?;
     let manifest_node = document
         .descendants()
@@ -158,6 +160,7 @@ fn parse_package(xml: &str, base_dir: &str) -> Result<EpubPackage, String> {
         .cloned();
 
     Ok(EpubPackage {
+        path: String::new(),
         manifest,
         spine,
         fixed_layout,

@@ -24,6 +24,7 @@ mod rar_conversion;
 mod zip_edit;
 
 pub use comicrack::{ComicRackListError, parse_read_list};
+pub use epub::rewrite_hashed_epub_pages;
 pub use hashing::{
     ComputedPageHash, FileHashError, PageHashError, RAW_PAGE_HASH_ALGORITHM, RGB_PAGE_HASH_ALGORITHM, hash_file,
     hash_file_koreader, hash_page, reconcile_scan_hashes,

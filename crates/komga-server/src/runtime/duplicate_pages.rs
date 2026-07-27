@@ -8,11 +8,12 @@ use std::{
 
 use chrono::{DateTime, Local};
 use komga_core::{
-    Book, HashedPageTarget, Library, Media, MediaStatus, PDF_MEDIA_TYPE, PageHashAction, RAR4_MEDIA_TYPE,
-    RAR5_MEDIA_TYPE, ZIP_MEDIA_TYPE,
+    Book, EPUB_MEDIA_TYPE, HashedPageTarget, Library, Media, MediaStatus, PDF_MEDIA_TYPE, PageHashAction,
+    RAR4_MEDIA_TYPE, RAR5_MEDIA_TYPE, ZIP_MEDIA_TYPE,
 };
 use komga_media::{
-    FileHashError, PageRemovalError, PageRemovalRewrite, hash_file, rewrite_hashed_pdf_pages, rewrite_hashed_zip_pages,
+    FileHashError, PageRemovalError, PageRemovalRewrite, hash_file, rewrite_hashed_epub_pages,
+    rewrite_hashed_pdf_pages, rewrite_hashed_zip_pages,
 };
 use serde::{Deserialize, Serialize};
 
@@ -213,10 +214,10 @@ pub(super) async fn process_remove_hashed_pages_task(state: &AppState, task: &Ta
         }
     };
     if media.status != MediaStatus::Ready
-        || !matches!(
+        || !(matches!(
             media.media_type.as_deref(),
             Some(ZIP_MEDIA_TYPE | RAR4_MEDIA_TYPE | RAR5_MEDIA_TYPE | PDF_MEDIA_TYPE)
-        )
+        ) || (media.media_type.as_deref() == Some(EPUB_MEDIA_TYPE) && media.epub_divina_compatible))
     {
         tracing::warn!(book_id = %book.id, media_type = ?media.media_type, "page removal is unsupported for media");
         return TaskOutcome::Completed;
@@ -458,8 +459,13 @@ fn prepare_page_removal(
         Some(PDF_MEDIA_TYPE) => {
             rewrite_hashed_pdf_pages(book, media, targets, &paths.temporary, analyze_dimensions, &cancelled)
         }
+        Some(EPUB_MEDIA_TYPE) if media.epub_divina_compatible => {
+            rewrite_hashed_epub_pages(book, media, targets, &paths.temporary, analyze_dimensions, &cancelled)
+        }
         _ => {
-            return Err(WorkError::terminal("only ready ZIP and PDF media support page removal"));
+            return Err(WorkError::terminal(
+                "only ready ZIP, PDF, and Divina-compatible EPUB media support page removal",
+            ));
         }
     };
     let rewrite = match rewritten {
@@ -700,7 +706,10 @@ fn validate_page_removal_journal(journal: &PageRemovalJournal, paths: &PageRemov
     if journal.version != PAGE_REMOVAL_JOURNAL_VERSION
         || journal.book_id.is_empty()
         || source_file_name != Some(journal.source_file_name.as_str())
-        || !matches!(journal.media_type.as_str(), ZIP_MEDIA_TYPE | PDF_MEDIA_TYPE)
+        || !matches!(
+            journal.media_type.as_str(),
+            ZIP_MEDIA_TYPE | PDF_MEDIA_TYPE | EPUB_MEDIA_TYPE
+        )
         || journal.old.file_size < 0
         || journal.new.file_size < 0
         || journal.old.page_count <= 0
@@ -1044,7 +1053,13 @@ async fn enqueue_recovery_scan(state: &AppState, library_id: &str) {
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, fs::File, io::Write, num::NonZeroUsize, path::PathBuf};
+    use std::{
+        fs,
+        fs::File,
+        io::Write,
+        num::NonZeroUsize,
+        path::{Path, PathBuf},
+    };
 
     use chrono::Utc;
     use komga_core::{Library, PageHashAction, User, page_progress, scan_library_files};
@@ -1053,7 +1068,7 @@ mod tests {
     use komga_storage::{PageHashUpdate, Storage, TaskStorage};
     use pdf_writer::{Content, Finish, Rect, Ref};
     use url::Url;
-    use zip::{ZipArchive, ZipWriter, write::SimpleFileOptions};
+    use zip::{CompressionMethod, ZipArchive, ZipWriter, write::SimpleFileOptions};
 
     use super::*;
 
@@ -1226,7 +1241,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn epub_page_removal_tasks_complete_without_mutation_or_followups() {
+    async fn epub_page_removal_updates_source_database_history_and_followups() {
         let storage = Storage::connect_memory().await.unwrap();
         let tasks = TaskStorage::connect_memory().await.unwrap();
         let temporary = tempfile::tempdir().unwrap();
@@ -1234,12 +1249,9 @@ mod tests {
         let series = root.join("Series");
         fs::create_dir_all(&series).unwrap();
         let source = series.join("Volume.epub");
-        fs::copy(
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../komga/komga/src/test/resources/archives/epub3.epub"),
-            &source,
-        )
-        .unwrap();
-        let library = Library::new("Library".into(), Url::from_directory_path(&root).unwrap());
+        write_fixed_layout_epub(&source);
+        let mut library = Library::new("Library".into(), Url::from_directory_path(&root).unwrap());
+        library.hash_pages = true;
         storage.create_library(&library).await.unwrap();
         storage
             .apply_library_scan(&library.id, &scan_library_files(&library, || false).unwrap(), false)
@@ -1250,19 +1262,27 @@ mod tests {
             .await
             .unwrap()
             .remove(0);
-        let analyzed = analyze_book(&scanned, true, || false).unwrap();
+        let mut analyzed = analyze_book(&scanned, true, || false).unwrap();
+        for index in 0..analyzed.pages.len() {
+            let content = extract_page(&scanned, &analyzed, i32::try_from(index + 1).unwrap()).unwrap();
+            analyzed.pages[index].file_hash = hash_page(&content.bytes, &content.media_type).unwrap().hash;
+        }
         storage.replace_media_analysis(&analyzed).await.unwrap();
         let book = storage.find_book_by_id(&scanned.id).await.unwrap().unwrap();
         let media = storage.find_media_by_book_id(&book.id).await.unwrap().unwrap();
-        let page = &media.pages[0];
+        let page = &media.pages[1];
+        storage
+            .create_or_update_page_hash(&page.file_hash, page.file_size, PageHashAction::DeleteManual, None)
+            .await
+            .unwrap();
         let task = TaskRecord::remove_hashed_pages(
             &book.id,
             &[HashedPageTarget {
                 file_name: page.file_name.clone(),
                 media_type: page.media_type.clone(),
-                file_hash: "unused".into(),
+                file_hash: page.file_hash.clone(),
                 file_size: page.file_size.unwrap(),
-                page_number: 1,
+                page_number: 2,
             }],
             4,
         );
@@ -1273,10 +1293,40 @@ mod tests {
             process_remove_hashed_pages_task(&state, &task).await,
             TaskOutcome::Completed
         );
-        assert_eq!(fs::read(&source).unwrap(), before);
-        assert_eq!(storage.find_book_by_id(&book.id).await.unwrap().unwrap(), book);
-        assert_eq!(storage.find_media_by_book_id(&book.id).await.unwrap().unwrap(), media);
-        assert!(tasks.list().await.unwrap().is_empty());
+        assert!(fs::read(&source).unwrap() != before);
+        let saved_book = storage.find_book_by_id(&book.id).await.unwrap().unwrap();
+        assert!(saved_book.file_hash.is_empty() && saved_book.file_hash_koreader.is_empty());
+        let saved_media = storage.find_media_by_book_id(&book.id).await.unwrap().unwrap();
+        assert_eq!(saved_media.pages.len(), 2);
+        assert_eq!(saved_media.pages[0].file_name, "images/1.png");
+        assert_eq!(saved_media.pages[1].file_name, "images/3.png");
+        assert!(saved_media.pages.iter().all(|page| !page.file_hash.is_empty()));
+        let mut archive = ZipArchive::new(File::open(&source).unwrap()).unwrap();
+        assert!(archive.by_name("pages/2.xhtml").is_err());
+        assert!(archive.by_name("images/2.png").is_err());
+        assert_eq!(
+            storage
+                .find_known_page_hash(&page.file_hash)
+                .await
+                .unwrap()
+                .unwrap()
+                .delete_count,
+            1
+        );
+        let history = storage
+            .list_historical_events(&komga_core::PageRequest::default())
+            .await
+            .unwrap();
+        assert_eq!(history.total_elements, 1);
+        assert_eq!(history.content[0].event_type, "DuplicatePageDeleted");
+        assert!(
+            tasks
+                .list()
+                .await
+                .unwrap()
+                .iter()
+                .any(|task| task.simple_type == "HashBookPages")
+        );
         for extension in ["tmp", "bak", "json"] {
             assert!(
                 !series
@@ -1284,6 +1334,51 @@ mod tests {
                     .exists()
             );
         }
+    }
+
+    fn write_fixed_layout_epub(path: &Path) {
+        let fixtures = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../komga/komga/src/test/resources/hashpage");
+        let images = [
+            fs::read(fixtures.join("tg.png/1.png")).unwrap(),
+            fs::read(fixtures.join("xt.png/1.png")).unwrap(),
+            fs::read(fixtures.join("tg.png/1.png")).unwrap(),
+        ];
+        let mut writer = ZipWriter::new(File::create(path).unwrap());
+        writer
+            .start_file(
+                "mimetype",
+                SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
+            )
+            .unwrap();
+        writer.write_all(EPUB_MEDIA_TYPE.as_bytes()).unwrap();
+        let options = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+        writer.start_file("META-INF/container.xml", options).unwrap();
+        writer
+            .write_all(
+                br#"<?xml version="1.0"?><container xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#,
+            )
+            .unwrap();
+        writer.start_file("content.opf", options).unwrap();
+        writer
+            .write_all(
+                br#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0"><metadata><meta property="rendition:layout">pre-paginated</meta></metadata><manifest><item id="p1" href="pages/1.xhtml" media-type="application/xhtml+xml"/><item id="p2" href="pages/2.xhtml" media-type="application/xhtml+xml"/><item id="p3" href="pages/3.xhtml" media-type="application/xhtml+xml"/><item id="i1" href="images/1.png" media-type="image/png"/><item id="i2" href="images/2.png" media-type="image/png"/><item id="i3" href="images/3.png" media-type="image/png"/></manifest><spine><itemref idref="p1"/><itemref idref="p2"/><itemref idref="p3"/></spine></package>"#,
+            )
+            .unwrap();
+        for (index, image) in images.iter().enumerate() {
+            let number = index + 1;
+            writer.start_file(format!("pages/{number}.xhtml"), options).unwrap();
+            writer
+                .write_all(
+                    format!(
+                        r#"<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml"><head><title>{number}</title></head><body><img src="../images/{number}.png"/></body></html>"#
+                    )
+                    .as_bytes(),
+                )
+                .unwrap();
+            writer.start_file(format!("images/{number}.png"), options).unwrap();
+            writer.write_all(image).unwrap();
+        }
+        writer.finish().unwrap();
     }
 
     #[tokio::test]
