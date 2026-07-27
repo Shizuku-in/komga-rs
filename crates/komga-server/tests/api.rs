@@ -24,6 +24,8 @@ use zip::{ZipArchive, ZipWriter, write::SimpleFileOptions};
 
 mod support;
 
+#[path = "api_cases/api_parity.rs"]
+mod api_parity_cases;
 #[path = "api_cases/auth.rs"]
 mod auth_cases;
 #[path = "api_cases/book_files.rs"]
