@@ -6,18 +6,21 @@ An incremental Rust port of the [Komga](https://github.com/gotson/komga) backend
 
 ## Port status
 
-The migration matrix currently tracks 14 functional areas: 12 are implemented or core-complete and 2 are partially implemented.
+The migration matrix currently tracks 14 functional areas; all 14 are implemented or core-complete for the pinned compatibility baseline.
 
 | Status | Areas |
 | --- | --- |
-| Implemented / core-complete | Process and configuration; Claim and users; authentication; libraries and scanner; collections and read lists; Series, Books, and progress; search; OPDS; device sync; operations; transient Book import analysis; Web UI packaging |
-| Partial | SQLite; media |
+| Implemented / core-complete | Process and configuration; SQLite; Claim and users; authentication; libraries and scanner; collections and read lists; Series, Books, and progress; media; search; OPDS; device sync; operations; transient Book import analysis; Web UI packaging |
 
 ## Compatibility target
 
 `komga-rs` targets fresh Rust installations and the behavior of the pinned Komga baseline at commit `4ef86df`. Database compatibility is limited to the parts of that baseline schema explicitly covered by the [migration matrix](docs/MIGRATION.md).
 
 The project does not promise direct migration from every historical Kotlin Komga database or reproduce every Flyway migration path. Before switching an existing installation, back up its database and use Kotlin Komga to bring it to the supported baseline; databases from other versions are unsupported unless they are explicitly listed and tested.
+
+SQLite compatibility is enforced against Kotlin-generated main and task database fixtures. Contract tests require all 51 supported application tables, compatible column affinities and primary keys, named indexes, and foreign-key relationships; they also exercise repository round trips across every persisted domain while preserving both Flyway and additive SQLx migration histories.
+
+Media compatibility is enforced against the pinned Kotlin ZIP, RAR4/RAR5, 7z, PDF, fixed-layout EPUB, and reflowable EPUB fixtures. The contracts cover detected types, READY/ERROR/UNSUPPORTED states, error codes, natural page order, dimensions, entry sizes, resource filtering, navigation, and positions. Kotlin's complete Apache Tika MIME database, pixel-identical PDFBox/ImageIO rendering, non-default Spring media settings, and inputs that the pinned Kotlin baseline itself rejects are outside this compatibility target.
 
 Recent content work added modern and deprecated Series/Book queries, the deprecated Series-scoped Book query, streaming whole-Series ZIP downloads, legacy regex search, duplicate-book discovery, book-file hashing, configurable ZIP/RAR/PDF and fixed-layout EPUB edge-page hashing, PageHash administration, recoverable duplicate-page removal from CBZ, PDF, and safe fixed-layout EPUB files plus RAR-to-CBZ selective replacement with historical auditing, RAR/CBR-to-CBZ conversion, source-extension repair, barcode ISBN and one-shot metadata import, authenticated OPDS 1.2 and OPDS 2 catalogs, Kotlin-compatible content-domain SSE, KOReader and Kobo synchronization, application metrics, announcements, release checks, and bundled and local reader fonts.
 
