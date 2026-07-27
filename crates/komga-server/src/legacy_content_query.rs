@@ -219,6 +219,70 @@ pub(crate) fn parse_legacy_book_query(raw_query: Option<&str>) -> Result<LegacyB
     })
 }
 
+pub(crate) fn parse_legacy_series_books_query(
+    raw_query: Option<&str>,
+    series_id: String,
+) -> Result<LegacyBookQuery, ApiError> {
+    let values = RawValues::parse(raw_query);
+    let page = values.page_request_with_fallback(
+        BOOK_SORTS,
+        Some(SortOrder {
+            property: "metadata.numberSort".into(),
+            direction: SortDirection::Ascending,
+        }),
+    )?;
+    let mut conditions = vec![BookCondition::SeriesId {
+        operator: is(series_id),
+    }];
+
+    push_any_book(
+        &mut conditions,
+        parse_list(&values, "media_status", parse_media_status)?,
+        |value| BookCondition::MediaStatus {
+            operator: EqualityOperator::Is { value },
+        },
+    );
+    push_any_book(
+        &mut conditions,
+        parse_list(&values, "read_status", parse_read_status)?,
+        |value| BookCondition::ReadStatus {
+            operator: EqualityOperator::Is { value },
+        },
+    );
+    push_any_book(&mut conditions, values.list("tag"), |value| BookCondition::Tag {
+        operator: NullableEqualityOperator::Is { value },
+    });
+
+    let authors = values
+        .all("author")
+        .iter()
+        .filter_map(|value| value.rsplit_once(','))
+        .map(|(name, role)| BookCondition::Author {
+            operator: EqualityOperator::Is {
+                value: AuthorMatch {
+                    name: Some(name.to_owned()),
+                    role: Some(role.to_owned()),
+                },
+            },
+        })
+        .collect();
+    push_book_conditions(&mut conditions, authors);
+
+    if let Some(value) = values.optional_boolean("deleted")? {
+        conditions.push(BookCondition::Deleted {
+            operator: boolean_operator(value),
+        });
+    }
+
+    Ok(LegacyBookQuery {
+        search: BookSearch {
+            condition: Some(BookCondition::AllOf { conditions }),
+            full_text_search: None,
+        },
+        page,
+    })
+}
+
 pub(crate) fn parse_duplicate_books_page(raw_query: Option<&str>) -> Result<PageRequest, ApiError> {
     RawValues::parse(raw_query).page_request_with_fallback(
         BOOK_SORTS,
@@ -252,7 +316,10 @@ fn push_series_conditions(conditions: &mut Vec<SeriesCondition>, nested: Vec<Ser
 }
 
 fn push_any_book<T>(conditions: &mut Vec<BookCondition>, values: Vec<T>, map: impl FnMut(T) -> BookCondition) {
-    let nested = values.into_iter().map(map).collect::<Vec<_>>();
+    push_book_conditions(conditions, values.into_iter().map(map).collect());
+}
+
+fn push_book_conditions(conditions: &mut Vec<BookCondition>, nested: Vec<BookCondition>) {
     if !nested.is_empty() {
         conditions.push(BookCondition::AnyOf { conditions: nested });
     }
@@ -519,6 +586,50 @@ mod tests {
         let malformed = parse_duplicate_books_page(Some("sort=name,sideways")).unwrap();
         assert_eq!(malformed.sort[0].property, "fileHash");
         assert!(parse_duplicate_books_page(Some("unpaged=maybe")).is_err());
+    }
+
+    #[test]
+    fn series_books_parser_scopes_filters_and_defaults_to_number_sort() {
+        let parsed = parse_legacy_series_books_query(
+            Some(
+                "media_status=UNKNOWN,READY&read_status=UNREAD&tag=first&tag=second&author=Doe%2C+Jane%2Cwriter&author=ignored&deleted=no&unpaged=yes",
+            ),
+            "series".into(),
+        )
+        .unwrap();
+
+        assert!(parsed.page.unpaged);
+        assert_eq!(parsed.page.sort.len(), 1);
+        assert_eq!(parsed.page.sort[0].property, "metadata.numberSort");
+        assert_eq!(parsed.page.sort[0].direction, SortDirection::Ascending);
+        let Some(BookCondition::AllOf { conditions }) = parsed.search.condition else {
+            panic!("expected all-of condition");
+        };
+        assert_eq!(conditions.len(), 6);
+        assert!(matches!(
+            &conditions[0],
+            BookCondition::SeriesId {
+                operator: EqualityOperator::Is { value }
+            } if value == "series"
+        ));
+        assert!(conditions.iter().any(|condition| matches!(
+            condition,
+            BookCondition::AnyOf { conditions }
+                if matches!(&conditions[0], BookCondition::Author {
+                    operator: EqualityOperator::Is { value: AuthorMatch { name: Some(name), role: Some(role) } }
+                } if name == "Doe, Jane" && role == "writer")
+        )));
+        assert!(matches!(
+            conditions.last(),
+            Some(BookCondition::Deleted {
+                operator: BooleanOperator::IsFalse
+            })
+        ));
+
+        let explicit = parse_legacy_series_books_query(Some("sort=name,desc"), "series".into()).unwrap();
+        assert_eq!(explicit.page.sort[0].property, "name");
+        assert_eq!(explicit.page.sort[0].direction, SortDirection::Descending);
+        assert!(parse_legacy_series_books_query(Some("deleted=maybe"), "series".into()).is_err());
     }
 
     #[test]

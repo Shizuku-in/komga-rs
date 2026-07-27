@@ -285,6 +285,116 @@ async fn deprecated_content_queries_match_modern_search_and_enforce_legacy_contr
     assert_eq!(restricted_groups, serde_json::json!([]));
 }
 
+#[tokio::test]
+async fn deprecated_series_books_query_scopes_filters_sorts_and_restricts_content() {
+    let storage = Storage::connect_memory().await.unwrap();
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path().join("library");
+    let series_root = root.join("Series");
+    fs::create_dir_all(&series_root).unwrap();
+    fs::write(series_root.join("Volume 10.cbz"), [10_u8]).unwrap();
+    fs::write(series_root.join("Volume 2.cbz"), [2_u8]).unwrap();
+    let library = Library::new("Library".into(), Url::from_directory_path(&root).unwrap());
+    storage.create_library(&library).await.unwrap();
+    storage
+        .apply_library_scan(&library.id, &scan_library_files(&library, || false).unwrap(), false)
+        .await
+        .unwrap();
+
+    let series = storage.list_series_by_library_id(&library.id).await.unwrap().remove(0);
+    let books = storage.list_books_by_series_id(&series.id).await.unwrap();
+    let volume_ten = books.iter().find(|book| book.name == "Volume 10").unwrap();
+    let mut book_metadata = storage.find_book_metadata(&volume_ten.id).await.unwrap().unwrap();
+    book_metadata.authors = vec![Author {
+        name: "Doe, Jane".into(),
+        role: "writer".into(),
+    }];
+    book_metadata.tags = BTreeSet::from(["Featured".into()]);
+    storage.save_book_metadata(&book_metadata).await.unwrap();
+
+    let mut series_metadata = storage.find_series_metadata(&series.id).await.unwrap().unwrap();
+    series_metadata.age_rating = Some(18);
+    storage.save_series_metadata(&series_metadata).await.unwrap();
+
+    let app = app_with_storage(storage.clone()).await;
+    assert_eq!(claim(&app).await.status(), StatusCode::OK);
+    let reader = User::new("reader@example.org".into(), bcrypt::hash("reader-password", 4).unwrap());
+    storage.create_user(&reader).await.unwrap();
+    let mut restricted = User::new(
+        "restricted@example.org".into(),
+        bcrypt::hash("reader-password", 4).unwrap(),
+    );
+    restricted.restrictions = ContentRestrictions::new(
+        Some(AgeRestriction {
+            age: 12,
+            restriction: AllowExclude::AllowOnly,
+        }),
+        Vec::<String>::new(),
+        Vec::<String>::new(),
+    );
+    storage.create_user(&restricted).await.unwrap();
+
+    let admin = basic("admin@example.org", "password");
+    let page = get_page(&app, &format!("/api/v1/series/{}/books?size=1", series.id), &admin).await;
+    assert_eq!(page["totalElements"], 2);
+    assert_eq!(page["content"][0]["name"], "Volume 2");
+    assert_eq!(page["sort"]["sorted"], true);
+
+    let filtered = get_page(
+        &app,
+        &format!(
+            "/api/v1/series/{}/books?media_status=UNKNOWN&read_status=UNREAD&tag=Featured&author=Doe%2C+Jane%2Cwriter&deleted=false&unpaged=true",
+            series.id
+        ),
+        &admin,
+    )
+    .await;
+    assert_eq!(filtered["totalElements"], 1);
+    assert_eq!(filtered["content"][0]["id"], volume_ten.id);
+
+    let reader_page = get_page(
+        &app,
+        &format!("/api/v1/series/{}/books", series.id),
+        &basic("reader@example.org", "reader-password"),
+    )
+    .await;
+    assert!(reader_page["content"].as_array().unwrap().iter().all(|book| {
+        book["url"]
+            .as_str()
+            .is_some_and(|url| !url.contains('/') && !url.contains('\\'))
+    }));
+
+    for (path, authorization, status) in [
+        (
+            format!("/api/v1/series/{}/books", series.id),
+            basic("restricted@example.org", "reader-password"),
+            StatusCode::FORBIDDEN,
+        ),
+        (
+            "/api/v1/series/missing/books".into(),
+            admin.clone(),
+            StatusCode::NOT_FOUND,
+        ),
+        (
+            format!("/api/v1/series/{}/books?media_status=INVALID", series.id),
+            admin,
+            StatusCode::BAD_REQUEST,
+        ),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::get(path)
+                    .header(header::AUTHORIZATION, authorization)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), status);
+    }
+}
+
 async fn get_page(app: &axum::Router, path: &str, authorization: &str) -> serde_json::Value {
     get_json(app, path, authorization).await
 }

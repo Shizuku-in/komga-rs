@@ -223,3 +223,111 @@ async fn read_list_file_is_a_streamed_stored_zip64_archive() {
         0
     );
 }
+
+#[tokio::test]
+async fn series_file_is_a_streamed_deflate_zip64_archive() {
+    let storage = Storage::connect_memory().await.unwrap();
+    let tasks = TaskStorage::connect_memory().await.unwrap();
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path().join("library");
+    fs::create_dir_all(root.join("Series")).unwrap();
+    fs::write(root.join("Series/source.cbz"), vec![7_u8; 128 * 1024]).unwrap();
+    let library = Library::new("Library".into(), Url::from_directory_path(&root).unwrap());
+    storage.create_library(&library).await.unwrap();
+    storage
+        .apply_library_scan(&library.id, &scan_library_files(&library, || false).unwrap(), false)
+        .await
+        .unwrap();
+    let series = storage.list_series_by_library_id(&library.id).await.unwrap().remove(0);
+    let book = storage.list_books_by_series_id(&series.id).await.unwrap().remove(0);
+    let source_path = book.url.to_file_path().unwrap();
+    let source = fs::read(&source_path).unwrap();
+    let series_metadata = storage.find_series_metadata(&book.series_id).await.unwrap().unwrap();
+    let app = build_app(AppState::new(storage.clone(), tasks).await.unwrap());
+    assert_eq!(claim(&app).await.status(), StatusCode::OK);
+    let reader = User::new("reader@example.org".into(), bcrypt::hash("reader-password", 4).unwrap());
+    storage.create_user(&reader).await.unwrap();
+
+    let unauthorized = app
+        .clone()
+        .oneshot(
+            Request::get(format!("/api/v1/series/{}/file", book.series_id))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+    let forbidden = app
+        .clone()
+        .oneshot(
+            Request::get(format!("/api/v1/series/{}/file", book.series_id))
+                .header(header::AUTHORIZATION, basic("reader@example.org", "reader-password"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(forbidden.status(), StatusCode::FORBIDDEN);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::get(format!("/api/v1/series/{}/file", book.series_id))
+                .header(header::AUTHORIZATION, basic("admin@example.org", "password"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()[header::CONTENT_TYPE], "application/zip");
+    assert!(
+        response.headers()[header::CONTENT_DISPOSITION]
+            .to_str()
+            .unwrap()
+            .contains(&format!("{}.zip", series_metadata.title))
+    );
+    assert!(!response.headers().contains_key(header::CONTENT_LENGTH));
+    let bytes = body_bytes(response).await;
+    assert!(bytes.windows(4).any(|window| window == [0x50, 0x4b, 0x06, 0x06]));
+    assert!(bytes.windows(4).any(|window| window == [0x50, 0x4b, 0x06, 0x07]));
+    let mut archive = ZipArchive::new(Cursor::new(bytes)).unwrap();
+    assert_eq!(archive.len(), 1);
+    let mut entry = archive.by_index(0).unwrap();
+    assert_eq!(entry.name(), "source.cbz");
+    assert_eq!(entry.compression(), zip::CompressionMethod::Deflated);
+    let mut actual = Vec::new();
+    entry.read_to_end(&mut actual).unwrap();
+    assert_eq!(actual, source);
+    drop(entry);
+    drop(archive);
+
+    let missing = app
+        .clone()
+        .oneshot(
+            Request::get("/api/v1/series/missing/file")
+                .header(header::AUTHORIZATION, basic("admin@example.org", "password"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+
+    fs::remove_file(source_path).unwrap();
+    let response = app
+        .oneshot(
+            Request::get(format!("/api/v1/series/{}/file", book.series_id))
+                .header(header::AUTHORIZATION, basic("admin@example.org", "password"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        ZipArchive::new(Cursor::new(body_bytes(response).await)).unwrap().len(),
+        0
+    );
+}

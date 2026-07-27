@@ -16,7 +16,9 @@ use crate::{
         load_visible_book, load_visible_series, redact_book_source_for_user, redact_series_source_for_user,
     },
     error::ApiError,
-    legacy_content_query::{parse_duplicate_books_page, parse_legacy_book_query, parse_legacy_series_query},
+    legacy_content_query::{
+        parse_duplicate_books_page, parse_legacy_book_query, parse_legacy_series_books_query, parse_legacy_series_query,
+    },
     pagination::{ContentQueryParams, SpringPage, parse_content_query, parse_page_request},
     routes::{ApiJson, require_admin},
     search_query::{non_empty, search_hits},
@@ -284,6 +286,19 @@ pub(crate) async fn get_series(
     let mut series = load_visible_series(&state, &auth.user, &series_id).await?;
     redact_series_source_for_user(&mut series, &auth.user);
     Ok(Json(series))
+}
+
+pub(crate) async fn legacy_series_books(
+    State(state): State<AppState>,
+    Extension(auth): Extension<AuthContext>,
+    Path(series_id): Path<String>,
+    RawQuery(raw_query): RawQuery,
+) -> Result<Json<SpringPage<BookDto>>, ApiError> {
+    load_visible_series(&state, &auth.user, &series_id).await?;
+    let query = parse_legacy_series_books_query(raw_query.as_deref(), series_id)?;
+    Ok(Json(SpringPage::from_content(
+        execute_book_query(&state, &auth.user, &query.search, &query.page).await?,
+    )))
 }
 
 pub(crate) async fn list_books(

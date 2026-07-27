@@ -43,6 +43,7 @@ mod routes;
 mod runtime;
 mod search_query;
 mod search_sync;
+mod series_file_routes;
 mod settings_routes;
 mod source_file_routes;
 mod source_import_routes;
