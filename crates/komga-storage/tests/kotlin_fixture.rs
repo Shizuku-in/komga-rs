@@ -1,6 +1,9 @@
 use std::{fs, path::PathBuf};
 
-use komga_core::{BookSearch, PageRequest, ScanInterval, SeriesSearch, SeriesStatus, User, scan_library_files};
+use chrono::Utc;
+use komga_core::{
+    AuthenticationActivity, BookSearch, PageRequest, ScanInterval, SeriesSearch, SeriesStatus, User, scan_library_files,
+};
 use komga_storage::{DeleteLibraryResult, Storage, TaskStorage};
 use url::Url;
 
@@ -115,6 +118,29 @@ async fn opens_kotlin_flyway_databases_and_maps_current_rows() {
     );
     let user = User::new("fixture-reader@example.org".into(), "$2b$10$fixture".into());
     storage.create_user(&user).await.unwrap();
+    storage
+        .insert_authentication_activity(&AuthenticationActivity {
+            user_id: Some(user.id.clone()),
+            email: Some(user.email.clone()),
+            api_key_id: None,
+            api_key_comment: None,
+            ip: Some("192.0.2.1".into()),
+            user_agent: Some("fixture".into()),
+            success: true,
+            error: None,
+            date_time: Utc::now().naive_utc(),
+            source: Some("Password".into()),
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        storage
+            .list_authentication_activity(Some(&user), &PageRequest::default())
+            .await
+            .unwrap()
+            .total_elements,
+        1
+    );
     let series_page = storage
         .query_series(&SeriesSearch::default(), &PageRequest::default(), &user, None)
         .await

@@ -74,9 +74,12 @@ async fn main() -> anyhow::Result<()> {
     });
 
     tracing::info!(address = %effective_address, database = %database_file.display(), tasks_database = %tasks_database_file.display(), "Komga Rust backend listening");
-    let result = axum::serve(listener, build_app(state))
-        .with_graceful_shutdown(server_shutdown.cancelled_owned())
-        .await;
+    let result = axum::serve(
+        listener,
+        build_app(state).into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(server_shutdown.cancelled_owned())
+    .await;
     runtime.shutdown().await;
     result.context("HTTP server failed")
 }

@@ -6,6 +6,7 @@
 
 #![warn(missing_docs)]
 
+mod authentication;
 mod containers;
 mod content;
 mod content_query;
@@ -27,6 +28,7 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 use uuid::Uuid;
 
+pub use authentication::AuthenticationActivity;
 pub use containers::{
     CollectionCreation, CollectionDto, ReadListCreation, ReadListDto, ReadListMatchDto, ReadListProgressUpdate,
     ReadListReadProgressDto, ReadListRequest, ReadListRequestBook, ReadListRequestBookMatchBookDto,

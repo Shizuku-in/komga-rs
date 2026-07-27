@@ -18,11 +18,11 @@ use tower_http::{
 #[cfg(feature = "webui")]
 use crate::webui_routes;
 use crate::{
-    AppState, auth, book_file_routes, container_routes, content_routes, filesystem_routes, font_routes, history_routes,
-    info_routes, kobo, koreader_routes, library_routes, media_routes, metadata_routes, metrics_routes, opds_router,
-    operations_routes, page_hash_routes, read_list_file_routes, read_list_match_routes, read_progress_routes,
-    referential_routes, routes, settings_routes, source_file_routes, source_import_routes, sse_routes,
-    thumbnail_routes, transient_book_routes, webpub_routes,
+    AppState, auth, authentication_activity_routes, book_file_routes, container_routes, content_routes,
+    filesystem_routes, font_routes, history_routes, info_routes, kobo, koreader_routes, library_routes, media_routes,
+    metadata_routes, metrics_routes, opds_router, operations_routes, page_hash_routes, read_list_file_routes,
+    read_list_match_routes, read_progress_routes, referential_routes, routes, settings_routes, source_file_routes,
+    source_import_routes, sse_routes, thumbnail_routes, transient_book_routes, webpub_routes,
 };
 
 pub(crate) fn build(state: AppState) -> Router {
@@ -158,6 +158,18 @@ fn protected_api() -> Router<AppState> {
         .route("/api/v1/releases", get(operations_routes::releases))
         .route("/api/v1/fonts/families", get(font_routes::families))
         .route("/api/v2/users/me", get(routes::current_user))
+        .route(
+            "/api/v1/users/me/authentication-activity",
+            get(authentication_activity_routes::current_user_activity),
+        )
+        .route(
+            "/api/v1/users/authentication-activity",
+            get(authentication_activity_routes::all_activity),
+        )
+        .route(
+            "/api/v1/users/{user_id}/authentication-activity/latest",
+            get(authentication_activity_routes::latest_user_activity),
+        )
         .route("/api/v2/users/me/password", patch(routes::update_my_password))
         .route(
             "/api/v2/users/me/api-keys",

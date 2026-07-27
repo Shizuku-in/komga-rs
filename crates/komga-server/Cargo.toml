@@ -62,4 +62,5 @@ zip.workspace = true
 http-body-util.workspace = true
 pdf-writer.workspace = true
 roxmltree.workspace = true
+sqlx.workspace = true
 tower.workspace = true

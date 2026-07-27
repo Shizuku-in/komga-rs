@@ -116,6 +116,7 @@ impl AppState {
         let handles = vec![
             tokio::spawn(worker_supervisor(self.clone(), self.task_pool_size.subscribe())),
             tokio::spawn(scheduler_loop(self.clone())),
+            tokio::spawn(authentication_activity_cleanup_loop(self.clone())),
         ];
         self.task_notify.notify_waiters();
         Ok(AppRuntime {
@@ -126,6 +127,23 @@ impl AppState {
             schedule_notify: self.schedule_notify.clone(),
             handles,
         })
+    }
+}
+
+async fn authentication_activity_cleanup_loop(state: AppState) {
+    loop {
+        let cutoff = chrono::Utc::now()
+            .naive_utc()
+            .checked_sub_months(chrono::Months::new(1))
+            .expect("subtracting one month from the current date is valid");
+        match state.storage.delete_authentication_activity_older_than(cutoff).await {
+            Ok(deleted) => tracing::debug!(deleted, %cutoff, "authentication activity cleanup completed"),
+            Err(error) => tracing::error!(%error, %cutoff, "authentication activity cleanup failed"),
+        }
+        tokio::select! {
+            () = state.shutdown.cancelled() => break,
+            () = tokio::time::sleep(Duration::from_secs(24 * 60 * 60)) => {}
+        }
     }
 }
 

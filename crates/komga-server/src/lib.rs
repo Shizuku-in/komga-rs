@@ -8,6 +8,7 @@
 
 mod app_router;
 mod auth;
+mod authentication_activity_routes;
 mod book_file_routes;
 /// Command-line and environment configuration.
 pub mod config;

@@ -8,6 +8,7 @@
 #![warn(missing_docs)]
 
 mod auth;
+mod authentication_activity;
 mod containers;
 mod content;
 mod content_queries;

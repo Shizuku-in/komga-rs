@@ -8,6 +8,7 @@
 //! `KOMGA-SESSION`.
 
 use std::{
+    net::{IpAddr, SocketAddr},
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
@@ -16,14 +17,14 @@ use std::{
 };
 
 use axum::{
-    extract::{Request, State},
+    extract::{ConnectInfo, Request, State},
     http::{HeaderMap, HeaderValue, header},
     middleware::Next,
     response::{IntoResponse, Response},
 };
 use base64::{Engine, engine::general_purpose::STANDARD};
 use dashmap::DashMap;
-use komga_core::{User, UserRole};
+use komga_core::{ApiKey, AuthenticationActivity, User, UserRole};
 use rand::RngCore;
 use sha2::{Digest, Sha512};
 
@@ -128,9 +129,16 @@ fn duration_seconds(days: u64) -> u64 {
 }
 
 enum AuthSource {
-    ApiKey,
+    ApiKey(ApiKey),
     Session(String),
+    RememberMe(String),
     Basic { remember_me: bool },
+}
+
+#[derive(Debug, Clone)]
+struct AuthenticationRequestMetadata {
+    ip: Option<String>,
+    user_agent: Option<String>,
 }
 
 /// Authenticates protected requests and attaches [`AuthContext`] for handlers.
@@ -138,11 +146,14 @@ pub(crate) async fn require_auth(State(state): State<AppState>, mut request: Req
     let opds_v2 = request.uri().path().starts_with("/opds/v2/");
     let request_headers = request.headers().clone();
     let request_uri = request.uri().clone();
+    let request_metadata = authentication_request_metadata(&request);
     match authenticate(&state, request.headers(), request.uri().query()).await {
         Ok((user, source)) => {
+            record_authentication_success(&state, &request_metadata, &user, &source).await;
             let (session_id, issue_session, remember_me) = match source {
-                AuthSource::ApiKey => (None, false, false),
+                AuthSource::ApiKey(_) => (None, false, false),
                 AuthSource::Session(id) => (Some(id), false, false),
+                AuthSource::RememberMe(id) => (Some(id), false, true),
                 AuthSource::Basic { remember_me } => {
                     (Some(state.sessions.create(&user.id, remember_me)), true, remember_me)
                 }
@@ -171,6 +182,7 @@ pub(crate) async fn require_auth(State(state): State<AppState>, mut request: Req
             response
         }
         Err(error) => {
+            record_authentication_failure(&state, &request_headers, &request_metadata).await;
             if opds_v2 {
                 crate::opds_v2::unauthorized(&request_headers, &request_uri)
             } else {
@@ -209,16 +221,21 @@ async fn authenticate(
     if let Some(key) = headers.get("X-API-Key") {
         let key = key.to_str().map_err(|_| ApiError::unauthorized())?;
         let digest = hex::encode(Sha512::digest(key.as_bytes()));
-        return state
+        let api_key = state
             .storage
-            .find_user_by_api_key_hash(&digest)
+            .find_api_key_by_hash(&digest)
             .await?
-            .map(|user| (user, AuthSource::ApiKey))
-            .ok_or_else(ApiError::unauthorized);
+            .ok_or_else(ApiError::unauthorized)?;
+        let user = state
+            .storage
+            .find_user_by_id(&api_key.user_id)
+            .await?
+            .ok_or_else(ApiError::unauthorized)?;
+        return Ok((user, AuthSource::ApiKey(api_key)));
     }
 
     let header_session = headers.get(SESSION_HEADER).and_then(|value| value.to_str().ok());
-    let cookie_session = cookie_value(headers, SESSION_COOKIE).or_else(|| cookie_value(headers, REMEMBER_ME_COOKIE));
+    let cookie_session = cookie_value(headers, SESSION_COOKIE);
     if let Some(session_id) = header_session
         .filter(|value| !value.is_empty())
         .or(cookie_session.as_deref())
@@ -226,6 +243,12 @@ async fn authenticate(
         && let Some(user) = state.storage.find_user_by_id(&user_id).await?
     {
         return Ok((user, AuthSource::Session(session_id.to_owned())));
+    }
+    if let Some(session_id) = cookie_value(headers, REMEMBER_ME_COOKIE)
+        && let Some(user_id) = state.sessions.user_id(&session_id)
+        && let Some(user) = state.storage.find_user_by_id(&user_id).await?
+    {
+        return Ok((user, AuthSource::RememberMe(session_id)));
     }
 
     let Some((email, password)) = basic_credentials(headers) else {
@@ -252,6 +275,166 @@ async fn authenticate(
             remember_me: query_has_true(query, "remember-me"),
         },
     ))
+}
+
+async fn record_authentication_success(
+    state: &AppState,
+    metadata: &AuthenticationRequestMetadata,
+    user: &User,
+    source: &AuthSource,
+) {
+    let (source, api_key_id, api_key_comment) = match source {
+        AuthSource::ApiKey(key) => (
+            Some("ApiKey".to_owned()),
+            Some(key.id.clone()),
+            Some(key.comment.clone()),
+        ),
+        AuthSource::RememberMe(_) => (Some("RememberMe".to_owned()), None, None),
+        AuthSource::Basic { .. } => (Some("Password".to_owned()), None, None),
+        AuthSource::Session(_) => return,
+    };
+    record_authentication_activity(
+        state,
+        AuthenticationActivity {
+            user_id: Some(user.id.clone()),
+            email: Some(user.email.clone()),
+            api_key_id,
+            api_key_comment,
+            ip: metadata.ip.clone(),
+            user_agent: metadata.user_agent.clone(),
+            success: true,
+            error: None,
+            date_time: chrono::Utc::now().naive_utc(),
+            source,
+        },
+    )
+    .await;
+}
+
+async fn record_authentication_failure(
+    state: &AppState,
+    headers: &HeaderMap,
+    metadata: &AuthenticationRequestMetadata,
+) {
+    let (source, email) = if headers.contains_key("X-API-Key") {
+        ("ApiKey", None)
+    } else if has_basic_authorization(headers) {
+        ("Password", basic_credentials(headers).map(|(email, _)| email))
+    } else if cookie_value(headers, REMEMBER_ME_COOKIE).is_some() {
+        ("RememberMe", None)
+    } else {
+        return;
+    };
+    let user_id = if let Some(email) = email.as_deref() {
+        match state.storage.find_user_by_email(email).await {
+            Ok(user) => user.map(|user| user.id),
+            Err(error) => {
+                tracing::error!(%error, "failed to resolve authentication activity principal");
+                None
+            }
+        }
+    } else {
+        None
+    };
+    record_authentication_activity(
+        state,
+        AuthenticationActivity {
+            user_id,
+            email,
+            api_key_id: None,
+            api_key_comment: None,
+            ip: metadata.ip.clone(),
+            user_agent: metadata.user_agent.clone(),
+            success: false,
+            error: Some(truncate("Authentication failed", 512)),
+            date_time: chrono::Utc::now().naive_utc(),
+            source: Some(source.to_owned()),
+        },
+    )
+    .await;
+}
+
+async fn record_authentication_activity(state: &AppState, activity: AuthenticationActivity) {
+    if let Err(error) = state.storage.insert_authentication_activity(&activity).await {
+        tracing::error!(%error, source = activity.source.as_deref(), success = activity.success, "failed to persist authentication activity");
+    }
+}
+
+fn has_basic_authorization(headers: &HeaderMap) -> bool {
+    headers
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| {
+            value
+                .get(..6)
+                .is_some_and(|prefix| prefix.eq_ignore_ascii_case("Basic "))
+        })
+}
+
+fn user_agent(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get(header::USER_AGENT)
+        .and_then(|value| value.to_str().ok())
+        .map(|value| truncate(value, 512))
+}
+
+fn authentication_request_metadata(request: &Request) -> AuthenticationRequestMetadata {
+    AuthenticationRequestMetadata {
+        ip: forwarded_ip(request.headers())
+            .or_else(|| x_forwarded_for(request.headers()))
+            .or_else(|| {
+                request
+                    .extensions()
+                    .get::<ConnectInfo<SocketAddr>>()
+                    .map(|connect| connect.0.ip().to_string())
+            }),
+        user_agent: user_agent(request.headers()),
+    }
+}
+
+fn forwarded_ip(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get_all("forwarded")
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(','))
+        .flat_map(|element| element.split(';'))
+        .find_map(|parameter| {
+            let (name, value) = parameter.trim().split_once('=')?;
+            name.eq_ignore_ascii_case("for")
+                .then(|| normalize_forwarded_address(value.trim().trim_matches('"')))
+                .flatten()
+        })
+}
+
+fn x_forwarded_for(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get_all("x-forwarded-for")
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(','))
+        .find_map(|value| normalize_forwarded_address(value.trim()))
+}
+
+fn normalize_forwarded_address(value: &str) -> Option<String> {
+    if value.is_empty() || value.eq_ignore_ascii_case("unknown") || value.starts_with('_') {
+        return None;
+    }
+    if let Ok(ip) = value.parse::<IpAddr>() {
+        return Some(ip.to_string());
+    }
+    if let Ok(address) = value.parse::<SocketAddr>() {
+        return Some(address.ip().to_string());
+    }
+    value
+        .strip_prefix('[')
+        .and_then(|value| value.split_once(']'))
+        .and_then(|(ip, _)| ip.parse::<IpAddr>().ok())
+        .map(|ip| ip.to_string())
+}
+
+fn truncate(value: &str, max_chars: usize) -> String {
+    value.chars().take(max_chars).collect()
 }
 
 pub(crate) async fn optional_user(state: &AppState, headers: &HeaderMap) -> Result<Option<User>, ApiError> {

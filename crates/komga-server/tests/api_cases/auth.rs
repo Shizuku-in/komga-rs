@@ -268,3 +268,210 @@ async fn basic_auth_accepts_spring_bcrypt_2a_hashes() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
 }
+
+#[tokio::test]
+async fn authentication_activity_records_attempts_without_recounting_ordinary_sessions() {
+    let storage = Storage::connect_memory().await.unwrap();
+    let app = app_with_storage(storage.clone()).await;
+    let admin_id = body_json(claim(&app).await).await["id"].as_str().unwrap().to_owned();
+
+    let missing = app
+        .clone()
+        .oneshot(Request::get("/api/v2/users/me").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(missing.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        storage
+            .list_authentication_activity(None, &komga_core::PageRequest::default())
+            .await
+            .unwrap()
+            .total_elements,
+        0
+    );
+
+    let failed = app
+        .clone()
+        .oneshot(
+            Request::get("/api/v2/users/me")
+                .header(header::AUTHORIZATION, basic("ADMIN@example.org", "wrong-secret"))
+                .header("forwarded", "for=198.51.100.7;proto=https")
+                .header(header::USER_AGENT, "activity-test")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(failed.status(), StatusCode::UNAUTHORIZED);
+    let failed_activity = storage
+        .list_authentication_activity(None, &komga_core::PageRequest::default())
+        .await
+        .unwrap();
+    assert_eq!(failed_activity.total_elements, 1);
+    assert_eq!(failed_activity.content[0].user_id.as_deref(), Some(admin_id.as_str()));
+    assert_eq!(failed_activity.content[0].ip.as_deref(), Some("198.51.100.7"));
+    assert_eq!(failed_activity.content[0].source.as_deref(), Some("Password"));
+    assert!(!failed_activity.content[0].success);
+    assert!(!format!("{:?}", failed_activity.content[0]).contains("wrong-secret"));
+
+    let login = app
+        .clone()
+        .oneshot(
+            Request::get("/api/v2/users/me?remember-me=true")
+                .header(header::AUTHORIZATION, basic("admin@example.org", "password"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(login.status(), StatusCode::OK);
+    let ordinary_cookie = session_cookie(&login);
+    let remember_cookie = login
+        .headers()
+        .get_all(header::SET_COOKIE)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .find(|value| value.starts_with(REMEMBER_ME_COOKIE))
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_owned();
+
+    let ordinary = app
+        .clone()
+        .oneshot(
+            Request::get("/api/v2/users/me")
+                .header(header::COOKIE, &ordinary_cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(ordinary.status(), StatusCode::OK);
+    assert_eq!(
+        storage
+            .list_authentication_activity(None, &komga_core::PageRequest::default())
+            .await
+            .unwrap()
+            .total_elements,
+        2
+    );
+
+    let remembered = app
+        .clone()
+        .oneshot(
+            Request::get("/api/v2/users/me")
+                .header(header::COOKIE, remember_cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(remembered.status(), StatusCode::OK);
+    assert_eq!(
+        storage
+            .list_authentication_activity(None, &komga_core::PageRequest::default())
+            .await
+            .unwrap()
+            .content[0]
+            .source
+            .as_deref(),
+        Some("RememberMe")
+    );
+
+    let plain_key = "activity-api-key";
+    let key_id = komga_core::new_id();
+    storage
+        .create_api_key(
+            &key_id,
+            &admin_id,
+            &komga_server_test_sha512(plain_key),
+            "activity client",
+        )
+        .await
+        .unwrap();
+    let api_key_response = app
+        .clone()
+        .oneshot(
+            Request::get("/api/v2/users/me")
+                .header("X-API-Key", plain_key)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(api_key_response.status(), StatusCode::OK);
+    let latest_key = storage
+        .latest_authentication_activity(
+            &storage.find_user_by_id(&admin_id).await.unwrap().unwrap(),
+            Some(&key_id),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(latest_key.api_key_comment.as_deref(), Some("activity client"));
+    assert!(!format!("{latest_key:?}").contains(plain_key));
+
+    let own_page = app
+        .clone()
+        .oneshot(
+            Request::get("/api/v1/users/me/authentication-activity?size=2&sort=dateTime,desc")
+                .header(header::COOKIE, &ordinary_cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(own_page.status(), StatusCode::OK);
+    let own_page = body_json(own_page).await;
+    assert_eq!(own_page["size"], 2);
+    assert_eq!(own_page["totalElements"], 4);
+    assert!(own_page["content"][0]["dateTime"].as_str().unwrap().ends_with('Z'));
+
+    let latest_endpoint = app
+        .oneshot(
+            Request::get(format!(
+                "/api/v1/users/{admin_id}/authentication-activity/latest?apikey_id={key_id}"
+            ))
+            .header(header::COOKIE, ordinary_cookie)
+            .body(Body::empty())
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(latest_endpoint.status(), StatusCode::OK);
+    assert_eq!(body_json(latest_endpoint).await["apiKeyId"], key_id);
+}
+
+#[tokio::test]
+async fn authentication_audit_failure_does_not_block_a_valid_login() {
+    let temporary = tempfile::tempdir().unwrap();
+    let database = temporary.path().join("database.sqlite");
+    let storage = Storage::connect_path(&database).await.unwrap();
+    let app = app_with_storage(storage).await;
+    claim(&app).await;
+    let pool = sqlx::SqlitePool::connect(&format!("sqlite://{}", database.display()))
+        .await
+        .unwrap();
+    sqlx::query("DROP TABLE AUTHENTICATION_ACTIVITY")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let response = app
+        .oneshot(
+            Request::get("/api/v2/users/me")
+                .header(header::AUTHORIZATION, basic("admin@example.org", "password"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(response.headers().contains_key(header::SET_COOKIE));
+}
+
+fn komga_server_test_sha512(value: &str) -> String {
+    hex::encode(Sha512::digest(value.as_bytes()))
+}

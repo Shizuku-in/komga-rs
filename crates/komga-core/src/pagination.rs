@@ -56,3 +56,16 @@ pub struct ContentPage<T> {
     /// Sort fields applied to the query.
     pub sort: Vec<SortOrder>,
 }
+
+impl<T> ContentPage<T> {
+    /// Maps page content while preserving pagination and sort metadata.
+    pub fn map<U>(self, map: impl FnMut(T) -> U) -> ContentPage<U> {
+        ContentPage {
+            content: self.content.into_iter().map(map).collect(),
+            total_elements: self.total_elements,
+            page: self.page,
+            size: self.size,
+            sort: self.sort,
+        }
+    }
+}
