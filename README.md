@@ -94,100 +94,12 @@ in-process converter remains the primary implementation when either setting is p
 Do not run the Kotlin and Rust servers against the same SQLite file at the same time. Back up an existing database before the first Rust start. Historical Kotlin database migration is outside the compatibility target; only explicitly documented and tested schemas are supported.
 Migration `0011_page_hashing` deliberately clears existing `PAGE_HASH` rules and thumbnails and resets JPEG page hashes because Rust uses a versioned RGB24 pixel hash instead of Java ImageIO's encoder-dependent bytes.
 
-## Implemented API
+## API compatibility
 
-- `GET /actuator/health`
-- `GET /actuator/metrics`
-- `GET /actuator/metrics/{metric}`
-- `GET|POST /api/v1/claim`
-- `GET /api/v2/users/me`
-- `PATCH /api/v2/users/me/password`
-- `GET|POST /api/v2/users`
-- `PATCH|DELETE /api/v2/users/{id}`
-- `PATCH /api/v2/users/{id}/password`
-- `GET|POST /api/v2/users/me/api-keys`
-- `DELETE /api/v2/users/me/api-keys/{id}`
-- `DELETE /api/v1/syncpoints/me`
-- `GET /api/v1|v2/users/me/authentication-activity`
-- `GET /api/v1|v2/users/authentication-activity`
-- `GET /api/v1|v2/users/{id}/authentication-activity/latest`
-- `GET /api/v1/login/set-cookie`
-- `GET|POST /api/logout`
-- `GET|POST /api/v1/libraries`
-- `GET|PUT|PATCH|DELETE /api/v1/libraries/{id}`
-- `POST /api/v1/libraries/{id}/scan`
-- `POST /api/v1/libraries/{id}/empty-trash`
-- `POST /api/v1/series/list`
-- `POST /api/v1/series/list/alphabetical-groups`
-- `GET /api/v1/series` and `GET /api/v1/series/alphabetical-groups`
-- `GET /api/v1/series/{latest|new|updated}`
-- `GET /api/v1/series/{id}`
-- `DELETE /api/v1/series/{id}/file`
-- `POST /api/v1/books/list`
-- `POST /api/v1/books/import`
-- `GET /api/v1/books`
-- `GET /api/v1/books/{latest|ondeck}`
-- `GET /api/v1/books/{id}`
-- `GET|DELETE /api/v1/books/{id}/file`
-- `GET /api/v1/books/{id}/previous`
-- `GET /api/v1/books/{id}/next`
-- `POST /api/v1/books/{id}/analyze`
-- `GET /api/v1/books/{id}/pages`
-- `GET /api/v1/books/{id}/pages/{number}`
-- `GET /api/v1/books/{id}/pages/{number}/raw`
-- `GET /api/v1/books/{id}/pages/{number}/thumbnail`
-- `GET /api/v1/books/{id}/thumbnail`
-- `GET /api/v1/books/{id}/positions`
-- `GET /api/v1/books/{id}/resource/{resource}`
-- `GET /api/v1/books/{id}/manifest`
-- `GET /api/v1/books/{id}/manifest/{divina|pdf|epub}`
-- `GET|PUT /api/v1/page-hashes`
-- `GET /api/v1/page-hashes/unknown`
-- `GET /api/v1/page-hashes/{hash}`
-- `GET /api/v1/page-hashes/{hash}/thumbnail`
-- `GET /api/v1/page-hashes/unknown/{hash}/thumbnail`
-- `POST /api/v1/page-hashes/{hash}/{delete-all|delete-match}`
-- `GET /api/v1/history`
-- `POST /koreader/users/create`
-- `GET /koreader/users/auth`
-- `GET /koreader/syncs/progress/{bookHash}`
-- `PUT /koreader/syncs/progress`
-- `GET /kobo/{apiKey}/ping`
-- `GET /kobo/{apiKey}/v1/initialization`
-- `POST /kobo/{apiKey}/v1/auth/device`
-- `GET /kobo/{apiKey}/v1/library/sync`
-- `GET /kobo/{apiKey}/v1/library/{bookId}/metadata`
-- `GET|PUT /kobo/{apiKey}/v1/library/{bookId}/state`
-- `GET /kobo/{apiKey}/v1/books/{bookId}/file/epub`
-- `GET /kobo/{apiKey}/v1/books/{thumbnailId}/thumbnail/.../image.jpg`
-- `GET|PUT|POST|DELETE|PATCH /kobo/{apiKey}/{*path}` when Store proxying is enabled
-- `POST /api/v1/readlists/match/comicrack`
-- `GET /api/v1/readlists/{id}/file`
-- `POST /api/v1/filesystem`
-- `GET /api/v1/client-settings/global/list`
-- `PATCH|DELETE /api/v1/client-settings/global`
-- `GET /api/v1/client-settings/user/list`
-- `PATCH|DELETE /api/v1/client-settings/user`
-- `GET /api/v1/oauth2/providers`
-- `GET /oauth2/authorization/{registrationId}`
-- `GET /login/oauth2/code/{registrationId}`
-- `GET|PUT /api/v1/announcements`
-- `GET /api/v1/releases`
-- `GET /api/v1/fonts/families`
-- `GET /api/v1/fonts/resource/{family}/css`
-- `GET /api/v1/fonts/resource/{family}/{file}`
-- `GET /opds/v1.2/{catalog|search|ondeck|keep-reading|series|books/latest|libraries|collections|readlists|publishers}` and their detail/resource routes
-- `GET /opds/v2/auth`
-- `GET /opds/v2/{catalog|libraries|search|collections/{id}|readlists/{id}|series/{id}}`
-- `GET /opds/v2/libraries[/{id}]/{keep-reading|on-deck|books/latest|series/latest|browse|collections|readlists}`
-- `GET /opds/v2/books/{id}/{manifest|manifest/{divina|pdf|epub}|thumbnail|pages/{number}|pages/{number}/raw|file|resource/{resource}|progression}`
-- `PUT /opds/v2/books/{id}/progression`
-- `GET /api/v1|v2/authors` and `GET /api/v1/authors/{names|roles}`
-- `GET /api/v1/{genres|sharing-labels|languages|publishers|age-ratings}`
-- `GET /api/v1/tags`, `/api/v1/tags/{book|series}`, and `/api/v1/series/release-dates`
-- `DELETE /api/v1/tasks`
-- `GET|PATCH /api/v1/settings`
-- `GET /sse/v1/events`
+The core API inventory contains 203 route templates across REST, OAuth, SSE, OPDS, KOReader,
+Kobo, and the supported management endpoints. [`docs/API_PARITY.md`](docs/API_PARITY.md) describes
+the compatibility boundary, and [`docs/api-parity.json`](docs/api-parity.json) is the canonical
+path-and-method manifest enforced by the server integration tests.
 
 Authentication is compatible with the current Komga contract: HTTP Basic, `KOMGA-SESSION`, `X-Auth-Token`, SHA-512-backed `X-API-Key`, OAuth2, and OpenID Connect. Existing Spring BCrypt `$2a$` password hashes are accepted. Password, remember-me, API-key, and OAuth attempts are recorded in Kotlin-compatible authentication activity; ordinary session reuse is not recorded, and entries older than one month are removed daily. KOReader routes exclusively accept a plaintext API key in `X-Auth-User` and require the `KOREADER_SYNC` role. Kobo routes exclusively accept a plaintext API key in the `/kobo/{apiKey}` path and require `KOBO_SYNC`; original-file delivery also requires `FILE_DOWNLOAD`. Kobo keys and OAuth callback parameters are redacted from request tracing. OPDS 2 also exposes the public authentication document and returns its media type, Basic challenge, and discovery link on authentication failures.
 

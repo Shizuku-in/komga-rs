@@ -1,0 +1,1586 @@
+{
+  "baseline": "4ef86df",
+  "scope": "Core Komga HTTP protocols supported by komga-rs",
+  "methodProbe": "TRACE requests must expose the declared methods through the Allow header; Kobo routes use functional tests because their ANY fallback consumes unmatched methods.",
+  "mediaTypes": {
+    "rest": [
+      "application/json",
+      "multipart/form-data",
+      "application/octet-stream",
+      "image/jpeg",
+      "text/css",
+      "font/*",
+      "EPUB resource media types"
+    ],
+    "oauth": [
+      "application/json",
+      "text/html redirects"
+    ],
+    "sse": [
+      "text/event-stream"
+    ],
+    "opds-v1": [
+      "application/atom+xml",
+      "application/xml",
+      "text/xml",
+      "publication resource media types"
+    ],
+    "opds-v2": [
+      "application/opds+json",
+      "application/opds-authentication+json",
+      "application/webpub+json",
+      "publication resource media types"
+    ],
+    "koreader": [
+      "application/json",
+      "application/vnd.koreader.v1+json"
+    ],
+    "kobo": [
+      "application/json; charset=utf-8",
+      "application/epub+zip",
+      "image/jpeg"
+    ]
+  },
+  "exclusions": [
+    {
+      "paths": [
+        "/actuator/*"
+      ],
+      "except": [
+        "/actuator/health",
+        "/actuator/info",
+        "/actuator/metrics",
+        "/actuator/metrics/{metric}"
+      ],
+      "reason": "JVM and Spring management endpoints are outside the compatibility target."
+    },
+    {
+      "paths": [
+        "/v3/api-docs",
+        "/swagger-ui",
+        "/swagger-ui/*"
+      ],
+      "reason": "Springdoc and Swagger UI are outside the compatibility target."
+    },
+    {
+      "paths": [
+        "/",
+        "/index.html",
+        "WebUI assets and SPA history fallback"
+      ],
+      "reason": "The WebUI is tested separately and is not part of the API manifest."
+    }
+  ],
+  "groups": [
+    {
+      "area": "management",
+      "kotlinSource": "Spring Boot Actuator",
+      "access": "public",
+      "behavior": "implemented",
+      "routes": [
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/actuator/health"
+        }
+      ]
+    },
+    {
+      "area": "management",
+      "kotlinSource": "Spring Boot Actuator",
+      "access": "protected",
+      "behavior": "implemented",
+      "routes": [
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/actuator/info"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/actuator/metrics"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/actuator/metrics/{metric}"
+        }
+      ]
+    },
+    {
+      "area": "login",
+      "kotlinSource": "LoginController",
+      "access": "protected",
+      "behavior": "implemented",
+      "routes": [
+        {
+          "methods": [
+            "GET",
+            "POST"
+          ],
+          "path": "/api/logout"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/api/v1/login/set-cookie"
+        }
+      ]
+    },
+    {
+      "area": "referential",
+      "kotlinSource": "ReferentialController",
+      "access": "protected",
+      "behavior": "implemented",
+      "routes": [
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/api/v1/age-ratings"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/api/v1/authors"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/api/v1/authors/names"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/api/v1/authors/roles"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/api/v1/genres"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/api/v1/languages"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/api/v1/publishers"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/api/v1/sharing-labels"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/api/v1/tags"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/api/v1/tags/book"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/api/v1/tags/series"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/api/v2/authors"
+        }
+      ]
+    },
+    {
+      "area": "announcements",
+      "kotlinSource": "AnnouncementController",
+      "access": "protected",
+      "behavior": "implemented",
+      "routes": [
+        {
+          "methods": [
+            "GET",
+            "PUT"
+          ],
+          "path": "/api/v1/announcements"
+        }
+      ]
+    },
+    {
+      "area": "books",
+      "kotlinSource": "BookController / CommonBookController",
+      "access": "protected",
+      "behavior": "partial",
+      "routes": [
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/api/v1/books"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/api/v1/books/duplicates"
+        },
+        {
+          "methods": [
+            "POST"
+          ],
+          "path": "/api/v1/books/import"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/api/v1/books/latest"
+        },
+        {
+          "methods": [
+            "POST"
+          ],
+          "path": "/api/v1/books/list"
+        },
+        {
+          "methods": [
+            "PATCH"
+          ],
+          "path": "/api/v1/books/metadata"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/api/v1/books/ondeck"
+        },
+        {
+          "methods": [
+            "PUT"
+          ],
+          "path": "/api/v1/books/thumbnails"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/api/v1/books/{book_id}"
+        },
+        {
+          "methods": [
+            "POST"
+          ],
+          "path": "/api/v1/books/{book_id}/analyze"
+        },
+        {
+          "methods": [
+            "DELETE",
+            "GET"
+          ],
+          "path": "/api/v1/books/{book_id}/file"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/api/v1/books/{book_id}/file/{*file_name}"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/api/v1/books/{book_id}/manifest"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/api/v1/books/{book_id}/manifest/divina"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/api/v1/books/{book_id}/manifest/epub"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/api/v1/books/{book_id}/manifest/pdf"
+        },
+        {
+          "methods": [
+            "PATCH"
+          ],
+          "path": "/api/v1/books/{book_id}/metadata"
+        },
+        {
+          "methods": [
+            "POST"
+          ],
+          "path": "/api/v1/books/{book_id}/metadata/refresh"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/api/v1/books/{book_id}/next"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/api/v1/books/{book_id}/pages"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/api/v1/books/{book_id}/pages/{page_number}"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/api/v1/books/{book_id}/pages/{page_number}/raw"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/api/v1/books/{book_id}/pages/{page_number}/thumbnail"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/api/v1/books/{book_id}/positions"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/api/v1/books/{book_id}/previous"
+        },
+        {
+          "methods": [
+            "GET",
+            "PUT"
+          ],
+          "path": "/api/v1/books/{book_id}/progression"
+        },
+        {
+          "methods": [
+            "DELETE",
+            "PATCH"
+          ],
+          "path": "/api/v1/books/{book_id}/read-progress"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/api/v1/books/{book_id}/readlists"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/api/v1/books/{book_id}/thumbnail"
+        },
+        {
+          "methods": [
+            "GET",
+            "POST"
+          ],
+          "path": "/api/v1/books/{book_id}/thumbnails"
+        },
+        {
+          "methods": [
+            "DELETE",
+            "GET"
+          ],
+          "path": "/api/v1/books/{book_id}/thumbnails/{thumbnail_id}"
+        },
+        {
+          "methods": [
+            "PUT"
+          ],
+          "path": "/api/v1/books/{book_id}/thumbnails/{thumbnail_id}/selected"
+        }
+      ]
+    },
+    {
+      "area": "books",
+      "kotlinSource": "BookController / CommonBookController",
+      "access": "public",
+      "behavior": "partial",
+      "routes": [
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/api/v1/books/{book_id}/resource/{*resource}"
+        }
+      ]
+    },
+    {
+      "area": "claim",
+      "kotlinSource": "ClaimController",
+      "access": "public",
+      "behavior": "implemented",
+      "routes": [
+        {
+          "methods": [
+            "GET",
+            "POST"
+          ],
+          "path": "/api/v1/claim"
+        }
+      ]
+    },
+    {
+      "area": "client-settings",
+      "kotlinSource": "ClientSettingsController",
+      "access": "protected",
+      "behavior": "implemented",
+      "routes": [
+        {
+          "methods": [
+            "DELETE",
+            "PATCH"
+          ],
+          "path": "/api/v1/client-settings/global"
+        },
+        {
+          "methods": [
+            "DELETE",
+            "PATCH"
+          ],
+          "path": "/api/v1/client-settings/user"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/api/v1/client-settings/user/list"
+        }
+      ]
+    },
+    {
+      "area": "client-settings",
+      "kotlinSource": "ClientSettingsController",
+      "access": "public",
+      "behavior": "implemented",
+      "routes": [
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/api/v1/client-settings/global/list"
+        }
+      ]
+    },
+    {
+      "area": "collections",
+      "kotlinSource": "SeriesCollectionController",
+      "access": "protected",
+      "behavior": "implemented",
+      "routes": [
+        {
+          "methods": [
+            "GET",
+            "POST"
+          ],
+          "path": "/api/v1/collections"
+        },
+        {
+          "methods": [
+            "DELETE",
+            "GET",
+            "PATCH"
+          ],
+          "path": "/api/v1/collections/{id}"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/api/v1/collections/{id}/series"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/api/v1/collections/{id}/thumbnail"
+        },
+        {
+          "methods": [
+            "GET",
+            "POST"
+          ],
+          "path": "/api/v1/collections/{id}/thumbnails"
+        },
+        {
+          "methods": [
+            "DELETE",
+            "GET"
+          ],
+          "path": "/api/v1/collections/{id}/thumbnails/{thumbnail_id}"
+        },
+        {
+          "methods": [
+            "PUT"
+          ],
+          "path": "/api/v1/collections/{id}/thumbnails/{thumbnail_id}/selected"
+        }
+      ]
+    },
+    {
+      "area": "filesystem",
+      "kotlinSource": "FileSystemController",
+      "access": "protected",
+      "behavior": "implemented",
+      "routes": [
+        {
+          "methods": [
+            "POST"
+          ],
+          "path": "/api/v1/filesystem"
+        }
+      ]
+    },
+    {
+      "area": "fonts",
+      "kotlinSource": "FontsController",
+      "access": "protected",
+      "behavior": "implemented",
+      "routes": [
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/api/v1/fonts/families"
+        }
+      ]
+    },
+    {
+      "area": "fonts",
+      "kotlinSource": "FontsController",
+      "access": "public",
+      "behavior": "implemented",
+      "routes": [
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/api/v1/fonts/resource/{family}/css"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/api/v1/fonts/resource/{family}/{file}"
+        }
+      ]
+    },
+    {
+      "area": "history",
+      "kotlinSource": "HistoricalEventController",
+      "access": "protected",
+      "behavior": "implemented",
+      "routes": [
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/api/v1/history"
+        }
+      ]
+    },
+    {
+      "area": "libraries",
+      "kotlinSource": "LibraryController",
+      "access": "protected",
+      "behavior": "partial",
+      "routes": [
+        {
+          "methods": [
+            "GET",
+            "POST"
+          ],
+          "path": "/api/v1/libraries"
+        },
+        {
+          "methods": [
+            "DELETE",
+            "GET",
+            "PATCH",
+            "PUT"
+          ],
+          "path": "/api/v1/libraries/{library_id}"
+        },
+        {
+          "methods": [
+            "POST"
+          ],
+          "path": "/api/v1/libraries/{library_id}/analyze"
+        },
+        {
+          "methods": [
+            "POST"
+          ],
+          "path": "/api/v1/libraries/{library_id}/empty-trash"
+        },
+        {
+          "methods": [
+            "POST"
+          ],
+          "path": "/api/v1/libraries/{library_id}/metadata/refresh"
+        },
+        {
+          "methods": [
+            "POST"
+          ],
+          "path": "/api/v1/libraries/{library_id}/scan"
+        }
+      ]
+    },
+    {
+      "area": "oauth",
+      "kotlinSource": "OAuth2Controller / OAuth callback",
+      "access": "public",
+      "behavior": "implemented",
+      "routes": [
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/api/v1/oauth2/providers"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/login/oauth2/code/{registration_id}"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/oauth2/authorization/{registration_id}"
+        }
+      ]
+    },
+    {
+      "area": "page-hashes",
+      "kotlinSource": "PageHashController",
+      "access": "protected",
+      "behavior": "implemented",
+      "routes": [
+        {
+          "methods": [
+            "GET",
+            "PUT"
+          ],
+          "path": "/api/v1/page-hashes"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/api/v1/page-hashes/unknown"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/api/v1/page-hashes/unknown/{page_hash}/thumbnail"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/api/v1/page-hashes/{page_hash}"
+        },
+        {
+          "methods": [
+            "POST"
+          ],
+          "path": "/api/v1/page-hashes/{page_hash}/delete-all"
+        },
+        {
+          "methods": [
+            "POST"
+          ],
+          "path": "/api/v1/page-hashes/{page_hash}/delete-match"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/api/v1/page-hashes/{page_hash}/thumbnail"
+        }
+      ]
+    },
+    {
+      "area": "readlists",
+      "kotlinSource": "ReadListController",
+      "access": "protected",
+      "behavior": "implemented",
+      "routes": [
+        {
+          "methods": [
+            "GET",
+            "POST"
+          ],
+          "path": "/api/v1/readlists"
+        },
+        {
+          "methods": [
+            "POST"
+          ],
+          "path": "/api/v1/readlists/match/comicrack"
+        },
+        {
+          "methods": [
+            "DELETE",
+            "GET",
+            "PATCH"
+          ],
+          "path": "/api/v1/readlists/{id}"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/api/v1/readlists/{id}/books"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/api/v1/readlists/{id}/books/{book_id}/next"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/api/v1/readlists/{id}/books/{book_id}/previous"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/api/v1/readlists/{id}/file"
+        },
+        {
+          "methods": [
+            "GET",
+            "PUT"
+          ],
+          "path": "/api/v1/readlists/{id}/read-progress/tachiyomi"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/api/v1/readlists/{id}/thumbnail"
+        },
+        {
+          "methods": [
+            "GET",
+            "POST"
+          ],
+          "path": "/api/v1/readlists/{id}/thumbnails"
+        },
+        {
+          "methods": [
+            "DELETE",
+            "GET"
+          ],
+          "path": "/api/v1/readlists/{id}/thumbnails/{thumbnail_id}"
+        },
+        {
+          "methods": [
+            "PUT"
+          ],
+          "path": "/api/v1/readlists/{id}/thumbnails/{thumbnail_id}/selected"
+        }
+      ]
+    },
+    {
+      "area": "releases",
+      "kotlinSource": "ReleaseController",
+      "access": "protected",
+      "behavior": "implemented",
+      "routes": [
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/api/v1/releases"
+        }
+      ]
+    },
+    {
+      "area": "series",
+      "kotlinSource": "SeriesController",
+      "access": "protected",
+      "behavior": "partial",
+      "routes": [
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/api/v1/series"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/api/v1/series/alphabetical-groups"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/api/v1/series/latest"
+        },
+        {
+          "methods": [
+            "POST"
+          ],
+          "path": "/api/v1/series/list"
+        },
+        {
+          "methods": [
+            "POST"
+          ],
+          "path": "/api/v1/series/list/alphabetical-groups"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/api/v1/series/new"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/api/v1/series/release-dates"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/api/v1/series/updated"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/api/v1/series/{series_id}"
+        },
+        {
+          "methods": [
+            "POST"
+          ],
+          "path": "/api/v1/series/{series_id}/analyze"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/api/v1/series/{series_id}/collections"
+        },
+        {
+          "methods": [
+            "DELETE"
+          ],
+          "path": "/api/v1/series/{series_id}/file"
+        },
+        {
+          "methods": [
+            "PATCH"
+          ],
+          "path": "/api/v1/series/{series_id}/metadata"
+        },
+        {
+          "methods": [
+            "POST"
+          ],
+          "path": "/api/v1/series/{series_id}/metadata/refresh"
+        },
+        {
+          "methods": [
+            "DELETE",
+            "POST"
+          ],
+          "path": "/api/v1/series/{series_id}/read-progress"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/api/v1/series/{series_id}/thumbnail"
+        },
+        {
+          "methods": [
+            "GET",
+            "POST"
+          ],
+          "path": "/api/v1/series/{series_id}/thumbnails"
+        },
+        {
+          "methods": [
+            "DELETE",
+            "GET"
+          ],
+          "path": "/api/v1/series/{series_id}/thumbnails/{thumbnail_id}"
+        },
+        {
+          "methods": [
+            "PUT"
+          ],
+          "path": "/api/v1/series/{series_id}/thumbnails/{thumbnail_id}/selected"
+        },
+        {
+          "methods": [
+            "GET",
+            "PUT"
+          ],
+          "path": "/api/v2/series/{series_id}/read-progress/tachiyomi"
+        }
+      ]
+    },
+    {
+      "area": "settings",
+      "kotlinSource": "SettingsController",
+      "access": "protected",
+      "behavior": "implemented",
+      "routes": [
+        {
+          "methods": [
+            "GET",
+            "PATCH"
+          ],
+          "path": "/api/v1/settings"
+        }
+      ]
+    },
+    {
+      "area": "syncpoints",
+      "kotlinSource": "SyncPointController",
+      "access": "protected",
+      "behavior": "implemented",
+      "routes": [
+        {
+          "methods": [
+            "DELETE"
+          ],
+          "path": "/api/v1/syncpoints/me"
+        }
+      ]
+    },
+    {
+      "area": "tasks",
+      "kotlinSource": "TaskController",
+      "access": "protected",
+      "behavior": "implemented",
+      "routes": [
+        {
+          "methods": [
+            "DELETE"
+          ],
+          "path": "/api/v1/tasks"
+        }
+      ]
+    },
+    {
+      "area": "transient-books",
+      "kotlinSource": "TransientBooksController",
+      "access": "protected",
+      "behavior": "implemented",
+      "routes": [
+        {
+          "methods": [
+            "POST"
+          ],
+          "path": "/api/v1/transient-books"
+        },
+        {
+          "methods": [
+            "POST"
+          ],
+          "path": "/api/v1/transient-books/{id}/analyze"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/api/v1/transient-books/{id}/pages/{page}"
+        }
+      ]
+    },
+    {
+      "area": "users",
+      "kotlinSource": "UserController",
+      "access": "protected",
+      "behavior": "implemented",
+      "routes": [
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/api/v1/users/authentication-activity"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/api/v1/users/me/authentication-activity"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/api/v1/users/{user_id}/authentication-activity/latest"
+        },
+        {
+          "methods": [
+            "GET",
+            "POST"
+          ],
+          "path": "/api/v2/users"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/api/v2/users/authentication-activity"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/api/v2/users/me"
+        },
+        {
+          "methods": [
+            "GET",
+            "POST"
+          ],
+          "path": "/api/v2/users/me/api-keys"
+        },
+        {
+          "methods": [
+            "DELETE"
+          ],
+          "path": "/api/v2/users/me/api-keys/{key_id}"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/api/v2/users/me/authentication-activity"
+        },
+        {
+          "methods": [
+            "PATCH"
+          ],
+          "path": "/api/v2/users/me/password"
+        },
+        {
+          "methods": [
+            "DELETE",
+            "PATCH"
+          ],
+          "path": "/api/v2/users/{user_id}"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/api/v2/users/{user_id}/authentication-activity/latest"
+        },
+        {
+          "methods": [
+            "PATCH"
+          ],
+          "path": "/api/v2/users/{user_id}/password"
+        }
+      ]
+    },
+    {
+      "area": "kobo",
+      "kotlinSource": "KoboController",
+      "access": "kobo-key",
+      "behavior": "implemented",
+      "routes": [
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/kobo/{auth_token}/ping"
+        },
+        {
+          "methods": [
+            "POST"
+          ],
+          "path": "/kobo/{auth_token}/v1/auth/device"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/kobo/{auth_token}/v1/books/{book_id}/file/epub"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/kobo/{auth_token}/v1/books/{thumbnail_id}/thumbnail/{width}/{height}/{is_greyscale}/image.jpg"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/kobo/{auth_token}/v1/books/{thumbnail_id}/thumbnail/{width}/{height}/{quality}/{is_greyscale}/image.jpg"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/kobo/{auth_token}/v1/initialization"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/kobo/{auth_token}/v1/library/sync"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/kobo/{auth_token}/v1/library/{book_id}/metadata"
+        },
+        {
+          "methods": [
+            "GET",
+            "PUT"
+          ],
+          "path": "/kobo/{auth_token}/v1/library/{book_id}/state"
+        },
+        {
+          "methods": [
+            "ANY"
+          ],
+          "path": "/kobo/{auth_token}/{*path}"
+        }
+      ]
+    },
+    {
+      "area": "koreader",
+      "kotlinSource": "KoreaderSyncController",
+      "access": "koreader-key",
+      "behavior": "implemented",
+      "routes": [
+        {
+          "methods": [
+            "PUT"
+          ],
+          "path": "/koreader/syncs/progress"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/koreader/syncs/progress/{book_hash}"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/koreader/users/auth"
+        },
+        {
+          "methods": [
+            "POST"
+          ],
+          "path": "/koreader/users/create"
+        }
+      ]
+    },
+    {
+      "area": "opds-v1",
+      "kotlinSource": "OpdsController / OpdsCommonController",
+      "access": "opds-basic",
+      "behavior": "implemented",
+      "routes": [
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/opds/v1.2/books/latest"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/opds/v1.2/books/{book_id}/file/{*file_name}"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/opds/v1.2/books/{book_id}/pages/{page_number}"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/opds/v1.2/books/{book_id}/thumbnail"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/opds/v1.2/books/{book_id}/thumbnail/small"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/opds/v1.2/catalog"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/opds/v1.2/collections"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/opds/v1.2/collections/{id}"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/opds/v1.2/keep-reading"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/opds/v1.2/libraries"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/opds/v1.2/libraries/{id}"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/opds/v1.2/ondeck"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/opds/v1.2/publishers"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/opds/v1.2/readlists"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/opds/v1.2/readlists/{id}"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/opds/v1.2/search"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/opds/v1.2/series"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/opds/v1.2/series/latest"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/opds/v1.2/series/{id}"
+        }
+      ]
+    },
+    {
+      "area": "opds-v2",
+      "kotlinSource": "Opds2Controller / OpdsCommonController",
+      "access": "public",
+      "behavior": "implemented",
+      "routes": [
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/opds/v2/auth"
+        }
+      ]
+    },
+    {
+      "area": "opds-v2",
+      "kotlinSource": "Opds2Controller / OpdsCommonController",
+      "access": "opds-basic",
+      "behavior": "implemented",
+      "routes": [
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/opds/v2/books/{book_id}/file"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/opds/v2/books/{book_id}/file/{*file_name}"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/opds/v2/books/{book_id}/manifest"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/opds/v2/books/{book_id}/manifest/divina"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/opds/v2/books/{book_id}/manifest/epub"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/opds/v2/books/{book_id}/manifest/pdf"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/opds/v2/books/{book_id}/pages/{page_number}"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/opds/v2/books/{book_id}/pages/{page_number}/raw"
+        },
+        {
+          "methods": [
+            "GET",
+            "PUT"
+          ],
+          "path": "/opds/v2/books/{book_id}/progression"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/opds/v2/books/{book_id}/thumbnail"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/opds/v2/catalog"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/opds/v2/collections/{id}"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/opds/v2/libraries"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/opds/v2/libraries/books/latest"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/opds/v2/libraries/browse"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/opds/v2/libraries/collections"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/opds/v2/libraries/keep-reading"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/opds/v2/libraries/on-deck"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/opds/v2/libraries/readlists"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/opds/v2/libraries/series/latest"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/opds/v2/libraries/{id}"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/opds/v2/libraries/{id}/books/latest"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/opds/v2/libraries/{id}/browse"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/opds/v2/libraries/{id}/collections"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/opds/v2/libraries/{id}/keep-reading"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/opds/v2/libraries/{id}/on-deck"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/opds/v2/libraries/{id}/readlists"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/opds/v2/libraries/{id}/series/latest"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/opds/v2/readlists/{id}"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/opds/v2/search"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/opds/v2/series/{id}"
+        }
+      ]
+    },
+    {
+      "area": "sse",
+      "kotlinSource": "SseController",
+      "access": "protected",
+      "behavior": "implemented",
+      "routes": [
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/sse/v1/events"
+        }
+      ]
+    }
+  ]
+}
