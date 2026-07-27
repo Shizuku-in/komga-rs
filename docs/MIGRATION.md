@@ -6,7 +6,7 @@ Compatibility targets fresh Rust installations and the explicitly covered parts 
 
 | Area | Status | Notes |
 | --- | --- | --- |
-| Process/configuration | Partial | Default config directory, main/task database files, search/font directories, startup-only OAuth JSON, address/context path, Kobo sync page limit, coordinated background-service shutdown, tracing, and Kotlin-compatible database/REST server settings are implemented. Spring YAML remains pending. |
+| Process/configuration | Implemented | Default config directory, main/task database files, search/font directories, startup-only OAuth JSON, address/context path, Kobo sync page limit, coordinated background-service shutdown, tracing, and Kotlin-compatible database/REST server settings are implemented. Configuration is supplied through command-line arguments, `KOMGA_*` environment variables, database-backed server settings, and `oauth2.json`; Spring Boot `application.yml`, `application.yaml`, and `application.properties` files are explicitly outside the compatibility target. |
 | SQLite | Partial | User, authentication activity, library, settings, task queue, Series/Book, media pages/files, book/series thumbnails, metadata relations, read progress, SyncPoint snapshots, announcement read state, and historical events are compatible with the covered fixed-baseline schema. Complete historical Flyway migration compatibility is explicitly out of scope. |
 | Claim and users | Implemented | Claim, current user, CRUD, roles, library sharing fields, age/label restrictions, and password changes. |
 | Authentication | Implemented | Basic, in-memory sessions, remember-me cookie, header sessions, logout, REST API keys, OAuth2/OIDC Authorization Code with PKCE, GitHub email fallback, authentication activity, and one-month activity cleanup are implemented. |
@@ -28,7 +28,8 @@ Compatibility targets fresh Rust installations and the explicitly covered parts 
 3. Do not treat arbitrary historical Kotlin database migration paths as a completion requirement. A schema is supported only when it is documented and covered by compatibility tests.
 4. Keep domain policy independent from Axum and SQLx so Kotlin unit cases can be ported without HTTP or database setup.
 5. Add HTTP contract tests for each controller before marking a row implemented.
-6. Do not perform irreversible database conversions without an explicitly accepted and documented compatibility reset; `0011_page_hashing` is the current exception and requires a backup.
+6. Treat command-line arguments, `KOMGA_*` environment variables, database-backed server settings, and `oauth2.json` as the supported configuration interfaces. Spring Boot configuration-file parsing and precedence semantics are not a porting requirement.
+7. Do not perform irreversible database conversions without an explicitly accepted and documented compatibility reset; `0011_page_hashing` is the current exception and requires a backup.
 
 ## Current limitations
 

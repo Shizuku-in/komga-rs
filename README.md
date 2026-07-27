@@ -6,12 +6,12 @@ An incremental Rust port of the [Komga](https://github.com/gotson/komga) backend
 
 ## Port status
 
-The migration matrix currently tracks 13 functional areas: 7 are implemented or core-complete and 6 are partially implemented.
+The migration matrix currently tracks 14 functional areas: 9 are implemented or core-complete and 5 are partially implemented.
 
 | Status | Areas |
 | --- | --- |
-| Implemented / core-complete | Claim and users; authentication; collections and read lists; OPDS; device sync; operations; Web UI packaging |
-| Partial | Process and configuration; SQLite; libraries and scanner; Series, Books, and progress; media; search |
+| Implemented / core-complete | Process and configuration; Claim and users; authentication; collections and read lists; OPDS; device sync; operations; transient Book import analysis; Web UI packaging |
+| Partial | SQLite; libraries and scanner; Series, Books, and progress; media; search |
 
 ## Compatibility target
 
@@ -80,6 +80,13 @@ KOMGA_KOBO_KEPUBIFY_PATH=/usr/local/bin/kepubify KOMGA_KOBO_PROXY=true \
 KOMGA_PORT=25601 KOMGA_CONTEXT_PATH=/komga \
   cargo run -p komga-server
 ```
+
+Spring Boot configuration files such as `application.yml`, `application.yaml`, and
+`application.properties` are not read by `komga-rs`. They are not part of the compatibility target.
+Translate settings used by an existing Kotlin installation to the documented command-line arguments,
+`KOMGA_*` environment variables, database-backed server settings, and `oauth2.json` before switching
+servers. In particular, do not assume that a database path, port, or context path in a retained Spring
+configuration file will be applied by the Rust server.
 
 `--kobo-kepubify-path` and `KOMGA_KOBO_KEPUBIFY_PATH` are optional compatibility fallbacks. The
 in-process converter remains the primary implementation when either setting is present.
