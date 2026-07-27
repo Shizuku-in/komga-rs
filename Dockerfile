@@ -3,7 +3,7 @@
 ARG NODE_IMAGE=node:24-bookworm-slim
 ARG UBUNTU_IMAGE=ubuntu:24.04
 
-FROM ${NODE_IMAGE} AS webui
+FROM --platform=$BUILDPLATFORM ${NODE_IMAGE} AS webui
 
 RUN apt-get update \
     && apt-get install --yes --no-install-recommends ca-certificates git \
@@ -18,6 +18,7 @@ RUN npm run build
 FROM ${UBUNTU_IMAGE} AS builder
 
 ARG RUST_VERSION=1.96.1
+ARG TARGETARCH
 
 ENV CARGO_HOME=/usr/local/cargo \
     RUSTUP_HOME=/usr/local/rustup \
@@ -44,9 +45,9 @@ COPY --from=webui /build/webui/dist ./webui/dist/
 
 ENV KOMGA_WEBUI_DIST_DIR=webui/dist
 
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/usr/local/cargo/git \
-    --mount=type=cache,target=/build/target \
+RUN --mount=type=cache,id=komga-cargo-registry,target=/usr/local/cargo/registry \
+    --mount=type=cache,id=komga-cargo-git,target=/usr/local/cargo/git \
+    --mount=type=cache,id=komga-cargo-target-${TARGETARCH},target=/build/target \
     cargo build --locked --release -p komga-server --features heif-native \
     && install -Dm755 target/release/komga-server /out/komga-server
 

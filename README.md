@@ -64,20 +64,37 @@ thumbnails.
 The container image builds the embedded Web UI and enables native HEIF/HEIC and AVIF conversion. It runs as the
 unprivileged user `komga` with UID and GID 1000, stores application state in `/config`, and listens on port 25600.
 
-Create a writable library directory and start the local Compose configuration:
+Create writable configuration and library directories, then start the local Compose configuration:
 
 ```bash
-mkdir -p books
+mkdir -p config books
 docker compose up --build -d
 ```
 
-Open `http://localhost:25600`. The named `komga-config` volume persists both SQLite databases, the search index, OAuth
-configuration, and local fonts. The host directory selected by `KOMGA_LIBRARY_DIR` is mounted read-write at `/data` because
-imports, source deletion, conversion, extension repair, and duplicate-page removal can modify library files:
+Open `http://localhost:25600`. The host directory selected by `KOMGA_CONFIG_HOST_DIR` is mounted at `/config` and persists
+both SQLite databases, the search index, OAuth configuration, and local fonts. `KOMGA_LIBRARY_DIR` is mounted read-write at
+`/data` because imports, source deletion, conversion, extension repair, and duplicate-page removal can modify library files.
+The defaults are `./config` and `./books`; set durable absolute paths in a `.env` file for a server deployment:
+
+```dotenv
+KOMGA_CONFIG_HOST_DIR=/srv/komga/config
+KOMGA_LIBRARY_DIR=/srv/books
+KOMGA_HTTP_PORT=8080
+```
+
+Then run `docker compose up --build -d`.
+
+Stable `vMAJOR.MINOR.PATCH` Git tags publish `linux/amd64` and `linux/arm64` images to GHCR after every CI job succeeds.
+The release receives full, major/minor, major, and `latest` tags. To run a published image through the same Compose file:
 
 ```bash
-KOMGA_LIBRARY_DIR=/srv/books KOMGA_HTTP_PORT=8080 docker compose up --build -d
+export KOMGA_IMAGE=ghcr.io/shizuku-in/komga-rs:latest
+docker compose pull
+docker compose up -d --no-build
 ```
+
+Create and push a signed release tag with `git tag -s v0.1.0 -m "v0.1.0"` followed by
+`git push origin v0.1.0`. The first GHCR package may need to be made public in its GitHub package settings.
 
 Bind-mounted configuration and library directories must be accessible to UID/GID 1000. Alternative image ownership can
 be selected at build time with `--build-arg KOMGA_UID=... --build-arg KOMGA_GID=...`. Put `oauth2.json` in `/config` and
@@ -85,8 +102,8 @@ pass provider secrets through Compose `environment` or an override file; do not 
 
 The image health check calls `/actuator/health` and honors `KOMGA_PORT` and `KOMGA_CONTEXT_PATH`. Database-backed
 `serverPort` and `serverContextPath` settings still override environment configuration, so clear incompatible persisted
-overrides before moving an existing database into the container. The Compose file builds locally and does not publish or
-pull a project image.
+overrides before moving an existing database into the container. Without `KOMGA_IMAGE`, the Compose file builds and tags
+the local image as `komga-rs:local`.
 
 The defaults match Komga:
 

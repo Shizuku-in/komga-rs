@@ -1,6 +1,6 @@
 services:
   komga:
-    image: komga-rs:local
+    image: ${KOMGA_IMAGE:-komga-rs:local}
     build:
       context: .
     init: true
@@ -10,7 +10,14 @@ services:
     environment:
       KOMGA_CONFIG_DIR: /config
     volumes:
-      - komga-config:/config
+      # Set these host paths in .env before starting Compose, for example:
+      # KOMGA_CONFIG_HOST_DIR=/srv/komga/config
+      # KOMGA_LIBRARY_DIR=/srv/books
+      # Both directories must be accessible to UID/GID 1000. Keep the library
+      # writable if Komga will import, delete, convert, or repair source files.
+      - type: bind
+        source: ${KOMGA_CONFIG_HOST_DIR:-./config}
+        target: /config
       - type: bind
         source: ${KOMGA_LIBRARY_DIR:-./books}
         target: /data
@@ -19,6 +26,3 @@ services:
     security_opt:
       - no-new-privileges:true
     stop_grace_period: 30s
-
-volumes:
-  komga-config:
