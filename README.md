@@ -6,12 +6,12 @@ An incremental Rust port of the [Komga](https://github.com/gotson/komga) backend
 
 ## Port status
 
-The migration matrix currently tracks 13 functional areas: 6 are implemented or core-complete and 7 are partially implemented.
+The migration matrix currently tracks 13 functional areas: 7 are implemented or core-complete and 6 are partially implemented.
 
 | Status | Areas |
 | --- | --- |
-| Implemented / core-complete | Claim and users; collections and read lists; OPDS; device sync; operations; Web UI packaging |
-| Partial | Process and configuration; SQLite; authentication; libraries and scanner; Series, Books, and progress; media; search |
+| Implemented / core-complete | Claim and users; authentication; collections and read lists; OPDS; device sync; operations; Web UI packaging |
+| Partial | Process and configuration; SQLite; libraries and scanner; Series, Books, and progress; media; search |
 
 ## Compatibility target
 
@@ -53,6 +53,7 @@ The defaults match Komga:
 - return at most 100 source books or tags in each Kobo synchronization page.
 - enable in-process KEPUB conversion, with the external fallback and Kobo Store proxy disabled until configured.
 - serve the embedded Web UI at `/`, including SPA history fallback and configured context paths.
+- read optional OAuth2/OIDC providers from `$HOME/.komga/oauth2.json`.
 
 Configuration can be supplied through arguments or environment variables:
 
@@ -60,6 +61,7 @@ Configuration can be supplied through arguments or environment variables:
 cargo run -p komga-server -- \
   --config-dir /srv/komga \
   --fonts-directory /srv/komga/fonts \
+  --oauth2-config-file /srv/komga/oauth2.json \
   --page-hashing 3 \
   --kobo-sync-item-limit 100 \
   --kobo-kepubify-path /usr/local/bin/kepubify \
@@ -72,6 +74,7 @@ KOMGA_DATABASE_FILE=/srv/komga/database.sqlite \
 KOMGA_TASKS_DATABASE_FILE=/srv/komga/tasks.sqlite \
 KOMGA_SEARCH_DIRECTORY=/srv/komga/search \
 KOMGA_FONTS_DIRECTORY=/srv/komga/fonts KOMGA_PAGE_HASHING=3 \
+KOMGA_OAUTH2_CONFIG_FILE=/srv/komga/oauth2.json \
 KOMGA_KOBO_SYNC_ITEM_LIMIT=100 \
 KOMGA_KOBO_KEPUBIFY_PATH=/usr/local/bin/kepubify KOMGA_KOBO_PROXY=true \
 KOMGA_PORT=25601 KOMGA_CONTEXT_PATH=/komga \
@@ -98,6 +101,9 @@ Migration `0011_page_hashing` deliberately clears existing `PAGE_HASH` rules and
 - `GET|POST /api/v2/users/me/api-keys`
 - `DELETE /api/v2/users/me/api-keys/{id}`
 - `DELETE /api/v1/syncpoints/me`
+- `GET /api/v1|v2/users/me/authentication-activity`
+- `GET /api/v1|v2/users/authentication-activity`
+- `GET /api/v1|v2/users/{id}/authentication-activity/latest`
 - `GET /api/v1/login/set-cookie`
 - `GET|POST /api/logout`
 - `GET|POST /api/v1/libraries`
@@ -156,6 +162,8 @@ Migration `0011_page_hashing` deliberately clears existing `PAGE_HASH` rules and
 - `GET /api/v1/client-settings/user/list`
 - `PATCH|DELETE /api/v1/client-settings/user`
 - `GET /api/v1/oauth2/providers`
+- `GET /oauth2/authorization/{registrationId}`
+- `GET /login/oauth2/code/{registrationId}`
 - `GET|PUT /api/v1/announcements`
 - `GET /api/v1/releases`
 - `GET /api/v1/fonts/families`
@@ -174,7 +182,58 @@ Migration `0011_page_hashing` deliberately clears existing `PAGE_HASH` rules and
 - `GET|PATCH /api/v1/settings`
 - `GET /sse/v1/events`
 
-Authentication is compatible with the current Komga contract: HTTP Basic, `KOMGA-SESSION`, `X-Auth-Token`, and SHA-512-backed `X-API-Key`. Existing Spring BCrypt `$2a$` password hashes are accepted. KOReader routes exclusively accept a plaintext API key in `X-Auth-User` and require the `KOREADER_SYNC` role. Kobo routes exclusively accept a plaintext API key in the `/kobo/{apiKey}` path and require `KOBO_SYNC`; original-file delivery also requires `FILE_DOWNLOAD`. Kobo keys are redacted from request tracing. OPDS 2 also exposes the public authentication document and returns its media type, Basic challenge, and discovery link on authentication failures.
+Authentication is compatible with the current Komga contract: HTTP Basic, `KOMGA-SESSION`, `X-Auth-Token`, SHA-512-backed `X-API-Key`, OAuth2, and OpenID Connect. Existing Spring BCrypt `$2a$` password hashes are accepted. Password, remember-me, API-key, and OAuth attempts are recorded in Kotlin-compatible authentication activity; ordinary session reuse is not recorded, and entries older than one month are removed daily. KOReader routes exclusively accept a plaintext API key in `X-Auth-User` and require the `KOREADER_SYNC` role. Kobo routes exclusively accept a plaintext API key in the `/kobo/{apiKey}` path and require `KOBO_SYNC`; original-file delivery also requires `FILE_DOWNLOAD`. Kobo keys and OAuth callback parameters are redacted from request tracing. OPDS 2 also exposes the public authentication document and returns its media type, Basic challenge, and discovery link on authentication failures.
+
+### OAuth2 and OpenID Connect
+
+OAuth is disabled when the default `<config-dir>/oauth2.json` does not exist. Use `--oauth2-config-file` or `KOMGA_OAUTH2_CONFIG_FILE` to select another file; a missing explicitly selected file, invalid JSON, failed OIDC discovery, duplicate registration ID, unresolved environment secret, or unsafe endpoint prevents startup. Provider endpoints must use HTTPS, except that loopback HTTP is accepted for local development and tests.
+
+```json
+{
+  "publicBaseUrl": "https://reader.example/komga",
+  "accountCreation": false,
+  "oidcEmailVerification": true,
+  "providers": [
+    {
+      "type": "oidc",
+      "registrationId": "authentik",
+      "name": "Authentik",
+      "clientId": "komga",
+      "clientSecretEnv": "KOMGA_AUTHENTIK_SECRET",
+      "clientAuthenticationMethod": "client_secret_basic",
+      "issuerUri": "https://id.example/application/o/komga/",
+      "scopes": ["openid", "profile", "email"]
+    },
+    {
+      "type": "oauth2",
+      "registrationId": "github",
+      "name": "GitHub",
+      "clientId": "client-id",
+      "clientSecret": "secret",
+      "clientAuthenticationMethod": "client_secret_basic",
+      "authorizationUri": "https://github.com/login/oauth/authorize",
+      "tokenUri": "https://github.com/login/oauth/access_token",
+      "userInfoUri": "https://api.github.com/user",
+      "emailAttribute": "email",
+      "scopes": ["read:user", "user:email"]
+    }
+  ]
+}
+```
+
+Register one callback per provider as `<public URL>/login/oauth2/code/<registrationId>`, for example `https://reader.example/komga/login/oauth2/code/authentik`. `publicBaseUrl` is optional; without it, Komga derives the client-visible URL from `Forwarded`, `X-Forwarded-*`, `Host`, and the configured context path. A reverse proxy for the example above can forward those values as follows:
+
+```nginx
+location /komga/ {
+    proxy_pass http://127.0.0.1:25600;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-Prefix /komga;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+}
+```
+
+Set at most one of `clientSecret` and `clientSecretEnv`. A provider without a secret must use `clientAuthenticationMethod: "none"`. Login uses Authorization Code with random state, S256 PKCE, and an OIDC nonce; access and refresh tokens are discarded after the callback. Existing users are matched by email without case sensitivity. Unknown email addresses receive `ERR_1025` unless `accountCreation` is enabled, in which case an ordinary non-administrator user is created.
 
 Administrators can retrieve and patch Kotlin-compatible server settings through `/api/v1/settings`. Empty-container cleanup, thumbnail size, task-pool size, remember-me policy, Kobo Store proxying/public URL port, and external `kepubify` fallback selection update live after a committed PATCH. `serverPort` and `serverContextPath` are persisted as database overrides and take effect on the next process start; the response reports configuration, database, and current effective values separately. Database values override CLI/environment values, and clearing nullable overrides restores the configured fallback.
 
