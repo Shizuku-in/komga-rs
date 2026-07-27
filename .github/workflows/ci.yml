@@ -65,6 +65,26 @@ jobs:
         env:
           RUSTDOCFLAGS: -D warnings
 
+  native-codecs:
+    needs: webui
+    runs-on: ubuntu-24.04
+    env:
+      KOMGA_WEBUI_DIST_DIR: webui/dist
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: webui-dist
+          path: webui/dist
+      - run: sudo apt-get update
+      - run: sudo apt-get install --yes pkg-config libheif-dev libheif-plugin-libde265 libheif-plugin-dav1d
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --workspace --all-targets --features komga-media/heif-native,komga-server/heif-native -- -D warnings
+      - run: cargo test --workspace --all-targets --features komga-media/heif-native,komga-server/heif-native
+
   e2e:
     needs: webui
     runs-on: ubuntu-latest
