@@ -1,16 +1,132 @@
 use std::{
     collections::BTreeMap,
-    fs::{self, File},
-    io,
+    fs::{self, File, OpenOptions},
+    io::{self, Read, Write},
     path::{Path, PathBuf},
     time::SystemTime,
 };
 
 use chrono::{DateTime, Local};
 use komga_core::{Book, HashedPageTarget, Library, Media, PDF_MEDIA_TYPE, PageHashAction, ZIP_MEDIA_TYPE};
-use komga_media::{PageRemovalError, PageRemovalRewrite, rewrite_hashed_pdf_pages, rewrite_hashed_zip_pages};
+use komga_media::{
+    FileHashError, PageRemovalError, PageRemovalRewrite, hash_file, rewrite_hashed_pdf_pages, rewrite_hashed_zip_pages,
+};
+use serde::{Deserialize, Serialize};
 
 use super::*;
+
+const PAGE_REMOVAL_JOURNAL_VERSION: u32 = 1;
+const MAX_PAGE_REMOVAL_JOURNAL_BYTES: u64 = 64 * 1024;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct PageRemovalJournal {
+    version: u32,
+    book_id: String,
+    source_file_name: String,
+    media_type: String,
+    old: PageRemovalJournalSnapshot,
+    new: PageRemovalJournalSnapshot,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct PageRemovalJournalSnapshot {
+    file_size: i64,
+    file_last_modified: chrono::NaiveDateTime,
+    page_count: i32,
+    fingerprint: String,
+}
+
+#[derive(Debug)]
+struct PageRemovalPaths {
+    root: PathBuf,
+    source: PathBuf,
+    parent: PathBuf,
+    temporary: PathBuf,
+    backup: PathBuf,
+    journal: PathBuf,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum JournalDatabaseState {
+    Old,
+    New,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum JournalFileState {
+    Missing,
+    Old,
+    New,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct PageRemovalRecovery {
+    pub(super) deferred: bool,
+}
+
+pub(super) async fn recover_library_page_removal_artifacts(
+    state: &AppState,
+    library: &Library,
+    phase: &'static str,
+    allow_legacy_deferred: bool,
+) -> Result<bool, TaskOutcome> {
+    let books = state
+        .storage
+        .list_active_books_by_library_id(&library.id)
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, library_id = %library.id, phase, "could not list books for page-removal recovery");
+            TaskOutcome::Retry
+        })?;
+    let mut deferred = false;
+    for book in books {
+        let has_artifacts = page_removal_artifacts_exist(&book).map_err(|error| {
+            tracing::error!(message = %error.message, book_id = %book.id, phase, "could not inspect page-removal artifacts");
+            TaskOutcome::Retry
+        })?;
+        if !has_artifacts {
+            continue;
+        }
+        let media = state
+            .storage
+            .find_media_by_book_id(&book.id)
+            .await
+            .map_err(|error| {
+                tracing::error!(%error, book_id = %book.id, phase, "could not load media for page-removal recovery");
+                TaskOutcome::Retry
+            })?
+            .ok_or_else(|| {
+                tracing::error!(book_id = %book.id, phase, "page-removal artifacts have no database media snapshot");
+                TaskOutcome::Retry
+            })?;
+        let recovery_book = book.clone();
+        let recovery_library = library.clone();
+        let recovered = tokio::task::spawn_blocking(move || {
+            recover_page_removal_artifacts(&recovery_book, &media, &recovery_library, phase, allow_legacy_deferred)
+        })
+        .await;
+        match recovered {
+            Ok(Ok(recovery)) => deferred |= recovery.deferred,
+            Ok(Err(error)) => {
+                tracing::error!(
+                    message = %error.message,
+                    book_id = %book.id,
+                    phase,
+                    "page-removal recovery blocked the deep scan"
+                );
+                return Err(TaskOutcome::Retry);
+            }
+            Err(error) => {
+                tracing::error!(%error, book_id = %book.id, phase, "page-removal recovery panicked");
+                return Err(TaskOutcome::Retry);
+            }
+        }
+    }
+    Ok(deferred)
+}
 
 pub(super) async fn process_find_duplicate_pages_task(state: &AppState, task: &TaskRecord) -> TaskOutcome {
     let payload = match serde_json::from_str::<LibraryTaskPayload>(&task.payload) {
@@ -84,12 +200,23 @@ pub(super) async fn process_remove_hashed_pages_task(state: &AppState, task: &Ta
             return TaskOutcome::Retry;
         }
     };
+    let media = match state.storage.find_media_by_book_id(&book.id).await {
+        Ok(Some(media)) => media,
+        Ok(None) => return TaskOutcome::Completed,
+        Err(error) => {
+            tracing::error!(%error, book_id = %book.id, "could not load media for duplicate-page removal");
+            return TaskOutcome::Retry;
+        }
+    };
     let recovery_book = book.clone();
+    let recovery_media = media.clone();
     let recovery_library = library.clone();
-    let recovered =
-        tokio::task::spawn_blocking(move || recover_page_removal_artifacts(&recovery_book, &recovery_library)).await;
+    let recovered = tokio::task::spawn_blocking(move || {
+        recover_page_removal_artifacts(&recovery_book, &recovery_media, &recovery_library, "task-start", false)
+    })
+    .await;
     match recovered {
-        Ok(Ok(())) => {}
+        Ok(Ok(_)) => {}
         Ok(Err(error)) => {
             enqueue_recovery_scan(state, &book.library_id).await;
             return work_failure("page-removal recovery", &book.id, error);
@@ -99,14 +226,6 @@ pub(super) async fn process_remove_hashed_pages_task(state: &AppState, task: &Ta
             return TaskOutcome::Retry;
         }
     }
-    let media = match state.storage.find_media_by_book_id(&book.id).await {
-        Ok(Some(media)) => media,
-        Ok(None) => return TaskOutcome::Completed,
-        Err(error) => {
-            tracing::error!(%error, book_id = %book.id, "could not load media for duplicate-page removal");
-            return TaskOutcome::Retry;
-        }
-    };
     let work_book = book.clone();
     let work_media = media.clone();
     let work_library = library.clone();
@@ -124,7 +243,7 @@ pub(super) async fn process_remove_hashed_pages_task(state: &AppState, task: &Ta
         )
     })
     .await;
-    let mut prepared = match result {
+    let prepared = match result {
         Ok(Ok(prepared)) => prepared,
         Ok(Err(error)) => {
             if matches!(error.outcome, TaskOutcome::Completed) {
@@ -153,7 +272,9 @@ pub(super) async fn process_remove_hashed_pages_task(state: &AppState, task: &Ta
         Ok(true) => {}
         Ok(false) => {
             tracing::warn!(book_id = %book.id, "database changed after duplicate-page source replacement");
-            if let Err(error) = prepared.rollback() {
+            if let Err(error) =
+                recover_page_removal_from_current_database(state, &book.id, &library, "database-mismatch").await
+            {
                 tracing::error!(message = %error.message, book_id = %book.id, "could not roll back page-removal source");
             }
             enqueue_recovery_scan(state, &book.library_id).await;
@@ -161,14 +282,33 @@ pub(super) async fn process_remove_hashed_pages_task(state: &AppState, task: &Ta
         }
         Err(error) => {
             tracing::error!(%error, book_id = %book.id, "could not persist duplicate-page removal");
-            if let Err(error) = prepared.rollback() {
+            if let Err(error) =
+                recover_page_removal_from_current_database(state, &book.id, &library, "database-error").await
+            {
                 tracing::error!(message = %error.message, book_id = %book.id, "could not roll back page-removal source");
             }
             enqueue_recovery_scan(state, &book.library_id).await;
             return TaskOutcome::Retry;
         }
     }
-    prepared.finish();
+    let cleanup_book = prepared.rewrite.book.clone();
+    let cleanup_media = prepared.rewrite.media.clone();
+    let cleanup_library = library.clone();
+    match tokio::task::spawn_blocking(move || {
+        recover_page_removal_artifacts(&cleanup_book, &cleanup_media, &cleanup_library, "commit", false)
+    })
+    .await
+    {
+        Ok(Ok(_)) => {}
+        Ok(Err(error)) => {
+            tracing::warn!(message = %error.message, book_id = %book.id, "could not clean committed page-removal artifacts");
+            enqueue_recovery_scan(state, &book.library_id).await;
+        }
+        Err(error) => {
+            tracing::error!(%error, book_id = %book.id, "committed page-removal cleanup panicked");
+            enqueue_recovery_scan(state, &book.library_id).await;
+        }
+    }
     let removal = &prepared.rewrite;
     state.publish_domain_event(DomainEvent::BookUpdated(BookEvent::from(&removal.book)));
 
@@ -221,44 +361,35 @@ pub(super) async fn process_remove_hashed_pages_task(state: &AppState, task: &Ta
     TaskOutcome::Completed
 }
 
+async fn recover_page_removal_from_current_database(
+    state: &AppState,
+    book_id: &str,
+    library: &Library,
+    phase: &'static str,
+) -> Result<(), WorkError> {
+    let book = state
+        .storage
+        .find_book_by_id(book_id)
+        .await
+        .map_err(WorkError::retry)?
+        .ok_or_else(|| WorkError::terminal("page-removal database book disappeared"))?;
+    let media = state
+        .storage
+        .find_media_by_book_id(book_id)
+        .await
+        .map_err(WorkError::retry)?
+        .ok_or_else(|| WorkError::terminal("page-removal database media disappeared"))?;
+    let library = library.clone();
+    tokio::task::spawn_blocking(move || {
+        recover_page_removal_artifacts(&book, &media, &library, phase, false).map(|_| ())
+    })
+    .await
+    .map_err(WorkError::retry)?
+}
+
 #[derive(Debug)]
 struct PreparedPageRemoval {
     rewrite: PageRemovalRewrite,
-    source: PathBuf,
-    temporary: PathBuf,
-    backup: PathBuf,
-}
-
-impl PreparedPageRemoval {
-    fn rollback(&mut self) -> Result<(), WorkError> {
-        if path_exists(&self.source)? {
-            validate_regular_file(&self.source, None)?;
-            fs::remove_file(&self.source).map_err(WorkError::retry)?;
-        }
-        if !path_exists(&self.backup)? {
-            return Err(WorkError::terminal("page-removal backup is missing during rollback"));
-        }
-        fs::rename(&self.backup, &self.source).map_err(WorkError::retry)?;
-        if let Some(parent) = self.source.parent() {
-            sync_directory(parent).map_err(WorkError::retry)?;
-        }
-        remove_regular_file(&self.temporary)?;
-        Ok(())
-    }
-
-    fn finish(&mut self) {
-        if let Err(error) = remove_regular_file(&self.backup) {
-            tracing::warn!(message = %error.message, path = %self.backup.display(), "could not remove page-removal backup");
-        }
-        if let Err(error) = remove_regular_file(&self.temporary) {
-            tracing::warn!(message = %error.message, path = %self.temporary.display(), "could not remove page-removal temporary file");
-        }
-        if let Some(parent) = self.source.parent()
-            && let Err(error) = sync_directory(parent)
-        {
-            tracing::warn!(%error, path = %parent.display(), "could not sync page-removal directory");
-        }
-    }
 }
 
 fn prepare_page_removal(
@@ -269,20 +400,21 @@ fn prepare_page_removal(
     analyze_dimensions: bool,
     cancelled: impl Fn() -> bool,
 ) -> Result<PreparedPageRemoval, WorkError> {
-    let (root, source, parent, temporary, backup) = validated_page_removal_paths(book, library)?;
-    validate_regular_file(&source, Some(&root))?;
-    if !matches_book_snapshot(&source, book)? {
+    let paths = validated_page_removal_paths(book, library)?;
+    validate_regular_file(&paths.source, Some(&paths.root))?;
+    if !matches_book_snapshot(&paths.source, book)? {
         return Err(WorkError::terminal("book source snapshot has changed"));
     }
-    ensure_absent(&temporary, "page-removal temporary file")?;
-    ensure_absent(&backup, "page-removal backup")?;
+    ensure_absent(&paths.temporary, "page-removal temporary file")?;
+    ensure_absent(&paths.backup, "page-removal backup")?;
+    ensure_absent(&paths.journal, "page-removal journal")?;
 
     let rewritten = match media.media_type.as_deref() {
         Some(ZIP_MEDIA_TYPE) => {
-            rewrite_hashed_zip_pages(book, media, targets, &temporary, analyze_dimensions, &cancelled)
+            rewrite_hashed_zip_pages(book, media, targets, &paths.temporary, analyze_dimensions, &cancelled)
         }
         Some(PDF_MEDIA_TYPE) => {
-            rewrite_hashed_pdf_pages(book, media, targets, &temporary, analyze_dimensions, &cancelled)
+            rewrite_hashed_pdf_pages(book, media, targets, &paths.temporary, analyze_dimensions, &cancelled)
         }
         _ => {
             return Err(WorkError::terminal("only ready ZIP and PDF media support page removal"));
@@ -291,98 +423,130 @@ fn prepare_page_removal(
     let rewrite = match rewritten {
         Ok(rewrite) => rewrite,
         Err(error) => {
-            let _ = remove_regular_file(&temporary);
+            let _ = remove_regular_file(&paths.temporary);
             return Err(WorkError::from(error));
         }
     };
-    validate_regular_file(&temporary, Some(&root))?;
+    validate_regular_file(&paths.temporary, Some(&paths.root))?;
+    let journal = PageRemovalJournal::new(book, media, &rewrite, &paths)?;
+    write_page_removal_journal(&paths, &journal)?;
     if cancelled() {
-        remove_regular_file(&temporary)?;
+        remove_regular_file_synced(&paths.temporary, &paths.parent)?;
+        remove_regular_file_synced(&paths.journal, &paths.parent)?;
         return Err(WorkError::cancelled("page removal cancelled before file replacement"));
     }
 
-    fs::rename(&source, &backup).map_err(WorkError::retry)?;
-    sync_directory(&parent).map_err(WorkError::retry)?;
-    if let Err(error) = fs::rename(&temporary, &source) {
-        let _ = fs::rename(&backup, &source);
-        let _ = sync_directory(&parent);
-        return Err(WorkError::retry(error));
-    }
-    sync_directory(&parent).map_err(WorkError::retry)?;
-    if !matches_book_snapshot(&source, &rewrite.book)? {
-        let _ = fs::remove_file(&source);
-        let _ = fs::rename(&backup, &source);
-        let _ = sync_directory(&parent);
+    rename_synced(&paths.source, &paths.backup, &paths.parent)?;
+    rename_synced(&paths.temporary, &paths.source, &paths.parent)?;
+    if !matches_book_snapshot(&paths.source, &rewrite.book)?
+        || journal_file_state(&paths.source, &paths.root, &journal)? != JournalFileState::New
+    {
         return Err(WorkError::terminal(
             "rewritten source does not match its validated snapshot",
         ));
     }
-    Ok(PreparedPageRemoval {
-        rewrite,
-        source,
-        temporary,
-        backup,
-    })
+    Ok(PreparedPageRemoval { rewrite })
 }
 
-fn recover_page_removal_artifacts(book: &Book, library: &Library) -> Result<(), WorkError> {
-    let (root, source, parent, temporary, backup) = validated_page_removal_paths(book, library)?;
-    let source_exists = path_exists(&source)?;
-    let backup_exists = path_exists(&backup)?;
-    let temporary_exists = path_exists(&temporary)?;
+pub(super) fn recover_page_removal_artifacts(
+    book: &Book,
+    media: &Media,
+    library: &Library,
+    phase: &'static str,
+    allow_legacy_deferred: bool,
+) -> Result<PageRemovalRecovery, WorkError> {
+    let paths = validated_page_removal_paths(book, library)?;
+    let backup_exists = path_exists(&paths.backup)?;
+    let temporary_exists = path_exists(&paths.temporary)?;
+    let journal_exists = path_exists(&paths.journal)?;
+    if !backup_exists && !temporary_exists && !journal_exists {
+        if path_exists(&paths.source)? {
+            validate_regular_file(&paths.source, Some(&paths.root))?;
+        }
+        return Ok(PageRemovalRecovery { deferred: false });
+    }
+    let (action, journal_version, deferred) = if journal_exists {
+        let journal = read_page_removal_journal(&paths)?;
+        let state = journal_database_state(book, media, &journal)?;
+        (
+            recover_journal_artifacts(&paths, &journal, state)?,
+            Some(journal.version),
+            false,
+        )
+    } else {
+        let recovery = recover_legacy_artifacts(book, &paths, allow_legacy_deferred)?;
+        (recovery.0, None, recovery.1)
+    };
+    tracing::info!(
+        book_id = %book.id,
+        phase,
+        journal_version,
+        recovery_action = action,
+        "page-removal artifacts inspected"
+    );
+    Ok(PageRemovalRecovery { deferred })
+}
+
+fn recover_legacy_artifacts(
+    book: &Book,
+    paths: &PageRemovalPaths,
+    allow_deferred: bool,
+) -> Result<(&'static str, bool), WorkError> {
+    let source_exists = path_exists(&paths.source)?;
+    let backup_exists = path_exists(&paths.backup)?;
+    let temporary_exists = path_exists(&paths.temporary)?;
     if source_exists {
-        validate_regular_file(&source, Some(&root))?;
+        validate_regular_file(&paths.source, Some(&paths.root))?;
     }
     if backup_exists {
-        validate_regular_file(&backup, Some(&root))?;
+        validate_regular_file(&paths.backup, Some(&paths.root))?;
     }
     if temporary_exists {
-        validate_regular_file(&temporary, Some(&root))?;
+        validate_regular_file(&paths.temporary, Some(&paths.root))?;
     }
 
     if backup_exists {
-        let source_matches = source_exists && matches_book_snapshot(&source, book)?;
-        let backup_matches = matches_book_snapshot(&backup, book)?;
+        let source_matches = source_exists && matches_book_snapshot(&paths.source, book)?;
+        let backup_matches = matches_book_snapshot(&paths.backup, book)?;
         match (source_exists, source_matches, backup_matches) {
             (true, true, false) => {
-                fs::remove_file(&backup).map_err(WorkError::retry)?;
-                remove_regular_file(&temporary)?;
+                remove_regular_file_synced(&paths.backup, &paths.parent)?;
+                remove_regular_file_synced(&paths.temporary, &paths.parent)?;
             }
             (true, false, true) => {
-                fs::remove_file(&source).map_err(WorkError::retry)?;
-                fs::rename(&backup, &source).map_err(WorkError::retry)?;
-                remove_regular_file(&temporary)?;
+                remove_regular_file_synced(&paths.source, &paths.parent)?;
+                rename_synced(&paths.backup, &paths.source, &paths.parent)?;
+                remove_regular_file_synced(&paths.temporary, &paths.parent)?;
             }
             (false, false, true) => {
-                fs::rename(&backup, &source).map_err(WorkError::retry)?;
-                remove_regular_file(&temporary)?;
+                rename_synced(&paths.backup, &paths.source, &paths.parent)?;
+                remove_regular_file_synced(&paths.temporary, &paths.parent)?;
             }
+            _ if allow_deferred && source_exists => return Ok(("defer-legacy", true)),
             _ => {
                 return Err(WorkError::terminal(
                     "page-removal artifacts cannot be matched safely to the database snapshot",
                 ));
             }
         }
-        sync_directory(&parent).map_err(WorkError::retry)?;
-        return Ok(());
+        return Ok(("restore-or-clean-legacy", false));
     }
 
-    if !source_exists || !matches_book_snapshot(&source, book)? {
+    if !source_exists || !matches_book_snapshot(&paths.source, book)? {
+        if allow_deferred && source_exists {
+            return Ok(("defer-legacy", true));
+        }
         return Err(WorkError::terminal(
             "current page-removal source does not match the database snapshot",
         ));
     }
     if temporary_exists {
-        fs::remove_file(&temporary).map_err(WorkError::retry)?;
-        sync_directory(&parent).map_err(WorkError::retry)?;
+        remove_regular_file_synced(&paths.temporary, &paths.parent)?;
     }
-    Ok(())
+    Ok(("clean-legacy-temporary", false))
 }
 
-fn validated_page_removal_paths(
-    book: &Book,
-    library: &Library,
-) -> Result<(PathBuf, PathBuf, PathBuf, PathBuf, PathBuf), WorkError> {
+fn validated_page_removal_paths(book: &Book, library: &Library) -> Result<PageRemovalPaths, WorkError> {
     let source = book
         .url
         .to_file_path()
@@ -408,10 +572,278 @@ fn validated_page_removal_paths(
     }
     let temporary = parent.join(format!(".komga-page-remove-{}.tmp", book.id));
     let backup = parent.join(format!(".komga-page-remove-{}.bak", book.id));
+    let journal = parent.join(format!(".komga-page-remove-{}.json", book.id));
     ensure_managed_path(&source, &parent, &root)?;
     ensure_managed_path(&temporary, &parent, &root)?;
     ensure_managed_path(&backup, &parent, &root)?;
-    Ok((root, source, parent, temporary, backup))
+    ensure_managed_path(&journal, &parent, &root)?;
+    Ok(PageRemovalPaths {
+        root,
+        source,
+        parent,
+        temporary,
+        backup,
+        journal,
+    })
+}
+
+fn page_removal_artifacts_exist(book: &Book) -> Result<bool, WorkError> {
+    let source = book
+        .url
+        .to_file_path()
+        .map_err(|()| WorkError::terminal("book URL is not a local file"))?;
+    let parent = source
+        .parent()
+        .ok_or_else(|| WorkError::terminal("book source has no parent directory"))?;
+    for extension in ["tmp", "bak", "json"] {
+        let path = parent.join(format!(".komga-page-remove-{}.{extension}", book.id));
+        match fs::symlink_metadata(path) {
+            Ok(_) => return Ok(true),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(WorkError::retry(error)),
+        }
+    }
+    Ok(false)
+}
+
+impl PageRemovalJournal {
+    fn new(
+        book: &Book,
+        media: &Media,
+        rewrite: &PageRemovalRewrite,
+        paths: &PageRemovalPaths,
+    ) -> Result<Self, WorkError> {
+        let source_file_name = paths
+            .source
+            .file_name()
+            .and_then(|value| value.to_str())
+            .ok_or_else(|| WorkError::terminal("page-removal source filename is not valid UTF-8"))?
+            .to_owned();
+        let media_type = media
+            .media_type
+            .as_deref()
+            .ok_or_else(|| WorkError::terminal("page-removal media type is missing"))?
+            .to_owned();
+        let journal = Self {
+            version: PAGE_REMOVAL_JOURNAL_VERSION,
+            book_id: book.id.clone(),
+            source_file_name,
+            media_type,
+            old: PageRemovalJournalSnapshot {
+                file_size: book.file_size,
+                file_last_modified: book.file_last_modified,
+                page_count: media.page_count,
+                fingerprint: rewrite.source_fingerprint.clone(),
+            },
+            new: PageRemovalJournalSnapshot {
+                file_size: rewrite.book.file_size,
+                file_last_modified: rewrite.book.file_last_modified,
+                page_count: rewrite.media.page_count,
+                fingerprint: rewrite.output_fingerprint.clone(),
+            },
+        };
+        validate_page_removal_journal(&journal, paths)?;
+        Ok(journal)
+    }
+}
+
+fn validate_page_removal_journal(journal: &PageRemovalJournal, paths: &PageRemovalPaths) -> Result<(), WorkError> {
+    let source_file_name = paths.source.file_name().and_then(|value| value.to_str());
+    let valid_fingerprint = |value: &str| {
+        value.len() == 32
+            && value
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    };
+    if journal.version != PAGE_REMOVAL_JOURNAL_VERSION
+        || journal.book_id.is_empty()
+        || source_file_name != Some(journal.source_file_name.as_str())
+        || !matches!(journal.media_type.as_str(), ZIP_MEDIA_TYPE | PDF_MEDIA_TYPE)
+        || journal.old.file_size < 0
+        || journal.new.file_size < 0
+        || journal.old.page_count <= 0
+        || journal.new.page_count <= 0
+        || journal.new.page_count >= journal.old.page_count
+        || !valid_fingerprint(&journal.old.fingerprint)
+        || !valid_fingerprint(&journal.new.fingerprint)
+        || journal.old.fingerprint == journal.new.fingerprint
+    {
+        return Err(WorkError::terminal("page-removal journal is invalid or unsupported"));
+    }
+    Ok(())
+}
+
+fn write_page_removal_journal(paths: &PageRemovalPaths, journal: &PageRemovalJournal) -> Result<(), WorkError> {
+    let content = serde_json::to_vec(journal)
+        .map_err(|error| WorkError::terminal(format!("could not serialize page-removal journal: {error}")))?;
+    if u64::try_from(content.len()).unwrap_or(u64::MAX) > MAX_PAGE_REMOVAL_JOURNAL_BYTES {
+        return Err(WorkError::terminal("page-removal journal exceeds its size limit"));
+    }
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&paths.journal)
+        .map_err(WorkError::retry)?;
+    file.write_all(&content).map_err(WorkError::retry)?;
+    file.sync_all().map_err(WorkError::retry)?;
+    sync_directory(&paths.parent).map_err(WorkError::retry)
+}
+
+fn read_page_removal_journal(paths: &PageRemovalPaths) -> Result<PageRemovalJournal, WorkError> {
+    validate_regular_file(&paths.journal, Some(&paths.root))?;
+    let metadata = fs::metadata(&paths.journal).map_err(WorkError::retry)?;
+    if metadata.len() > MAX_PAGE_REMOVAL_JOURNAL_BYTES {
+        return Err(WorkError::terminal("page-removal journal exceeds its size limit"));
+    }
+    let mut content = Vec::with_capacity(usize::try_from(metadata.len()).unwrap_or(0));
+    File::open(&paths.journal)
+        .map_err(WorkError::retry)?
+        .take(MAX_PAGE_REMOVAL_JOURNAL_BYTES + 1)
+        .read_to_end(&mut content)
+        .map_err(WorkError::retry)?;
+    if u64::try_from(content.len()).unwrap_or(u64::MAX) > MAX_PAGE_REMOVAL_JOURNAL_BYTES {
+        return Err(WorkError::terminal("page-removal journal exceeds its size limit"));
+    }
+    let journal = serde_json::from_slice::<PageRemovalJournal>(&content)
+        .map_err(|error| WorkError::terminal(format!("page-removal journal is corrupt: {error}")))?;
+    if journal.book_id
+        != paths
+            .journal
+            .file_name()
+            .and_then(|value| value.to_str())
+            .and_then(|name| name.strip_prefix(".komga-page-remove-"))
+            .and_then(|name| name.strip_suffix(".json"))
+            .unwrap_or_default()
+    {
+        return Err(WorkError::terminal(
+            "page-removal journal book ID conflicts with its path",
+        ));
+    }
+    validate_page_removal_journal(&journal, paths)?;
+    Ok(journal)
+}
+
+fn journal_database_state(
+    book: &Book,
+    media: &Media,
+    journal: &PageRemovalJournal,
+) -> Result<JournalDatabaseState, WorkError> {
+    if book.id != journal.book_id || media.media_type.as_deref() != Some(journal.media_type.as_str()) {
+        return Err(WorkError::terminal(
+            "page-removal journal conflicts with the database book or media",
+        ));
+    }
+    let old = journal_snapshot_matches_database(book, media, &journal.old);
+    let new = journal_snapshot_matches_database(book, media, &journal.new);
+    match (old, new) {
+        (true, false) => Ok(JournalDatabaseState::Old),
+        (false, true) => Ok(JournalDatabaseState::New),
+        _ => Err(WorkError::terminal(
+            "page-removal journal cannot be matched uniquely to the database snapshot",
+        )),
+    }
+}
+
+fn journal_snapshot_matches_database(book: &Book, media: &Media, snapshot: &PageRemovalJournalSnapshot) -> bool {
+    book.file_size == snapshot.file_size
+        && book.file_last_modified == snapshot.file_last_modified
+        && media.page_count == snapshot.page_count
+}
+
+fn journal_file_state(path: &Path, root: &Path, journal: &PageRemovalJournal) -> Result<JournalFileState, WorkError> {
+    if !path_exists(path)? {
+        return Ok(JournalFileState::Missing);
+    }
+    validate_regular_file(path, Some(root))?;
+    let metadata = fs::metadata(path).map_err(WorkError::retry)?;
+    let size = i64::try_from(metadata.len()).unwrap_or(i64::MAX);
+    let timestamp = updated_time(&metadata);
+    let fingerprint = fingerprint_file(path)?;
+    let matches = |snapshot: &PageRemovalJournalSnapshot| {
+        size == snapshot.file_size && timestamp == snapshot.file_last_modified && fingerprint == snapshot.fingerprint
+    };
+    match (matches(&journal.old), matches(&journal.new)) {
+        (true, false) => Ok(JournalFileState::Old),
+        (false, true) => Ok(JournalFileState::New),
+        _ => Ok(JournalFileState::Unknown),
+    }
+}
+
+fn recover_journal_artifacts(
+    paths: &PageRemovalPaths,
+    journal: &PageRemovalJournal,
+    database: JournalDatabaseState,
+) -> Result<&'static str, WorkError> {
+    let source = journal_file_state(&paths.source, &paths.root, journal)?;
+    let backup = journal_file_state(&paths.backup, &paths.root, journal)?;
+    let temporary = journal_file_state(&paths.temporary, &paths.root, journal)?;
+    if source == JournalFileState::Unknown
+        || !matches!(backup, JournalFileState::Missing | JournalFileState::Old)
+        || !matches!(temporary, JournalFileState::Missing | JournalFileState::New)
+    {
+        return Err(WorkError::terminal(
+            "page-removal artifact fingerprint conflicts with its journal role",
+        ));
+    }
+
+    let action = match database {
+        JournalDatabaseState::Old => match (source, backup) {
+            (JournalFileState::Old, _) => "keep-old",
+            (JournalFileState::New, JournalFileState::Old) => {
+                remove_regular_file_synced(&paths.source, &paths.parent)?;
+                rename_synced(&paths.backup, &paths.source, &paths.parent)?;
+                "restore-old"
+            }
+            (JournalFileState::Missing, JournalFileState::Old) => {
+                rename_synced(&paths.backup, &paths.source, &paths.parent)?;
+                "restore-old"
+            }
+            _ => {
+                return Err(WorkError::terminal(
+                    "old database snapshot has no matching page-removal source",
+                ));
+            }
+        },
+        JournalDatabaseState::New => match (source, temporary) {
+            (JournalFileState::New, _) => "keep-new",
+            (JournalFileState::Old, JournalFileState::New) => {
+                remove_regular_file_synced(&paths.source, &paths.parent)?;
+                rename_synced(&paths.temporary, &paths.source, &paths.parent)?;
+                "install-new"
+            }
+            (JournalFileState::Missing, JournalFileState::New) => {
+                rename_synced(&paths.temporary, &paths.source, &paths.parent)?;
+                "install-new"
+            }
+            _ => {
+                return Err(WorkError::terminal(
+                    "new database snapshot has no matching page-removal source",
+                ));
+            }
+        },
+    };
+
+    let expected = match database {
+        JournalDatabaseState::Old => JournalFileState::Old,
+        JournalDatabaseState::New => JournalFileState::New,
+    };
+    if journal_file_state(&paths.source, &paths.root, journal)? != expected {
+        return Err(WorkError::terminal(
+            "recovered page-removal source does not match the database fingerprint",
+        ));
+    }
+    remove_regular_file_synced(&paths.temporary, &paths.parent)?;
+    remove_regular_file_synced(&paths.backup, &paths.parent)?;
+    remove_regular_file_synced(&paths.journal, &paths.parent)?;
+    Ok(action)
+}
+
+fn fingerprint_file(path: &Path) -> Result<String, WorkError> {
+    hash_file(path, || false).map_err(|error| match error {
+        FileHashError::Io(error) => WorkError::retry(error),
+        FileHashError::Cancelled => WorkError::retry("page-removal artifact hashing was cancelled"),
+        FileHashError::InvalidSource(message) | FileHashError::SourceChanged(message) => WorkError::terminal(message),
+    })
 }
 
 fn ensure_managed_path(path: &Path, parent: &Path, root: &Path) -> Result<(), WorkError> {
@@ -487,12 +919,26 @@ fn remove_regular_file(path: &Path) -> Result<(), WorkError> {
     }
 }
 
+fn remove_regular_file_synced(path: &Path, parent: &Path) -> Result<(), WorkError> {
+    let existed = path_exists(path)?;
+    remove_regular_file(path)?;
+    if existed {
+        sync_directory(parent).map_err(WorkError::retry)?;
+    }
+    Ok(())
+}
+
+fn rename_synced(source: &Path, destination: &Path, parent: &Path) -> Result<(), WorkError> {
+    fs::rename(source, destination).map_err(WorkError::retry)?;
+    sync_directory(parent).map_err(WorkError::retry)
+}
+
 fn sync_directory(path: &Path) -> io::Result<()> {
     File::open(path)?.sync_all()
 }
 
 #[derive(Debug)]
-struct WorkError {
+pub(super) struct WorkError {
     message: String,
     outcome: TaskOutcome,
 }
@@ -840,6 +1286,83 @@ mod tests {
         }
         assert!(!series.join(format!(".komga-page-remove-{}.tmp", book.id)).exists());
         assert!(!series.join(format!(".komga-page-remove-{}.bak", book.id)).exists());
+        assert!(!series.join(format!(".komga-page-remove-{}.json", book.id)).exists());
+    }
+
+    #[test]
+    fn journal_recovery_uses_database_snapshot_and_file_fingerprints() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("library");
+        fs::create_dir_all(&root).unwrap();
+        let library = Library::new("Library".into(), Url::from_directory_path(&root).unwrap());
+        let source = root.join("journal.cbz");
+        fs::write(&source, b"old-source-snapshot").unwrap();
+        let old_book = book_for_path(&source, &library);
+        let mut old_media = legacy_media(&old_book);
+        old_media.page_count = 3;
+        let paths = validated_page_removal_paths(&old_book, &library).unwrap();
+
+        fs::write(&paths.temporary, b"new-source").unwrap();
+        let (journal, _, _) = journal_for_temporary(&old_book, &old_media, &paths, 2);
+        write_page_removal_journal(&paths, &journal).unwrap();
+        recover_page_removal_artifacts(&old_book, &old_media, &library, "test-journal-only", false).unwrap();
+        assert_eq!(fs::read(&source).unwrap(), b"old-source-snapshot");
+        assert!(!paths.backup.exists() && !paths.temporary.exists() && !paths.journal.exists());
+
+        fs::write(&paths.temporary, b"new-source").unwrap();
+        let (journal, _, _) = journal_for_temporary(&old_book, &old_media, &paths, 2);
+        write_page_removal_journal(&paths, &journal).unwrap();
+        fs::rename(&paths.source, &paths.backup).unwrap();
+        recover_page_removal_artifacts(&old_book, &old_media, &library, "test-backup-only", false).unwrap();
+        assert_eq!(fs::read(&source).unwrap(), b"old-source-snapshot");
+        assert!(!paths.backup.exists() && !paths.temporary.exists() && !paths.journal.exists());
+
+        fs::write(&paths.temporary, b"new-source").unwrap();
+        let (journal, _, _) = journal_for_temporary(&old_book, &old_media, &paths, 2);
+        write_page_removal_journal(&paths, &journal).unwrap();
+        fs::rename(&paths.source, &paths.backup).unwrap();
+        fs::rename(&paths.temporary, &paths.source).unwrap();
+
+        recover_page_removal_artifacts(&old_book, &old_media, &library, "test-old", false).unwrap();
+        assert_eq!(fs::read(&source).unwrap(), b"old-source-snapshot");
+        assert!(!paths.backup.exists() && !paths.temporary.exists() && !paths.journal.exists());
+
+        fs::write(&paths.temporary, b"new-source").unwrap();
+        let (journal, new_book, new_media) = journal_for_temporary(&old_book, &old_media, &paths, 2);
+        write_page_removal_journal(&paths, &journal).unwrap();
+        fs::rename(&paths.source, &paths.backup).unwrap();
+        fs::rename(&paths.temporary, &paths.source).unwrap();
+        fs::remove_file(&paths.backup).unwrap();
+
+        recover_page_removal_artifacts(&new_book, &new_media, &library, "test-new", false).unwrap();
+        assert_eq!(fs::read(&source).unwrap(), b"new-source");
+        assert!(!paths.backup.exists() && !paths.temporary.exists() && !paths.journal.exists());
+    }
+
+    #[test]
+    fn corrupt_journal_and_unknown_fingerprints_are_preserved_as_conflicts() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("library");
+        fs::create_dir_all(&root).unwrap();
+        let library = Library::new("Library".into(), Url::from_directory_path(&root).unwrap());
+        let source = root.join("corrupt.cbz");
+        fs::write(&source, b"old-source").unwrap();
+        let book = book_for_path(&source, &library);
+        let mut media = legacy_media(&book);
+        media.page_count = 2;
+        let paths = validated_page_removal_paths(&book, &library).unwrap();
+        fs::write(&paths.journal, b"{").unwrap();
+
+        assert!(recover_page_removal_artifacts(&book, &media, &library, "test", false).is_err());
+        assert!(paths.journal.exists());
+
+        fs::remove_file(&paths.journal).unwrap();
+        fs::write(&paths.temporary, b"new-source").unwrap();
+        let (journal, _, _) = journal_for_temporary(&book, &media, &paths, 1);
+        write_page_removal_journal(&paths, &journal).unwrap();
+        fs::write(&paths.temporary, b"unknown-source-with-different-bytes").unwrap();
+        assert!(recover_page_removal_artifacts(&book, &media, &library, "test", false).is_err());
+        assert!(paths.journal.exists() && paths.temporary.exists());
     }
 
     #[test]
@@ -855,7 +1378,7 @@ mod tests {
         let (temporary_path, backup) = artifact_paths(&book);
         fs::rename(&source, &backup).unwrap();
         fs::write(&temporary_path, b"new").unwrap();
-        recover_page_removal_artifacts(&book, &library).unwrap();
+        recover_page_removal_artifacts(&book, &legacy_media(&book), &library, "test", false).unwrap();
         assert_eq!(fs::read(&source).unwrap(), b"original");
         assert!(!temporary_path.exists() && !backup.exists());
 
@@ -865,7 +1388,7 @@ mod tests {
         let (_, backup) = artifact_paths(&book);
         fs::rename(&source, &backup).unwrap();
         fs::write(&source, b"uncommitted-new-source").unwrap();
-        recover_page_removal_artifacts(&book, &library).unwrap();
+        recover_page_removal_artifacts(&book, &legacy_media(&book), &library, "test", false).unwrap();
         assert_eq!(fs::read(&source).unwrap(), b"old-source");
         assert!(!backup.exists());
 
@@ -877,7 +1400,8 @@ mod tests {
         fs::write(&source, b"committed-new-source").unwrap();
         fs::write(&temporary_path, b"leftover").unwrap();
         let committed_book = book_for_path_with_id(&source, &library, &old_book.id);
-        recover_page_removal_artifacts(&committed_book, &library).unwrap();
+        recover_page_removal_artifacts(&committed_book, &legacy_media(&committed_book), &library, "test", false)
+            .unwrap();
         assert_eq!(fs::read(&source).unwrap(), b"committed-new-source");
         assert!(!temporary_path.exists() && !backup.exists());
     }
@@ -896,13 +1420,16 @@ mod tests {
         fs::write(&backup, b"changed-backup").unwrap();
         fs::write(&source, b"changed-source-with-another-size").unwrap();
 
-        assert!(recover_page_removal_artifacts(&book, &library).is_err());
+        assert!(recover_page_removal_artifacts(&book, &legacy_media(&book), &library, "test", false).is_err());
         assert!(source.exists() && backup.exists());
 
         let outside = temporary.path().join("outside.cbz");
         fs::write(&outside, b"outside").unwrap();
         let outside_book = book_for_path(&outside, &library);
-        assert!(recover_page_removal_artifacts(&outside_book, &library).is_err());
+        assert!(
+            recover_page_removal_artifacts(&outside_book, &legacy_media(&outside_book), &library, "test", false,)
+                .is_err()
+        );
         assert!(outside.exists());
     }
 
@@ -920,7 +1447,7 @@ mod tests {
         fs::write(&real, b"source").unwrap();
         symlink(&real, &source).unwrap();
         let book = book_for_path(&source, &library);
-        assert!(recover_page_removal_artifacts(&book, &library).is_err());
+        assert!(recover_page_removal_artifacts(&book, &legacy_media(&book), &library, "test", false).is_err());
         assert!(fs::symlink_metadata(&source).unwrap().file_type().is_symlink());
 
         let regular = root.join("regular.cbz");
@@ -928,8 +1455,17 @@ mod tests {
         let book = book_for_path(&regular, &library);
         let (temporary_path, _) = artifact_paths(&book);
         symlink(&real, &temporary_path).unwrap();
-        assert!(recover_page_removal_artifacts(&book, &library).is_err());
+        assert!(recover_page_removal_artifacts(&book, &legacy_media(&book), &library, "test", false).is_err());
         assert!(fs::symlink_metadata(&temporary_path).unwrap().file_type().is_symlink());
+        fs::remove_file(&temporary_path).unwrap();
+
+        let journal = regular
+            .parent()
+            .unwrap()
+            .join(format!(".komga-page-remove-{}.json", book.id));
+        symlink(&real, &journal).unwrap();
+        assert!(recover_page_removal_artifacts(&book, &legacy_media(&book), &library, "test", false).is_err());
+        assert!(fs::symlink_metadata(&journal).unwrap().file_type().is_symlink());
     }
 
     fn colored_pdf(page_count: usize) -> Vec<u8> {
@@ -974,6 +1510,51 @@ mod tests {
 
     fn book_for_path(path: &Path, library: &Library) -> Book {
         book_for_path_with_id(path, library, &komga_core::new_id())
+    }
+
+    fn legacy_media(book: &Book) -> Media {
+        let mut media = Media::result(
+            book.id.as_str(),
+            komga_core::MediaStatus::Ready,
+            Some(ZIP_MEDIA_TYPE.into()),
+            None,
+        );
+        media.page_count = 1;
+        media
+    }
+
+    fn journal_for_temporary(
+        old_book: &Book,
+        old_media: &Media,
+        paths: &PageRemovalPaths,
+        new_page_count: i32,
+    ) -> (PageRemovalJournal, Book, Media) {
+        let metadata = fs::metadata(&paths.temporary).unwrap();
+        let mut new_book = old_book.clone();
+        new_book.file_size = i64::try_from(metadata.len()).unwrap();
+        new_book.file_last_modified = updated_time(&metadata);
+        let mut new_media = old_media.clone();
+        new_media.page_count = new_page_count;
+        let journal = PageRemovalJournal {
+            version: PAGE_REMOVAL_JOURNAL_VERSION,
+            book_id: old_book.id.clone(),
+            source_file_name: paths.source.file_name().unwrap().to_str().unwrap().into(),
+            media_type: old_media.media_type.clone().unwrap(),
+            old: PageRemovalJournalSnapshot {
+                file_size: old_book.file_size,
+                file_last_modified: old_book.file_last_modified,
+                page_count: old_media.page_count,
+                fingerprint: hash_file(&paths.source, || false).unwrap(),
+            },
+            new: PageRemovalJournalSnapshot {
+                file_size: new_book.file_size,
+                file_last_modified: new_book.file_last_modified,
+                page_count: new_media.page_count,
+                fingerprint: hash_file(&paths.temporary, || false).unwrap(),
+            },
+        };
+        validate_page_removal_journal(&journal, paths).unwrap();
+        (journal, new_book, new_media)
     }
 
     fn book_for_path_with_id(path: &Path, library: &Library, id: &str) -> Book {

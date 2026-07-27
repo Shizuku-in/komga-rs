@@ -5,12 +5,12 @@ use std::{
     path::Path,
 };
 
-use image::{ImageFormat, ImageReader};
+use image::{ImageFormat, ImageReader, RgbImage};
 use md5::{Digest, Md5};
 use thiserror::Error;
 use xxhash_rust::xxh3::Xxh3;
 
-use komga_core::{Book, ScanResult};
+use komga_core::{Book, Dimension, ScanResult};
 
 const BUFFER_SIZE: usize = 8_192;
 const KOREADER_SAMPLE_SIZE: usize = 1_024;
@@ -147,11 +147,7 @@ pub fn hash_page(content: &[u8], media_type: &str) -> Result<ComputedPageHash, P
             .decode()
             .map_err(|error| PageHashError::InvalidJpeg(error.to_string()))?
             .to_rgb8();
-        hasher.update(RGB_PAGE_HASH_HEADER);
-        hasher.update(&image.width().to_le_bytes());
-        hasher.update(&image.height().to_le_bytes());
-        hasher.update(image.as_raw());
-        RGB_PAGE_HASH_ALGORITHM
+        return Ok(hash_rgb_page(&image).0);
     } else {
         hasher.update(content);
         RAW_PAGE_HASH_ALGORITHM
@@ -160,6 +156,36 @@ pub fn hash_page(content: &[u8], media_type: &str) -> Result<ComputedPageHash, P
         hash: format!("{:032x}", hasher.digest128()),
         algorithm,
     })
+}
+
+pub(crate) fn hash_jpeg_page(content: &[u8]) -> Result<(ComputedPageHash, Dimension), PageHashError> {
+    let image = ImageReader::with_format(std::io::Cursor::new(content), ImageFormat::Jpeg)
+        .decode()
+        .map_err(|error| PageHashError::InvalidJpeg(error.to_string()))?
+        .to_rgb8();
+    Ok(hash_rgb_page(&image))
+}
+
+fn hash_rgb_page(image: &RgbImage) -> (ComputedPageHash, Dimension) {
+    let mut hasher = Xxh3::with_seed(0);
+    hasher.update(RGB_PAGE_HASH_HEADER);
+    hasher.update(&image.width().to_le_bytes());
+    hasher.update(&image.height().to_le_bytes());
+    hasher.update(image.as_raw());
+    (
+        ComputedPageHash {
+            hash: format!("{:032x}", hasher.digest128()),
+            algorithm: RGB_PAGE_HASH_ALGORITHM,
+        },
+        Dimension {
+            width: i32::try_from(image.width()).unwrap_or(i32::MAX),
+            height: i32::try_from(image.height()).unwrap_or(i32::MAX),
+        },
+    )
+}
+
+pub(crate) fn hash_bytes(content: &[u8]) -> String {
+    format!("{:032x}", xxhash_rust::xxh3::xxh3_128_with_seed(content, 0))
 }
 
 /// Recomputes hashes needed to distinguish timestamp-only scan changes.
@@ -300,9 +326,15 @@ mod tests {
         ];
 
         for (directory, expected) in vectors {
-            let first = hash_page(&fs::read(fixture(directory, "1.jpg")).unwrap(), "image/jpeg").unwrap();
+            let first_content = fs::read(fixture(directory, "1.jpg")).unwrap();
+            let first = hash_page(&first_content, "image/jpeg").unwrap();
             let second = hash_page(&fs::read(fixture(directory, "2.jpg")).unwrap(), "image/jpeg").unwrap();
+            let (detailed, dimension) = hash_jpeg_page(&first_content).unwrap();
             assert_eq!(first, second);
+            assert_eq!(detailed, first);
+            let decoded = image::load_from_memory(&first_content).unwrap();
+            assert_eq!(dimension.width, i32::try_from(decoded.width()).unwrap());
+            assert_eq!(dimension.height, i32::try_from(decoded.height()).unwrap());
             assert_eq!(first.hash, expected);
             assert_eq!(first.algorithm, RGB_PAGE_HASH_ALGORITHM);
         }

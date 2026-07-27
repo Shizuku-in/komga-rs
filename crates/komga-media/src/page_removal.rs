@@ -18,6 +18,10 @@ pub struct PageRemovalRewrite {
     pub retained_original_indices: Vec<usize>,
     /// Whether the original first page was removed.
     pub removed_first_page: bool,
+    /// XXH3-128 fingerprint of the source snapshot that was rewritten.
+    pub source_fingerprint: String,
+    /// XXH3-128 fingerprint of the validated rewritten output.
+    pub output_fingerprint: String,
 }
 
 /// Failures produced while validating and rewriting hashed pages.

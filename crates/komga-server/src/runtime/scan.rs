@@ -19,13 +19,25 @@ pub(super) async fn process_scan_task(state: &AppState, task: &TaskRecord) -> Ta
             return TaskOutcome::Retry;
         }
     };
+    let deferred_page_removal_recovery = if payload.scan_deep {
+        match super::duplicate_pages::recover_library_page_removal_artifacts(state, &library, "deep-scan-before", true)
+            .await
+        {
+            Ok(deferred) => deferred,
+            Err(outcome) => return outcome,
+        }
+    } else {
+        false
+    };
     let empty_trash_after_scan = library.empty_trash_after_scan;
     let hash_files = library.hash_files;
     let hash_koreader = library.hash_koreader;
     let repair_extensions = library.repair_extensions;
     let convert_to_cbz = library.convert_to_cbz;
     let cancellation = state.shutdown.clone();
-    let scan = tokio::task::spawn_blocking(move || scan_library_files(&library, || cancellation.is_cancelled())).await;
+    let scanned_library = library.clone();
+    let scan =
+        tokio::task::spawn_blocking(move || scan_library_files(&scanned_library, || cancellation.is_cancelled())).await;
     let mut scan = match scan {
         Ok(Ok(scan)) => scan,
         Ok(Err(ScanError::Cancelled)) => return TaskOutcome::Cancelled,
@@ -85,6 +97,17 @@ pub(super) async fn process_scan_task(state: &AppState, task: &TaskRecord) -> Ta
     {
         Ok(stats) => {
             tracing::info!(library_id = %payload.library_id, ?stats, "library scan completed");
+            if deferred_page_removal_recovery
+                && let Err(outcome) = super::duplicate_pages::recover_library_page_removal_artifacts(
+                    state,
+                    &library,
+                    "deep-scan-after",
+                    false,
+                )
+                .await
+            {
+                return outcome;
+            }
             if stats.library_became_available {
                 state.publish_domain_event(DomainEvent::LibraryUpdated(LibraryEvent {
                     library_id: payload.library_id.clone(),
@@ -300,5 +323,82 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(artwork.len(), 2);
         assert!(artwork.iter().all(|task| task.priority == 4));
+    }
+
+    #[tokio::test]
+    async fn deep_scan_defers_legacy_temporary_until_the_new_snapshot_is_committed() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("library");
+        let series = root.join("Series");
+        fs::create_dir_all(&series).unwrap();
+        let source = series.join("Book.cbz");
+        fs::write(&source, b"old").unwrap();
+        let mut library = Library::new("Library".into(), Url::from_directory_path(&root).unwrap());
+        library.scan_interval = ScanInterval::Disabled;
+        let storage = Storage::connect_memory().await.unwrap();
+        let tasks = TaskStorage::connect_memory().await.unwrap();
+        storage.create_library(&library).await.unwrap();
+        let state = AppState::new(storage.clone(), tasks).await.unwrap();
+        assert_eq!(
+            process_scan_task(&state, &TaskRecord::scan_library(&library.id, false, 0)).await,
+            TaskOutcome::Completed
+        );
+        let book = storage
+            .list_active_books_by_library_id(&library.id)
+            .await
+            .unwrap()
+            .remove(0);
+        let artifact = series.join(format!(".komga-page-remove-{}.tmp", book.id));
+        fs::write(&artifact, b"orphan-temporary").unwrap();
+        fs::write(&source, b"new-source-with-a-different-size").unwrap();
+
+        assert_eq!(
+            process_scan_task(&state, &TaskRecord::scan_library(&library.id, true, 0)).await,
+            TaskOutcome::Completed
+        );
+
+        let saved = storage.find_book_by_id(&book.id).await.unwrap().unwrap();
+        assert_eq!(
+            saved.file_size,
+            i64::try_from(fs::metadata(&source).unwrap().len()).unwrap()
+        );
+        assert!(!artifact.exists());
+    }
+
+    #[tokio::test]
+    async fn corrupt_page_removal_journal_blocks_deep_scan_database_changes() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("library");
+        let series = root.join("Series");
+        fs::create_dir_all(&series).unwrap();
+        let source = series.join("Book.cbz");
+        fs::write(&source, b"old").unwrap();
+        let mut library = Library::new("Library".into(), Url::from_directory_path(&root).unwrap());
+        library.scan_interval = ScanInterval::Disabled;
+        let storage = Storage::connect_memory().await.unwrap();
+        let tasks = TaskStorage::connect_memory().await.unwrap();
+        storage.create_library(&library).await.unwrap();
+        let state = AppState::new(storage.clone(), tasks).await.unwrap();
+        assert_eq!(
+            process_scan_task(&state, &TaskRecord::scan_library(&library.id, false, 0)).await,
+            TaskOutcome::Completed
+        );
+        let book = storage
+            .list_active_books_by_library_id(&library.id)
+            .await
+            .unwrap()
+            .remove(0);
+        let journal = series.join(format!(".komga-page-remove-{}.json", book.id));
+        fs::write(&journal, b"{").unwrap();
+        fs::write(&source, b"new-source-with-a-different-size").unwrap();
+
+        assert_eq!(
+            process_scan_task(&state, &TaskRecord::scan_library(&library.id, true, 0)).await,
+            TaskOutcome::Retry
+        );
+
+        let saved = storage.find_book_by_id(&book.id).await.unwrap().unwrap();
+        assert_eq!(saved.file_size, book.file_size);
+        assert!(journal.exists());
     }
 }

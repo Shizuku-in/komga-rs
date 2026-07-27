@@ -144,6 +144,7 @@ pub fn rewrite_hashed_zip_pages(
     if cancelled() {
         return Err(PageRemovalError::Cancelled);
     }
+    let output_fingerprint = source_fingerprint(output, &cancelled)?;
     let current_metadata = fs::metadata(&path)?;
     ensure_same_metadata(&initial_metadata, &current_metadata, &path)?;
     let current_fingerprint = source_fingerprint(&path, &cancelled)?;
@@ -165,6 +166,8 @@ pub fn rewrite_hashed_zip_pages(
         removed: targets.to_vec(),
         retained_original_indices,
         removed_first_page: targets.iter().any(|target| target.page_number == 1),
+        source_fingerprint: initial_fingerprint,
+        output_fingerprint,
     };
     output_guard.keep();
     Ok(result)

@@ -7,14 +7,10 @@ use std::{
 };
 
 use chrono::{DateTime, Local};
-use hayro::hayro_syntax::Pdf;
-use image::GenericImageView;
 use komga_core::{Book, HashedPageTarget, JPEG_MEDIA_TYPE, Media, MediaProfile, MediaStatus, PDF_MEDIA_TYPE};
-use url::Url;
 
 use crate::{
-    FileHashError, MediaAnalysisError, PageRemovalError, PageRemovalRewrite, analyze_book, hash_file, hash_page,
-    page_removal::CreatedOutput, pdf,
+    FileHashError, PageRemovalError, PageRemovalRewrite, PdfPageRenderer, hash_file, page_removal::CreatedOutput, pdf,
 };
 
 /// Writes a validated PDF containing every page except the snapshot-bound
@@ -60,10 +56,9 @@ pub fn rewrite_hashed_pdf_pages(
     }
     let initial_metadata = fs::metadata(&source)?;
     ensure_book_snapshot(book, &initial_metadata)?;
-    let initial_fingerprint = source_fingerprint(&source, &cancelled)?;
-    let bytes = fs::read(&source)?;
-    let document = Pdf::new(bytes).map_err(|error| PageRemovalError::Pdf(format!("invalid source PDF: {error:?}")))?;
-    if document.pages().len() != media.pages.len() {
+    let source_renderer = PdfPageRenderer::open(&source).map_err(media_error)?;
+    let initial_fingerprint = source_renderer.fingerprint().to_owned();
+    if source_renderer.page_count() != media.pages.len() {
         return Err(PageRemovalError::Stale(
             "PDF page count no longer matches analyzed media".into(),
         ));
@@ -108,8 +103,8 @@ pub fn rewrite_hashed_pdf_pages(
             return Err(PageRemovalError::Cancelled);
         }
         let index = usize::try_from(target.page_number - 1).expect("validated positive page number");
-        let rendered = pdf::render_page(&source, index).map_err(media_error)?;
-        if hash_page(&rendered.bytes, &rendered.media_type)?.hash != target.file_hash {
+        let rendered = source_renderer.render_page_with_hash(index).map_err(media_error)?;
+        if rendered.hash.hash != target.file_hash {
             return Err(PageRemovalError::Stale(format!(
                 "rendered hash changed for page {}",
                 target.page_number
@@ -119,7 +114,9 @@ pub fn rewrite_hashed_pdf_pages(
     let retained_original_indices = (0..media.pages.len())
         .filter(|index| !target_indices.contains(index))
         .collect::<Vec<_>>();
-    let rewritten_bytes = pdf::write_pages(&document, &retained_original_indices).map_err(media_error)?;
+    let rewritten_bytes = source_renderer
+        .write_pages(&retained_original_indices)
+        .map_err(media_error)?;
 
     let mut output_guard = CreatedOutput::new(output);
     let mut rewritten = OpenOptions::new().write(true).create_new(true).open(output)?;
@@ -133,16 +130,13 @@ pub fn rewrite_hashed_pdf_pages(
         }
 
         let rewritten_metadata = rewritten.metadata()?;
-        let mut temporary_book = book.clone();
-        temporary_book.url = Url::from_file_path(output)
-            .map_err(|()| PageRemovalError::Unsupported("output path cannot be represented as a URL".into()))?;
-        temporary_book.file_size = i64::try_from(rewritten_metadata.len()).unwrap_or(i64::MAX);
-        temporary_book.file_last_modified = scan_timestamp(&rewritten_metadata);
-        temporary_book.file_hash.clear();
-        temporary_book.file_hash_koreader.clear();
-        let mut created_media =
-            analyze_book(&temporary_book, analyze_dimensions, &cancelled).map_err(|error| match error {
-                MediaAnalysisError::Cancelled => PageRemovalError::Cancelled,
+        let output_renderer = PdfPageRenderer::open(output).map_err(media_error)?;
+        let mut created_media = output_renderer
+            .analyzed_media(&book.id, analyze_dimensions, &cancelled)
+            .map_err(|error| match error {
+                pdf::AnalysisError::Cancelled => PageRemovalError::Cancelled,
+                pdf::AnalysisError::Io(kind) => PageRemovalError::Io(std::io::Error::from(kind)),
+                pdf::AnalysisError::Invalid => PageRemovalError::Pdf("invalid rewritten PDF".into()),
             })?;
         if created_media.status != MediaStatus::Ready
             || created_media.profile() != Some(MediaProfile::Pdf)
@@ -160,17 +154,11 @@ pub fn rewrite_hashed_pdf_pages(
             if cancelled() {
                 return Err(PageRemovalError::Cancelled);
             }
-            let source_render = pdf::render_page(&source, original_index).map_err(media_error)?;
-            let output_render = pdf::render_page(output, new_index).map_err(media_error)?;
-            let source_hash = hash_page(&source_render.bytes, &source_render.media_type)?;
-            let output_hash = hash_page(&output_render.bytes, &output_render.media_type)?;
-            let source_dimensions = image::load_from_memory(&source_render.bytes)
-                .map_err(|error| PageRemovalError::Validation(error.to_string()))?
-                .dimensions();
-            let output_dimensions = image::load_from_memory(&output_render.bytes)
-                .map_err(|error| PageRemovalError::Validation(error.to_string()))?
-                .dimensions();
-            if source_hash != output_hash || source_dimensions != output_dimensions {
+            let source_render = source_renderer
+                .render_page_with_hash(original_index)
+                .map_err(media_error)?;
+            let output_render = output_renderer.render_page_with_hash(new_index).map_err(media_error)?;
+            if source_render.hash != output_render.hash || source_render.dimension != output_render.dimension {
                 return Err(PageRemovalError::Validation(format!(
                     "rewritten page {} does not render like original page {}",
                     new_index + 1,
@@ -201,6 +189,8 @@ pub fn rewrite_hashed_pdf_pages(
             removed: targets.to_vec(),
             retained_original_indices,
             removed_first_page: targets.iter().any(|target| target.page_number == 1),
+            source_fingerprint: initial_fingerprint,
+            output_fingerprint: output_renderer.fingerprint().to_owned(),
         })
     })();
     if result.is_ok() {
@@ -249,11 +239,13 @@ fn scan_timestamp(metadata: &Metadata) -> chrono::NaiveDateTime {
 
 #[cfg(test)]
 mod tests {
+    use hayro::hayro_syntax::Pdf;
     use pdf_writer::{Content, Finish, Rect, Ref};
+    use url::Url;
 
     use super::*;
-    use crate::extract_page;
-    use komga_core::new_id;
+    use crate::{analyze_book, extract_page, hash_page};
+    use komga_core::{Dimension, new_id};
 
     #[test]
     fn removes_pdf_pages_in_order_and_preserves_rendered_content() {
@@ -264,7 +256,9 @@ mod tests {
         let original_bytes = fs::read(&source).unwrap();
         let output = temporary.path().join("rewritten.tmp");
 
+        pdf::reset_pdf_counters();
         let rewrite = rewrite_hashed_pdf_pages(&book, &media, &[target(&media, 2)], &output, true, || false).unwrap();
+        assert_eq!(pdf::pdf_counters(), (2, 5));
 
         assert_eq!(fs::read(&source).unwrap(), original_bytes);
         assert_eq!(rewrite.retained_original_indices, [0, 2]);
@@ -350,6 +344,58 @@ mod tests {
             Err(PageRemovalError::Io(error)) if error.kind() == std::io::ErrorKind::AlreadyExists
         ));
         assert_eq!(fs::read(&output).unwrap(), b"existing output");
+    }
+
+    #[test]
+    fn reused_pdf_renderer_preserves_jpeg_hash_dimensions_and_bounds() {
+        let temporary = tempfile::tempdir().unwrap();
+        let source = temporary.path().join("book.pdf");
+        fs::write(&source, colored_pdf()).unwrap();
+
+        pdf::reset_pdf_counters();
+        let renderer = PdfPageRenderer::open(&source).unwrap();
+        let ordinary = renderer.render_page(0).unwrap();
+        let hashed = renderer.render_page_with_hash(0).unwrap();
+        let later_page = renderer.render_page_with_hash(2).unwrap();
+
+        assert_eq!(ordinary, hashed.content);
+        assert_eq!(hashed.hash, hash_page(&ordinary.bytes, &ordinary.media_type).unwrap());
+        let decoded = image::load_from_memory(&ordinary.bytes).unwrap();
+        assert_eq!(
+            hashed.dimension,
+            Dimension {
+                width: i32::try_from(decoded.width()).unwrap(),
+                height: i32::try_from(decoded.height()).unwrap(),
+            }
+        );
+        assert_ne!(hashed.hash.hash, later_page.hash.hash);
+        assert!(matches!(
+            renderer.render_page(renderer.page_count()),
+            Err(crate::MediaOperationError::PageOutOfBounds)
+        ));
+        assert_eq!(pdf::pdf_counters(), (1, 3));
+    }
+
+    #[test]
+    #[ignore = "manual benchmark: set KOMGA_PDF_BENCHMARK to a large PDF path"]
+    fn benchmark_large_pdf_renderer_reports_structural_counts() {
+        let path = std::env::var_os("KOMGA_PDF_BENCHMARK")
+            .map(std::path::PathBuf::from)
+            .expect("KOMGA_PDF_BENCHMARK must name a PDF");
+        pdf::reset_pdf_counters();
+        let started = std::time::Instant::now();
+        let renderer = PdfPageRenderer::open(&path).unwrap();
+        let page_count = renderer.page_count();
+        for index in 0..page_count {
+            renderer.render_page_with_hash(index).unwrap();
+        }
+        let (parse_count, render_count) = pdf::pdf_counters();
+        eprintln!(
+            "PDF benchmark: elapsed={:?} pages={page_count} parses={parse_count} renders={render_count}",
+            started.elapsed()
+        );
+        assert_eq!(parse_count, 1);
+        assert_eq!(render_count, page_count);
     }
 
     fn colored_pdf() -> Vec<u8> {

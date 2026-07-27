@@ -1,6 +1,8 @@
 use chrono::{DateTime, Local};
 use komga_core::{MediaStatus, PDF_MEDIA_TYPE, ZIP_MEDIA_TYPE};
-use komga_media::{MediaOperationError, PageHashError, RGB_PAGE_HASH_ALGORITHM, extract_page, hash_page};
+use komga_media::{
+    MediaOperationError, PageHashError, PdfPageRenderer, RGB_PAGE_HASH_ALGORITHM, extract_page, hash_page,
+};
 use komga_storage::PageHashUpdate;
 
 use super::*;
@@ -138,6 +140,11 @@ pub(super) async fn process_hash_book_pages_task(state: &AppState, task: &TaskRe
     let expected_modified = book.file_last_modified;
     let result = tokio::task::spawn_blocking(move || {
         let mut updates = Vec::with_capacity(targets.len());
+        let pdf_renderer = if hashing_media.media_type.as_deref() == Some(PDF_MEDIA_TYPE) {
+            Some(PdfPageRenderer::open(&path).map_err(PageHashWorkError::Media)?)
+        } else {
+            None
+        };
         for target in targets {
             if cancellation.is_cancelled() {
                 return Err(PageHashWorkError::Cancelled);
@@ -147,9 +154,16 @@ pub(super) async fn process_hash_book_pages_task(state: &AppState, task: &TaskRe
             if page.file_name != target.file_name || page.media_type != target.media_type {
                 return Err(PageHashWorkError::StaleSnapshot);
             }
-            let content = extract_page(&hashing_book, &hashing_media, target.number.saturating_add(1))
-                .map_err(PageHashWorkError::Media)?;
-            let computed = hash_page(&content.bytes, &content.media_type).map_err(PageHashWorkError::Hash)?;
+            let computed = if let Some(renderer) = &pdf_renderer {
+                renderer
+                    .render_page_with_hash(index)
+                    .map_err(PageHashWorkError::Media)?
+                    .hash
+            } else {
+                let content = extract_page(&hashing_book, &hashing_media, target.number.saturating_add(1))
+                    .map_err(PageHashWorkError::Media)?;
+                hash_page(&content.bytes, &content.media_type).map_err(PageHashWorkError::Hash)?
+            };
             updates.push(PageHashUpdate {
                 number: target.number,
                 file_name: target.file_name,

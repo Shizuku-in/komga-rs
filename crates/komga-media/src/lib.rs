@@ -34,6 +34,7 @@ pub use metadata::{
     extract_comic_info_metadata, extract_epub_metadata, extract_mylar_metadata,
 };
 pub use page_removal::{PageRemovalError, PageRemovalRewrite};
+pub use pdf::{HashedPdfPage, PdfPageRenderer};
 pub use pdf_edit::rewrite_hashed_pdf_pages;
 pub use rar_conversion::{RarToCbzConversion, RarToCbzError, convert_rar_to_cbz};
 pub use zip_edit::rewrite_hashed_zip_pages;
