@@ -2,11 +2,14 @@ import {spawn, spawnSync} from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import {stripVTControlCharacters} from 'node:util'
 
 import {createFixtures} from './fixtures'
 import {E2eState, statePath} from './state'
 
 const SERVER_READY_TIMEOUT_MS = 30_000
+const SERVER_READY_REQUEST_TIMEOUT_MS = 2_000
+const SERVER_READY_RESPONSE_LIMIT = 1_024
 
 export default async function globalSetup(): Promise<void> {
   const webuiRoot = path.resolve(__dirname, '..')
@@ -62,29 +65,52 @@ async function startServer(binary: string, configDirectory: string, contextPath:
 
   try {
     const deadline = Date.now() + SERVER_READY_TIMEOUT_MS
+    let lastReadyCheck = 'server has not logged a listening address'
     while (Date.now() < deadline) {
       if (child.exitCode !== null) {
         throw new Error(`server exited with status ${child.exitCode}: ${fs.readFileSync(logPath, 'utf8')}`)
       }
       const output = fs.readFileSync(logPath, 'utf8')
-      const match = output.match(/listening address=127\.0\.0\.1:(\d+)/)
+      const match = stripVTControlCharacters(output).match(/listening address=127\.0\.0\.1:(\d+)/)
       if (match) {
         const origin = `http://127.0.0.1:${match[1]}`
         const url = `${origin}${contextPath}`
+        const healthUrl = `${url}/actuator/health`
+        const controller = new AbortController()
+        const requestTimeout = setTimeout(() => controller.abort(), SERVER_READY_REQUEST_TIMEOUT_MS)
         try {
-          const response = await fetch(`${url}/actuator/health`)
+          const response = await fetch(healthUrl, {signal: controller.signal})
           if (response.ok) return {processId: child.pid, url}
-        } catch {
-          // The listener can be logged before it accepts the first request.
+          const responseBody = summarizeResponse(await response.text())
+          lastReadyCheck = `${healthUrl} returned ${response.status} ${response.statusText}${responseBody ? `: ${responseBody}` : ''}`
+        } catch (error) {
+          lastReadyCheck = `${healthUrl} failed: ${formatError(error)}`
+        } finally {
+          clearTimeout(requestTimeout)
         }
       }
       await new Promise(resolve => setTimeout(resolve, 100))
     }
-    throw new Error(`server did not become ready: ${fs.readFileSync(logPath, 'utf8')}`)
+    throw new Error([
+      `server did not become ready within ${SERVER_READY_TIMEOUT_MS}ms`,
+      `last readiness check: ${lastReadyCheck}`,
+      `server log:\n${fs.readFileSync(logPath, 'utf8')}`,
+    ].join('\n'))
   } catch (error) {
     stopProcess(child.pid)
     throw error
   }
+}
+
+function summarizeResponse(body: string): string {
+  const summary = body.replace(/\s+/g, ' ').trim()
+  return summary.length > SERVER_READY_RESPONSE_LIMIT
+    ? `${summary.slice(0, SERVER_READY_RESPONSE_LIMIT)}...`
+    : summary
+}
+
+function formatError(error: unknown): string {
+  return error instanceof Error ? `${error.name}: ${error.message}` : String(error)
 }
 
 function stopProcess(processId: number): void {
