@@ -1,8 +1,11 @@
+use std::{fs, path::PathBuf};
+
 use axum::{
     body::Body,
     http::{Request, StatusCode, header},
 };
-use komga_media::{extract_page, hash_page};
+use komga_core::scan_library_files;
+use komga_media::{analyze_book, extract_page, hash_page};
 use komga_server::{AppState, build_app};
 use komga_storage::PageHashUpdate;
 use tower::ServiceExt;
@@ -345,6 +348,167 @@ async fn rar_matches_preview_and_manual_delete_use_existing_page_hash_contract()
     assert_eq!(payload["bookId"], book.id);
     assert_eq!(payload["pages"][0]["mediaType"], "image/png");
     assert_eq!(payload["pages"][0]["pageNumber"], 1);
+}
+
+#[tokio::test]
+async fn fixed_layout_epub_matches_preview_and_rejects_manual_removal_atomically() {
+    let (temporary, storage, tasks, scanned_book, _) =
+        analyzed_media_fixture("archives/epub3.epub", "Fixed.epub").await;
+    let book = storage.find_book_by_id(&scanned_book.id).await.unwrap().unwrap();
+    let media = storage.find_media_by_book_id(&scanned_book.id).await.unwrap().unwrap();
+    let content = extract_page(&book, &media, 1).unwrap();
+    let computed = hash_page(&content.bytes, &content.media_type).unwrap();
+    assert!(
+        storage
+            .update_page_hashes_if_current(
+                &book,
+                &media,
+                &[PageHashUpdate {
+                    number: 0,
+                    file_name: media.pages[0].file_name.clone(),
+                    media_type: media.pages[0].media_type.clone(),
+                    file_hash: computed.hash.clone(),
+                    algorithm: computed.algorithm.into(),
+                }],
+            )
+            .await
+            .unwrap()
+    );
+
+    let library = storage.find_library_by_id(&book.library_id).await.unwrap().unwrap();
+    let series = book.url.to_file_path().unwrap().parent().unwrap().to_path_buf();
+    fs::copy(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../komga/komga/src/test/resources/archives/zip.zip"),
+        series.join("Supported.cbz"),
+    )
+    .unwrap();
+    storage
+        .apply_library_scan(&library.id, &scan_library_files(&library, || false).unwrap(), false)
+        .await
+        .unwrap();
+    let zip_book = storage
+        .list_active_books_by_library_id(&library.id)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|candidate| candidate.url.path().ends_with("Supported.cbz"))
+        .unwrap();
+    let zip_media = analyze_book(&zip_book, true, || false).unwrap();
+    storage.replace_media_analysis(&zip_media).await.unwrap();
+    let zip_book = storage.find_book_by_id(&zip_book.id).await.unwrap().unwrap();
+    let zip_media = storage.find_media_by_book_id(&zip_book.id).await.unwrap().unwrap();
+    assert!(
+        storage
+            .update_page_hashes_if_current(
+                &zip_book,
+                &zip_media,
+                &[PageHashUpdate {
+                    number: 0,
+                    file_name: zip_media.pages[0].file_name.clone(),
+                    media_type: zip_media.pages[0].media_type.clone(),
+                    file_hash: computed.hash.clone(),
+                    algorithm: computed.algorithm.into(),
+                }],
+            )
+            .await
+            .unwrap()
+    );
+
+    let app = build_app(AppState::new(storage, tasks.clone()).await.unwrap());
+    claim(&app).await;
+    let admin = basic("admin@example.org", "password");
+    let matches = app
+        .clone()
+        .oneshot(
+            Request::get(format!("/api/v1/page-hashes/{}", computed.hash))
+                .header(header::AUTHORIZATION, &admin)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(matches.status(), StatusCode::OK);
+    let matches = body_json(matches).await["content"].as_array().unwrap().clone();
+    assert_eq!(matches.len(), 2);
+    let epub_match = matches.iter().find(|matched| matched["bookId"] == book.id).unwrap();
+    let zip_match = matches.iter().find(|matched| matched["bookId"] == zip_book.id).unwrap();
+    assert_eq!(epub_match["fileName"], media.pages[0].file_name);
+    assert_eq!(epub_match["mediaType"], "image/jpeg");
+
+    let preview = app
+        .clone()
+        .oneshot(
+            Request::get(format!(
+                "/api/v1/page-hashes/unknown/{}/thumbnail?resize=50",
+                computed.hash
+            ))
+            .header(header::AUTHORIZATION, &admin)
+            .body(Body::empty())
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(preview.status(), StatusCode::OK);
+    assert_eq!(preview.headers()[header::CONTENT_TYPE], "image/jpeg");
+    assert!(body_bytes(preview).await.starts_with(&[0xff, 0xd8]));
+
+    let delete_epub = app
+        .clone()
+        .oneshot(
+            Request::post(format!("/api/v1/page-hashes/{}/delete-match", computed.hash))
+                .header(header::AUTHORIZATION, &admin)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(epub_match.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(delete_epub.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        body_json(delete_epub).await["message"],
+        "Page removal is not supported for this media"
+    );
+    assert!(tasks.list().await.unwrap().is_empty());
+
+    let delete_all = app
+        .clone()
+        .oneshot(
+            Request::post(format!("/api/v1/page-hashes/{}/delete-all", computed.hash))
+                .header(header::AUTHORIZATION, &admin)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(delete_all.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        body_json(delete_all).await["message"],
+        "Page removal is not supported for one or more matching media"
+    );
+    assert!(tasks.list().await.unwrap().is_empty());
+
+    let delete_zip = app
+        .oneshot(
+            Request::post(format!("/api/v1/page-hashes/{}/delete-match", computed.hash))
+                .header(header::AUTHORIZATION, admin)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(zip_match.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(delete_zip.status(), StatusCode::ACCEPTED);
+    assert_eq!(
+        tasks
+            .list()
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|task| task.simple_type == "RemoveHashedPages")
+            .count(),
+        1
+    );
+    drop(temporary);
 }
 
 #[tokio::test]

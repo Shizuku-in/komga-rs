@@ -8,8 +8,8 @@ use std::{
 
 use chrono::{DateTime, Local};
 use komga_core::{
-    Book, HashedPageTarget, Library, Media, PDF_MEDIA_TYPE, PageHashAction, RAR4_MEDIA_TYPE, RAR5_MEDIA_TYPE,
-    ZIP_MEDIA_TYPE,
+    Book, HashedPageTarget, Library, Media, MediaStatus, PDF_MEDIA_TYPE, PageHashAction, RAR4_MEDIA_TYPE,
+    RAR5_MEDIA_TYPE, ZIP_MEDIA_TYPE,
 };
 use komga_media::{
     FileHashError, PageRemovalError, PageRemovalRewrite, hash_file, rewrite_hashed_pdf_pages, rewrite_hashed_zip_pages,
@@ -212,6 +212,15 @@ pub(super) async fn process_remove_hashed_pages_task(state: &AppState, task: &Ta
             return TaskOutcome::Retry;
         }
     };
+    if media.status != MediaStatus::Ready
+        || !matches!(
+            media.media_type.as_deref(),
+            Some(ZIP_MEDIA_TYPE | RAR4_MEDIA_TYPE | RAR5_MEDIA_TYPE | PDF_MEDIA_TYPE)
+        )
+    {
+        tracing::warn!(book_id = %book.id, media_type = ?media.media_type, "page removal is unsupported for media");
+        return TaskOutcome::Completed;
+    }
     if matches!(media.media_type.as_deref(), Some(RAR4_MEDIA_TYPE | RAR5_MEDIA_TYPE)) {
         let removal =
             match super::conversion::perform_rar_page_removal(state, &book, &media, &library, &payload.pages).await {
@@ -1214,6 +1223,67 @@ mod tests {
                 .iter()
                 .any(|task| task.simple_type == "ScanLibrary")
         );
+    }
+
+    #[tokio::test]
+    async fn epub_page_removal_tasks_complete_without_mutation_or_followups() {
+        let storage = Storage::connect_memory().await.unwrap();
+        let tasks = TaskStorage::connect_memory().await.unwrap();
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("library");
+        let series = root.join("Series");
+        fs::create_dir_all(&series).unwrap();
+        let source = series.join("Volume.epub");
+        fs::copy(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../komga/komga/src/test/resources/archives/epub3.epub"),
+            &source,
+        )
+        .unwrap();
+        let library = Library::new("Library".into(), Url::from_directory_path(&root).unwrap());
+        storage.create_library(&library).await.unwrap();
+        storage
+            .apply_library_scan(&library.id, &scan_library_files(&library, || false).unwrap(), false)
+            .await
+            .unwrap();
+        let scanned = storage
+            .list_active_books_by_library_id(&library.id)
+            .await
+            .unwrap()
+            .remove(0);
+        let analyzed = analyze_book(&scanned, true, || false).unwrap();
+        storage.replace_media_analysis(&analyzed).await.unwrap();
+        let book = storage.find_book_by_id(&scanned.id).await.unwrap().unwrap();
+        let media = storage.find_media_by_book_id(&book.id).await.unwrap().unwrap();
+        let page = &media.pages[0];
+        let task = TaskRecord::remove_hashed_pages(
+            &book.id,
+            &[HashedPageTarget {
+                file_name: page.file_name.clone(),
+                media_type: page.media_type.clone(),
+                file_hash: "unused".into(),
+                file_size: page.file_size.unwrap(),
+                page_number: 1,
+            }],
+            4,
+        );
+        let before = fs::read(&source).unwrap();
+        let state = AppState::new(storage.clone(), tasks.clone()).await.unwrap();
+
+        assert_eq!(
+            process_remove_hashed_pages_task(&state, &task).await,
+            TaskOutcome::Completed
+        );
+        assert_eq!(fs::read(&source).unwrap(), before);
+        assert_eq!(storage.find_book_by_id(&book.id).await.unwrap().unwrap(), book);
+        assert_eq!(storage.find_media_by_book_id(&book.id).await.unwrap().unwrap(), media);
+        assert!(tasks.list().await.unwrap().is_empty());
+        for extension in ["tmp", "bak", "json"] {
+            assert!(
+                !series
+                    .join(format!(".komga-page-remove-{}.{extension}", book.id))
+                    .exists()
+            );
+        }
     }
 
     #[tokio::test]

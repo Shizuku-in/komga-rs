@@ -6,7 +6,10 @@ use axum::{
     http::{StatusCode, header},
     response::{IntoResponse, Response},
 };
-use komga_core::{HashedPageTarget, PageHashAction, PageHashMatch, PageRequest, SortDirection, SortOrder};
+use komga_core::{
+    HashedPageTarget, Media, MediaStatus, PDF_MEDIA_TYPE, PageHashAction, PageHashMatch, PageRequest, RAR4_MEDIA_TYPE,
+    RAR5_MEDIA_TYPE, SortDirection, SortOrder, ZIP_MEDIA_TYPE,
+};
 use komga_media::{ImageOutput, convert_image, extract_page};
 use komga_storage::TaskRecord;
 use serde::Deserialize;
@@ -142,6 +145,11 @@ pub(crate) async fn delete_all(
             },
         )
         .await?;
+    if state.storage.page_hash_has_non_removable_matches(&page_hash).await? {
+        return Err(ApiError::conflict(
+            "Page removal is not supported for one or more matching media",
+        ));
+    }
     let mut grouped = BTreeMap::<String, Vec<HashedPageTarget>>::new();
     for matched in matches.content {
         grouped
@@ -165,6 +173,11 @@ pub(crate) async fn delete_match(
 ) -> Result<StatusCode, ApiError> {
     require_admin(&auth)?;
     let book_id = matched.book_id.clone();
+    if let Some(media) = state.storage.find_media_by_book_id(&book_id).await?
+        && !supports_page_removal(&media)
+    {
+        return Err(ApiError::conflict("Page removal is not supported for this media"));
+    }
     state
         .enqueue_task(&TaskRecord::remove_hashed_pages(
             &book_id,
@@ -173,6 +186,14 @@ pub(crate) async fn delete_match(
         ))
         .await?;
     Ok(StatusCode::ACCEPTED)
+}
+
+fn supports_page_removal(media: &Media) -> bool {
+    media.status == MediaStatus::Ready
+        && matches!(
+            media.media_type.as_deref(),
+            Some(ZIP_MEDIA_TYPE | RAR4_MEDIA_TYPE | RAR5_MEDIA_TYPE | PDF_MEDIA_TYPE)
+        )
 }
 
 fn target(page_hash: &str, matched: PageHashMatch) -> HashedPageTarget {

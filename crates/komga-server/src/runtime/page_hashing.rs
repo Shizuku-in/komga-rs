@@ -1,5 +1,5 @@
 use chrono::{DateTime, Local};
-use komga_core::{MediaStatus, PDF_MEDIA_TYPE, RAR4_MEDIA_TYPE, RAR5_MEDIA_TYPE, ZIP_MEDIA_TYPE};
+use komga_core::{EPUB_MEDIA_TYPE, MediaStatus, PDF_MEDIA_TYPE, RAR4_MEDIA_TYPE, RAR5_MEDIA_TYPE, ZIP_MEDIA_TYPE};
 use komga_media::{
     MediaOperationError, PageHashError, PdfPageRenderer, RGB_PAGE_HASH_ALGORITHM, extract_page, hash_page,
 };
@@ -100,12 +100,11 @@ pub(super) async fn process_hash_book_pages_task(state: &AppState, task: &TaskRe
             return TaskOutcome::Retry;
         }
     };
-    if media.status != MediaStatus::Ready
-        || !matches!(
-            media.media_type.as_deref(),
-            Some(ZIP_MEDIA_TYPE | RAR4_MEDIA_TYPE | RAR5_MEDIA_TYPE | PDF_MEDIA_TYPE)
-        )
-    {
+    let hashable = matches!(
+        media.media_type.as_deref(),
+        Some(ZIP_MEDIA_TYPE | RAR4_MEDIA_TYPE | RAR5_MEDIA_TYPE | PDF_MEDIA_TYPE)
+    ) || (media.media_type.as_deref() == Some(EPUB_MEDIA_TYPE) && media.epub_divina_compatible);
+    if media.status != MediaStatus::Ready || !hashable {
         return TaskOutcome::Completed;
     }
     let targets = match state
@@ -340,6 +339,113 @@ mod tests {
                 .await
                 .unwrap()
                 .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn fixed_layout_epub_hashes_jpeg_and_png_while_reflowable_is_skipped() {
+        let storage = Storage::connect_memory().await.unwrap();
+        let tasks = TaskStorage::connect_memory().await.unwrap();
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("library");
+        let series = root.join("Series");
+        fs::create_dir_all(&series).unwrap();
+        let fixtures = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../komga/komga/src/test/resources");
+        fs::copy(fixtures.join("archives/epub3.epub"), series.join("Fixed.epub")).unwrap();
+        fs::copy(
+            fixtures.join("epub/The Incomplete Theft - Ralph Burke.epub"),
+            series.join("Reflowable.epub"),
+        )
+        .unwrap();
+
+        let mut library = Library::new("Library".into(), Url::from_directory_path(&root).unwrap());
+        library.hash_pages = true;
+        storage.create_library(&library).await.unwrap();
+        storage
+            .apply_library_scan(&library.id, &scan_library_files(&library, || false).unwrap(), false)
+            .await
+            .unwrap();
+        let books = storage.list_active_books_by_library_id(&library.id).await.unwrap();
+        for book in &books {
+            let media = analyze_book(book, true, || false).unwrap();
+            storage.replace_media_analysis(&media).await.unwrap();
+        }
+        let fixed = books
+            .iter()
+            .find(|book| book.url.path().ends_with("Fixed.epub"))
+            .unwrap();
+        let reflowable = books
+            .iter()
+            .find(|book| book.url.path().ends_with("Reflowable.epub"))
+            .unwrap();
+        assert!(
+            storage
+                .find_media_by_book_id(&fixed.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .epub_divina_compatible
+        );
+        assert!(
+            !storage
+                .find_media_by_book_id(&reflowable.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .epub_divina_compatible
+        );
+
+        let state = AppState::new(storage.clone(), tasks.clone())
+            .await
+            .unwrap()
+            .with_page_hashing(NonZeroUsize::new(1).unwrap());
+        assert_eq!(
+            process_find_missing_page_hashes_task(
+                &state,
+                &TaskRecord::find_books_with_missing_page_hash(&library.id, 0),
+            )
+            .await,
+            TaskOutcome::Completed
+        );
+        let hash_tasks = tasks
+            .list()
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|task| task.simple_type == "HashBookPages")
+            .collect::<Vec<_>>();
+        assert_eq!(hash_tasks.len(), 1);
+        assert_eq!(hash_tasks[0].id, format!("HASH_BOOK_PAGES_{}", fixed.id));
+        assert_eq!(
+            process_hash_book_pages_task(&state, &hash_tasks[0]).await,
+            TaskOutcome::Completed
+        );
+
+        let persisted = storage.find_media_by_book_id(&fixed.id).await.unwrap().unwrap();
+        assert_eq!(persisted.pages.len(), 2);
+        for (index, expected_algorithm) in [RGB_PAGE_HASH_ALGORITHM, komga_media::RAW_PAGE_HASH_ALGORITHM]
+            .into_iter()
+            .enumerate()
+        {
+            let content = extract_page(fixed, &persisted, i32::try_from(index + 1).unwrap()).unwrap();
+            let expected = hash_page(&content.bytes, &content.media_type).unwrap();
+            assert_eq!(expected.algorithm, expected_algorithm);
+            assert_eq!(persisted.pages[index].file_hash, expected.hash);
+        }
+        assert!(
+            storage
+                .list_page_hash_targets(&fixed.id, 1, RGB_PAGE_HASH_ALGORITHM)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            tasks
+                .list()
+                .await
+                .unwrap()
+                .iter()
+                .any(|task| task.simple_type == "FindDuplicatePagesToDelete")
         );
     }
 
