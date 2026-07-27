@@ -16,3 +16,11 @@ Kotlin source revision.
 
 Tests copy these files before opening them because the Rust compatibility
 migrations are additive and must never modify the checked-in fixtures.
+
+The schema contract pins the 51 supported main-database tables and the task
+table. A fresh Rust database and a migrated fixture must preserve compatible
+SQLite affinities and primary keys for every baseline column, every named index,
+and every foreign-key relationship. Separate round-trip coverage exercises all
+supported persistence domains against a copied fixture and verifies that both
+Flyway and SQLx histories survive repeated opening. Historical Flyway upgrade
+paths before this generated baseline are intentionally not part of the fixture.
