@@ -48,17 +48,22 @@ pub(crate) fn analyze(
     cancelled: impl Fn() -> bool,
 ) -> Result<Media, AnalysisError> {
     let (mut archive, package) = package::open(path).map_err(|_| AnalysisError::Invalid)?;
-    let mut resources = resources(&mut archive, &package, &cancelled)?;
-    if !resources.iter().any(|file| file.file_name == "ComicInfo.xml")
+    let mut discovered_resources = resources(&mut archive, &package, &cancelled)?;
+    if !discovered_resources
+        .iter()
+        .any(|file| file.file_name == "ComicInfo.xml")
         && let Ok(entry) = archive.by_name("ComicInfo.xml")
     {
-        resources.push(MediaFile {
+        discovered_resources.push(MediaFile {
             file_name: "ComicInfo.xml".to_owned(),
             media_type: Some("application/xml".to_owned()),
             sub_type: Some(EPUB_ASSET_SUBTYPE.to_owned()),
             file_size: i64::try_from(entry.size()).ok(),
         });
     }
+    let (resources, missing_resources): (Vec<_>, Vec<_>) = discovered_resources
+        .into_iter()
+        .partition(|resource| resource.file_size.is_some());
     let is_kepub = match positions::is_kepub(&mut archive, &resources, &cancelled) {
         Ok(value) => value,
         Err(positions::PositionError::Cancelled) => return Err(AnalysisError::Cancelled),
@@ -102,9 +107,8 @@ pub(crate) fn analyze(
         }
     };
 
-    let missing = resources
+    let missing = missing_resources
         .iter()
-        .filter(|resource| resource.file_size.is_none())
         .map(|resource| resource.file_name.as_str())
         .collect::<Vec<_>>();
     if !missing.is_empty() {
@@ -244,7 +248,8 @@ fn divina_pages(
             .flat_map(str::split_whitespace)
             .collect::<Vec<_>>()
             .join(" ");
-        let letter_count = body_text.chars().count();
+        // Kotlin's String.length counts UTF-16 code units rather than Unicode scalar values.
+        let letter_count = body_text.encode_utf16().count();
         if letter_count > DIVINA_LETTER_COUNT_THRESHOLD {
             return Ok(Vec::new());
         }

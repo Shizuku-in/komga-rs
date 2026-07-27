@@ -51,12 +51,26 @@ pub(crate) fn analyze_zip(
 ) -> Result<ContainerAnalysis, ZipAnalysisError> {
     let file = File::open(path).map_err(|_| ZipAnalysisError::Archive)?;
     let mut archive = ZipArchive::new(file).map_err(|_| ZipAnalysisError::Archive)?;
+    let entry_names = archive.file_names().map(str::to_owned).collect::<Vec<_>>();
     let mut entries = Vec::new();
     for index in 0..archive.len() {
         if cancelled() {
             return Err(ZipAnalysisError::Cancelled);
         }
-        let mut entry = archive.by_index(index).map_err(|_| ZipAnalysisError::Archive)?;
+        let entry_name = entry_names.get(index).cloned().unwrap_or_default();
+        let mut entry = match archive.by_index(index) {
+            Ok(entry) => entry,
+            Err(_) if entry_name.ends_with('/') => continue,
+            Err(_) => {
+                entries.push(AnalyzedEntry {
+                    name: entry_name,
+                    media_type: None,
+                    dimension: None,
+                    file_size: None,
+                });
+                continue;
+            }
+        };
         if entry.is_dir() {
             continue;
         }
@@ -297,6 +311,7 @@ pub(crate) fn extract_rar_entry(path: &Path, entry_name: &str) -> Result<Vec<u8>
 pub(crate) fn normalize_media_type(value: &str) -> &str {
     match value {
         "application/vnd.rar" => RAR_MEDIA_TYPE,
+        "text/xml" => "application/xml",
         "image/x-png" => "image/png",
         "image/jpg" => "image/jpeg",
         _ => value,

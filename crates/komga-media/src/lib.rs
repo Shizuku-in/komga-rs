@@ -486,6 +486,27 @@ pub fn detect_image_media_type(bytes: &[u8]) -> Option<String> {
         .filter(|kind| kind.mime_type().starts_with("image/"))
         .map(|kind| kind.mime_type().to_owned())
         .or_else(|| image_ops::detected_media_type(bytes).map(str::to_owned))
+        .or_else(|| is_svg_document(bytes).then(|| "image/svg+xml".to_owned()))
+}
+
+fn is_svg_document(bytes: &[u8]) -> bool {
+    let mut reader = quick_xml::Reader::from_reader(bytes);
+    let mut buffer = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buffer) {
+            Ok(quick_xml::events::Event::Start(start) | quick_xml::events::Event::Empty(start)) => {
+                let name = start.name();
+                return name
+                    .as_ref()
+                    .rsplit(|byte| *byte == b':')
+                    .next()
+                    .is_some_and(|local_name| local_name.eq_ignore_ascii_case(b"svg"));
+            }
+            Ok(quick_xml::events::Event::Eof) | Err(_) => return false,
+            Ok(_) => {}
+        }
+        buffer.clear();
+    }
 }
 
 #[cfg(test)]
@@ -665,12 +686,62 @@ mod tests {
         ] {
             let media = analyze_book(&book(&kotlin_archive(name)), false, || false).unwrap();
             assert_eq!(media.status, MediaStatus::Ready, "{name}");
+            assert_eq!(media.media_type.as_deref(), Some(ZIP_MEDIA_TYPE), "{name}");
             assert_eq!(media.page_count, 1, "{name}");
+            assert_eq!(media.pages[0].file_name, "komga.png", "{name}");
+            assert_eq!(media.pages[0].media_type, "image/png", "{name}");
             assert_eq!(media.pages[0].dimension, None, "{name}");
+            assert_eq!(media.pages[0].file_size, Some(3108), "{name}");
+            assert_eq!(media.comment, None, "{name}");
         }
 
         let encrypted = analyze_book(&book(&kotlin_archive("zip-encrypted.zip")), false, || false).unwrap();
         assert_eq!(encrypted.status, MediaStatus::Error);
+        assert_eq!(encrypted.media_type.as_deref(), Some(ZIP_MEDIA_TYPE));
+        assert_eq!(encrypted.comment.as_deref(), Some("ERR_1006"));
+        assert!(encrypted.pages.is_empty());
+    }
+
+    #[test]
+    fn rejects_kotlin_7zip_fixtures_with_the_unsupported_format_contract() {
+        for name in ["7zip.7z", "7zip-encrypted.7z"] {
+            let media = analyze_book(&book(&kotlin_archive(name)), false, || false).unwrap();
+            assert_eq!(media.status, MediaStatus::Unsupported, "{name}");
+            assert_eq!(
+                media.media_type.as_deref(),
+                Some("application/x-7z-compressed"),
+                "{name}"
+            );
+            assert_eq!(media.comment.as_deref(), Some("ERR_1001"), "{name}");
+            assert!(media.pages.is_empty(), "{name}");
+        }
+    }
+
+    #[test]
+    fn detects_xml_declared_svg_pages_and_normalizes_xml_files_like_tika() {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("vector.cbz");
+        let mut writer = ZipWriter::new(File::create(&path).unwrap());
+        let options = SimpleFileOptions::default();
+        writer.start_file("vector.svg", options).unwrap();
+        writer
+            .write_all(
+                br#"<?xml version="1.0"?><svg xmlns="http://www.w3.org/2000/svg" width="10" height="20"><rect width="10" height="20"/></svg>"#,
+            )
+            .unwrap();
+        writer.start_file("metadata.xml", options).unwrap();
+        writer.write_all(br#"<?xml version="1.0"?><metadata/>"#).unwrap();
+        writer.finish().unwrap();
+
+        let media = analyze_book(&book(&path), true, || false).unwrap();
+
+        assert_eq!(media.status, MediaStatus::Ready);
+        assert_eq!(media.page_count, 1);
+        assert_eq!(media.pages[0].file_name, "vector.svg");
+        assert_eq!(media.pages[0].media_type, "image/svg+xml");
+        assert_eq!(media.pages[0].dimension, None);
+        assert_eq!(media.files[0].file_name, "metadata.xml");
+        assert_eq!(media.files[0].media_type.as_deref(), Some("application/xml"));
     }
 
     #[test]
@@ -853,12 +924,48 @@ mod tests {
         assert!(media.epub_is_kepub);
         assert!(!media.epub_divina_compatible);
         assert_eq!(media.comment.as_deref(), Some("ERR_1033 [missing.css]"));
+        assert!(media.files.iter().all(|file| file.file_name != "missing.css"));
         let Some(komga_core::MediaExtension::Epub(extension)) = media.extension else {
             panic!("expected EPUB extension");
         };
         assert_eq!(extension.positions.len(), 2);
         assert_eq!(extension.positions[0].kobo_span.as_deref(), Some("kobo.1.1"));
         assert!(extension.positions[1].kobo_span.is_some());
+    }
+
+    #[test]
+    fn counts_epub_divina_text_as_kotlin_utf16_code_units() {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("utf16-threshold.epub");
+        let opf = r#"<?xml version="1.0"?>
+            <package xmlns="http://www.idpf.org/2007/opf" version="3.0">
+              <metadata/>
+              <manifest>
+                <item id="page" href="page.xhtml" media-type="application/xhtml+xml"/>
+                <item id="image" href="page.png" media-type="image/png"/>
+              </manifest>
+              <spine><itemref idref="page"/></spine>
+            </package>"#;
+        let page = format!(
+            "<html><body>{}<img src=\"page.png\"/></body></html>",
+            "\u{1f600}".repeat(8)
+        );
+        let image = png();
+        write_epub(
+            &path,
+            opf,
+            &[("page.xhtml", page.as_bytes()), ("page.png", image.as_slice())],
+        );
+
+        let media = analyze_book(&book(&path), false, || false).unwrap();
+
+        assert_eq!(media.status, MediaStatus::Ready);
+        assert!(!media.epub_divina_compatible);
+        assert!(media.pages.is_empty());
+        let Some(komga_core::MediaExtension::Epub(extension)) = media.extension else {
+            panic!("expected EPUB extension");
+        };
+        assert!(!extension.is_fixed_layout);
     }
 
     #[test]
