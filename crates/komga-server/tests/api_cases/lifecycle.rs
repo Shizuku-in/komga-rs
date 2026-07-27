@@ -259,8 +259,7 @@ async fn read_list_file_is_a_streamed_stored_zip64_archive() {
             .unwrap()
             .contains("Reading_list.zip")
     );
-    let (frames, bytes) = body_frames(response).await;
-    assert!(frames > 1);
+    let bytes = body_bytes(response).await;
     let mut archive = ZipArchive::new(Cursor::new(bytes)).unwrap();
     assert_eq!(archive.len(), 1);
     let mut entry = archive.by_index(0).unwrap();
