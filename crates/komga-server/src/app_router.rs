@@ -20,7 +20,7 @@ use crate::webui_routes;
 use crate::{
     AppState, auth, authentication_activity_routes, book_file_routes, container_routes, content_routes,
     filesystem_routes, font_routes, history_routes, info_routes, kobo, koreader_routes, library_routes, media_routes,
-    metadata_routes, metrics_routes, opds_router, operations_routes, page_hash_routes, read_list_file_routes,
+    metadata_routes, metrics_routes, oauth, opds_router, operations_routes, page_hash_routes, read_list_file_routes,
     read_list_match_routes, read_progress_routes, referential_routes, routes, settings_routes, source_file_routes,
     source_import_routes, sse_routes, thumbnail_routes, transient_book_routes, webpub_routes,
 };
@@ -52,6 +52,21 @@ pub(crate) fn build(state: AppState) -> Router {
     if context_path.is_empty() {
         app
     } else {
+        #[cfg(feature = "webui")]
+        {
+            let context_root = format!("{context_path}/");
+            let root_context_path = context_path.clone();
+            Router::new()
+                .route(
+                    &context_root,
+                    get(move || {
+                        let root_context_path = root_context_path.clone();
+                        async move { webui_routes::index(&root_context_path) }
+                    }),
+                )
+                .nest(&context_path, app)
+        }
+        #[cfg(not(feature = "webui"))]
         Router::new().nest(&context_path, app)
     }
 }
@@ -133,6 +148,9 @@ fn make_http_span(request: &Request<Body>) -> tracing::Span {
 
 fn redacted_request_uri(uri: &Uri) -> String {
     let path = uri.path();
+    if path.contains("/login/oauth2/code/") {
+        return path.to_owned();
+    }
     let redacted = path.strip_prefix("/kobo/").map_or_else(
         || path.to_owned(),
         |rest| match rest.split_once('/') {
@@ -163,11 +181,23 @@ fn protected_api() -> Router<AppState> {
             get(authentication_activity_routes::current_user_activity),
         )
         .route(
+            "/api/v2/users/me/authentication-activity",
+            get(authentication_activity_routes::current_user_activity),
+        )
+        .route(
             "/api/v1/users/authentication-activity",
             get(authentication_activity_routes::all_activity),
         )
         .route(
+            "/api/v2/users/authentication-activity",
+            get(authentication_activity_routes::all_activity),
+        )
+        .route(
             "/api/v1/users/{user_id}/authentication-activity/latest",
+            get(authentication_activity_routes::latest_user_activity),
+        )
+        .route(
+            "/api/v2/users/{user_id}/authentication-activity/latest",
             get(authentication_activity_routes::latest_user_activity),
         )
         .route("/api/v2/users/me/password", patch(routes::update_my_password))
@@ -523,7 +553,9 @@ fn public_api() -> Router<AppState> {
             "/api/v1/client-settings/global/list",
             get(settings_routes::list_global_settings),
         )
-        .route("/api/v1/oauth2/providers", get(settings_routes::oauth_providers))
+        .route("/api/v1/oauth2/providers", get(oauth::provider_list))
+        .route("/oauth2/authorization/{registration_id}", get(oauth::authorize))
+        .route("/login/oauth2/code/{registration_id}", get(oauth::callback))
         .route("/api/v1/fonts/resource/{family}/css", get(font_routes::css))
         .route("/api/v1/fonts/resource/{family}/{file}", get(font_routes::resource))
         .route(
@@ -543,5 +575,18 @@ mod tests {
         assert_eq!(redacted, "/kobo/{authToken}/v1/library/sync?x=1");
         assert!(!redacted.contains("plain-secret"));
         assert_eq!(redacted_request_uri(&"/api/v1/books".parse().unwrap()), "/api/v1/books");
+    }
+
+    #[test]
+    fn tracing_redacts_the_oauth_callback_query() {
+        let uri = "/login/oauth2/code/test?code=authorization-code&state=random-state"
+            .parse()
+            .unwrap();
+
+        let redacted = redacted_request_uri(&uri);
+
+        assert_eq!(redacted, "/login/oauth2/code/test");
+        assert!(!redacted.contains("authorization-code"));
+        assert!(!redacted.contains("random-state"));
     }
 }

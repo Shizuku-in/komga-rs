@@ -27,6 +27,15 @@ pub(crate) fn router(context_path: &str) -> Router {
         .layer(CompressionLayer::new().br(true).gzip(true))
 }
 
+pub(crate) fn index(context_path: &str) -> Response<Body> {
+    let base_url = if context_path.is_empty() {
+        "/".to_owned()
+    } else {
+        format!("{context_path}/")
+    };
+    index_response(&base_url, false)
+}
+
 async fn serve(State(base_url): State<String>, request: Request<Body>) -> Response<Body> {
     let head = request.method() == Method::HEAD;
     if request.method() != Method::GET && !head {

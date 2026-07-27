@@ -22,6 +22,8 @@ async fn main() -> anyhow::Result<()> {
     let tasks_database_file = config.tasks_database_file();
     let search_directory = config.search_directory();
     let fonts_directory = config.fonts_directory();
+    let oauth2_config_file = config.oauth2_config_file();
+    let oauth2_config_file_is_explicit = config.oauth2_config_file_is_explicit();
     if let Some(parent) = database_file.parent() {
         tokio::fs::create_dir_all(parent)
             .await
@@ -64,7 +66,10 @@ async fn main() -> anyhow::Result<()> {
             configuration_context_path: config.context_path,
             effective_port: Some(effective_address.port()),
             effective_context_path,
-        });
+        })
+        .with_oauth2_config(&oauth2_config_file, oauth2_config_file_is_explicit)
+        .await
+        .with_context(|| format!("failed to load OAuth configuration {}", oauth2_config_file.display()))?;
     let runtime = state.start_runtime().await?;
     let signal_shutdown = runtime.shutdown_handle();
     let server_shutdown = runtime.shutdown_handle();

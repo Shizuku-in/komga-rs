@@ -38,6 +38,8 @@ komga-storage = { path = "../komga-storage" }
 mediatype.workspace = true
 mime_guess = { workspace = true, optional = true }
 moka.workspace = true
+oauth2.workspace = true
+openidconnect.workspace = true
 percent-encoding.workspace = true
 rand.workspace = true
 quick-xml.workspace = true

@@ -32,6 +32,10 @@ pub struct Config {
     #[arg(long, env = "KOMGA_FONTS_DIRECTORY")]
     pub fonts_directory: Option<PathBuf>,
 
+    /// Override the OAuth2/OIDC JSON configuration file.
+    #[arg(long, env = "KOMGA_OAUTH2_CONFIG_FILE")]
+    pub oauth2_config_file: Option<PathBuf>,
+
     /// Number of pages hashed from both the start and end of ZIP books.
     #[arg(long, env = "KOMGA_PAGE_HASHING", default_value = "3")]
     pub page_hashing: NonZeroUsize,
@@ -108,6 +112,18 @@ impl Config {
             .clone()
             .unwrap_or_else(|| self.config_dir().join("fonts"))
     }
+
+    /// Returns the explicit OAuth configuration path or `oauth2.json` in the config directory.
+    pub fn oauth2_config_file(&self) -> PathBuf {
+        self.oauth2_config_file
+            .clone()
+            .unwrap_or_else(|| self.config_dir().join("oauth2.json"))
+    }
+
+    /// Returns whether a missing OAuth configuration file is a startup error.
+    pub fn oauth2_config_file_is_explicit(&self) -> bool {
+        self.oauth2_config_file.is_some()
+    }
 }
 
 #[cfg(test)]
@@ -122,6 +138,8 @@ mod tests {
         assert!(config.kobo_kepubify_path.is_none());
         assert!(!config.kobo_proxy);
         assert!(config.context_path.is_none());
+        assert!(config.oauth2_config_file.is_none());
+        assert_eq!(config.oauth2_config_file(), config.config_dir().join("oauth2.json"));
         assert_eq!(config.fonts_directory(), config.config_dir().join("fonts"));
         let kobo = Config::try_parse_from([
             "komga-server",
@@ -147,5 +165,11 @@ mod tests {
         assert!(Config::try_parse_from(["komga-server", "--context-path", "/bad/"]).is_err());
         let fonts = Config::try_parse_from(["komga-server", "--fonts-directory", "/srv/fonts"]).unwrap();
         assert_eq!(fonts.fonts_directory(), std::path::Path::new("/srv/fonts"));
+        let oauth = Config::try_parse_from(["komga-server", "--oauth2-config-file", "/srv/komga/oauth.json"]).unwrap();
+        assert_eq!(
+            oauth.oauth2_config_file(),
+            std::path::Path::new("/srv/komga/oauth.json")
+        );
+        assert!(oauth.oauth2_config_file_is_explicit());
     }
 }

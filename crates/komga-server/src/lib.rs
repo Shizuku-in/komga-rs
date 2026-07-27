@@ -28,6 +28,7 @@ mod library_routes;
 mod media_routes;
 mod metadata_routes;
 mod metrics_routes;
+mod oauth;
 mod opds_router;
 mod opds_v1;
 mod opds_v2;
@@ -97,6 +98,7 @@ pub struct AppState {
     task_metrics: metrics_routes::TaskMetrics,
     operations: operations_routes::OperationsService,
     fonts: font_routes::FontCatalog,
+    oauth: oauth::OAuthService,
     transient_books: transient_book_routes::TransientBookCache,
     database_kobo_proxy: Option<bool>,
     database_kepubify_path: Option<PathBuf>,
@@ -182,6 +184,7 @@ impl AppState {
             task_metrics: metrics_routes::TaskMetrics::default(),
             operations: operations_routes::OperationsService::default(),
             fonts: font_routes::FontCatalog::default(),
+            oauth: oauth::OAuthService::disabled(),
             transient_books: transient_book_routes::TransientBookCache::new(),
             database_kobo_proxy: server_settings.kobo_proxy,
             database_kepubify_path: server_settings.kepubify_path.map(PathBuf::from),
@@ -247,6 +250,15 @@ impl AppState {
         self.effective_server_port = settings.effective_port;
         self.effective_server_context_path = settings.effective_context_path;
         self
+    }
+
+    /// Loads optional OAuth2/OIDC configuration and performs OIDC discovery.
+    ///
+    /// A missing default `oauth2.json` disables OAuth. A missing explicit path,
+    /// invalid configuration, or failed discovery returns a startup error.
+    pub async fn with_oauth2_config(mut self, path: &std::path::Path, explicit: bool) -> anyhow::Result<Self> {
+        self.oauth = oauth::OAuthService::load(path, explicit).await?;
+        Ok(self)
     }
 
     async fn apply_server_settings(&self, settings: &ServerSettings, remember_me_key_renewed: bool) {

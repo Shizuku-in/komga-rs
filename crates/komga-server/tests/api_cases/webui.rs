@@ -123,6 +123,13 @@ async fn embedded_webui_injects_context_path_into_deep_links_and_assets() {
         .unwrap();
     assert_eq!(outside_context.status(), StatusCode::NOT_FOUND);
 
+    let context_root = app
+        .clone()
+        .oneshot(Request::get("/komga/?server_redirect=Y").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(context_root.status(), StatusCode::OK);
+
     let index = app
         .clone()
         .oneshot(Request::get("/komga/book/BOOK_ID").body(Body::empty()).unwrap())

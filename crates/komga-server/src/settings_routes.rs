@@ -100,10 +100,6 @@ pub(crate) async fn delete_user_settings(
     Ok(StatusCode::NO_CONTENT)
 }
 
-pub(crate) async fn oauth_providers() -> Json<Vec<serde_json::Value>> {
-    Json(Vec::new())
-}
-
 pub(crate) async fn server_settings(
     State(state): State<AppState>,
     Extension(auth): Extension<AuthContext>,

@@ -136,7 +136,7 @@ enum AuthSource {
 }
 
 #[derive(Debug, Clone)]
-struct AuthenticationRequestMetadata {
+pub(crate) struct AuthenticationRequestMetadata {
     ip: Option<String>,
     user_agent: Option<String>,
 }
@@ -360,6 +360,33 @@ async fn record_authentication_activity(state: &AppState, activity: Authenticati
     }
 }
 
+pub(crate) async fn record_oauth_activity(
+    state: &AppState,
+    metadata: &AuthenticationRequestMetadata,
+    user: Option<&User>,
+    email: Option<String>,
+    provider_name: &str,
+    success: bool,
+    error: Option<&str>,
+) {
+    record_authentication_activity(
+        state,
+        AuthenticationActivity {
+            user_id: user.map(|user| user.id.clone()),
+            email: user.map(|user| user.email.clone()).or(email),
+            api_key_id: None,
+            api_key_comment: None,
+            ip: metadata.ip.clone(),
+            user_agent: metadata.user_agent.clone(),
+            success,
+            error: error.map(|error| truncate(error, 512)),
+            date_time: chrono::Utc::now().naive_utc(),
+            source: Some(format!("OAuth2:{}", truncate(provider_name, 128))),
+        },
+    )
+    .await;
+}
+
 fn has_basic_authorization(headers: &HeaderMap) -> bool {
     headers
         .get(header::AUTHORIZATION)
@@ -378,7 +405,7 @@ fn user_agent(headers: &HeaderMap) -> Option<String> {
         .map(|value| truncate(value, 512))
 }
 
-fn authentication_request_metadata(request: &Request) -> AuthenticationRequestMetadata {
+pub(crate) fn authentication_request_metadata(request: &Request) -> AuthenticationRequestMetadata {
     AuthenticationRequestMetadata {
         ip: forwarded_ip(request.headers())
             .or_else(|| x_forwarded_for(request.headers()))

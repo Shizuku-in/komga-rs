@@ -64,6 +64,8 @@ uuid = { version = "1.17", features = ["v4"] }
 url = "2.5"
 walkdir = "2.5"
 natord = "1.0"
+oauth2 = { version = "=5.0.0", default-features = false }
+openidconnect = { version = "=4.0.1", default-features = false }
 mediatype = "0.21.0"
 moka = { version = "0.12", features = ["future"] }
 md-5 = "0.10"
