@@ -6,12 +6,12 @@ An incremental Rust port of the [Komga](https://github.com/gotson/komga) backend
 
 ## Port status
 
-The migration matrix currently tracks 14 functional areas: 10 are implemented or core-complete and 4 are partially implemented.
+The migration matrix currently tracks 14 functional areas: 12 are implemented or core-complete and 2 are partially implemented.
 
 | Status | Areas |
 | --- | --- |
-| Implemented / core-complete | Process and configuration; Claim and users; authentication; collections and read lists; search; OPDS; device sync; operations; transient Book import analysis; Web UI packaging |
-| Partial | SQLite; libraries and scanner; Series, Books, and progress; media |
+| Implemented / core-complete | Process and configuration; Claim and users; authentication; libraries and scanner; collections and read lists; Series, Books, and progress; search; OPDS; device sync; operations; transient Book import analysis; Web UI packaging |
+| Partial | SQLite; media |
 
 ## Compatibility target
 
@@ -19,7 +19,7 @@ The migration matrix currently tracks 14 functional areas: 10 are implemented or
 
 The project does not promise direct migration from every historical Kotlin Komga database or reproduce every Flyway migration path. Before switching an existing installation, back up its database and use Kotlin Komga to bring it to the supported baseline; databases from other versions are unsupported unless they are explicitly listed and tested.
 
-Recent content work added modern and deprecated Series/Book queries, legacy regex search, duplicate-book discovery, book-file hashing, configurable ZIP/RAR/PDF and fixed-layout EPUB edge-page hashing, PageHash administration, recoverable duplicate-page removal from CBZ, PDF, and safe fixed-layout EPUB files plus RAR-to-CBZ selective replacement with historical auditing, RAR/CBR-to-CBZ conversion, source-extension repair, authenticated OPDS 1.2 and OPDS 2 catalogs, Kotlin-compatible content-domain SSE, KOReader and Kobo synchronization, application metrics, announcements, release checks, and bundled and local reader fonts.
+Recent content work added modern and deprecated Series/Book queries, the deprecated Series-scoped Book query, streaming whole-Series ZIP downloads, legacy regex search, duplicate-book discovery, book-file hashing, configurable ZIP/RAR/PDF and fixed-layout EPUB edge-page hashing, PageHash administration, recoverable duplicate-page removal from CBZ, PDF, and safe fixed-layout EPUB files plus RAR-to-CBZ selective replacement with historical auditing, RAR/CBR-to-CBZ conversion, source-extension repair, barcode ISBN and one-shot metadata import, authenticated OPDS 1.2 and OPDS 2 catalogs, Kotlin-compatible content-domain SSE, KOReader and Kobo synchronization, application metrics, announcements, release checks, and bundled and local reader fonts.
 
 ## Run
 

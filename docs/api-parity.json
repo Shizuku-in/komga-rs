@@ -277,7 +277,7 @@
       "area": "books",
       "kotlinSource": "BookController / CommonBookController",
       "access": "protected",
-      "behavior": "partial",
+      "behavior": "implemented",
       "routes": [
         {
           "methods": [
@@ -482,7 +482,7 @@
       "area": "books",
       "kotlinSource": "BookController / CommonBookController",
       "access": "public",
-      "behavior": "partial",
+      "behavior": "implemented",
       "routes": [
         {
           "methods": [
@@ -670,7 +670,7 @@
       "area": "libraries",
       "kotlinSource": "LibraryController",
       "access": "protected",
-      "behavior": "partial",
+      "behavior": "implemented",
       "routes": [
         {
           "methods": [
@@ -895,7 +895,7 @@
       "area": "series",
       "kotlinSource": "SeriesController",
       "access": "protected",
-      "behavior": "partial",
+      "behavior": "implemented",
       "routes": [
         {
           "methods": [
@@ -961,11 +961,18 @@
           "methods": [
             "GET"
           ],
+          "path": "/api/v1/series/{series_id}/books"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
           "path": "/api/v1/series/{series_id}/collections"
         },
         {
           "methods": [
-            "DELETE"
+            "DELETE",
+            "GET"
           ],
           "path": "/api/v1/series/{series_id}/file"
         },
