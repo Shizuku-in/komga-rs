@@ -244,8 +244,8 @@ impl Storage {
         .await?)
     }
 
-    /// Lists active ready ZIP or PDF books whose configured edge pages require
-    /// hashes.
+    /// Lists active ready ZIP, RAR4, RAR5, or PDF books whose configured edge
+    /// pages require hashes.
     ///
     /// Existing non-JPEG hashes are compatible with Kotlin and remain valid.
     /// JPEG hashes are valid only when their algorithm marker matches
@@ -268,7 +268,7 @@ impl Storage {
                  JOIN MEDIA_PAGE P ON P.BOOK_ID = B.ID
                 WHERE B.LIBRARY_ID = ? AND B.DELETED_DATE IS NULL
                   AND M.STATUS = 'READY'
-                  AND M.MEDIA_TYPE IN ('application/zip', 'application/pdf')
+                  AND M.MEDIA_TYPE IN (?, ?, ?, ?)
                   AND (P.NUMBER < ? OR P.NUMBER >= MAX(M.PAGE_COUNT - ?, 0))
                   AND (P.FILE_HASH = '' OR
                        ((M.MEDIA_TYPE = 'application/pdf' OR P.MEDIA_TYPE = 'image/jpeg') AND
@@ -276,6 +276,10 @@ impl Storage {
                 ORDER BY B.ID"#,
         )
         .bind(library_id)
+        .bind(komga_core::ZIP_MEDIA_TYPE)
+        .bind(komga_core::PDF_MEDIA_TYPE)
+        .bind(komga_core::RAR4_MEDIA_TYPE)
+        .bind(komga_core::RAR5_MEDIA_TYPE)
         .bind(edge_size)
         .bind(edge_size)
         .bind(jpeg_algorithm)
@@ -283,8 +287,8 @@ impl Storage {
         .await?)
     }
 
-    /// Lists edge pages that currently need hashing for one ready ZIP or PDF
-    /// book.
+    /// Lists edge pages that currently need hashing for one ready ZIP, RAR4,
+    /// RAR5, or PDF book.
     ///
     /// # Errors
     ///
@@ -301,7 +305,7 @@ impl Storage {
                  FROM MEDIA M
                  JOIN MEDIA_PAGE P ON P.BOOK_ID = M.BOOK_ID
                 WHERE M.BOOK_ID = ? AND M.STATUS = 'READY'
-                  AND M.MEDIA_TYPE IN ('application/zip', 'application/pdf')
+                  AND M.MEDIA_TYPE IN (?, ?, ?, ?)
                   AND (P.NUMBER < ? OR P.NUMBER >= MAX(M.PAGE_COUNT - ?, 0))
                   AND (P.FILE_HASH = '' OR
                        ((M.MEDIA_TYPE = 'application/pdf' OR P.MEDIA_TYPE = 'image/jpeg') AND
@@ -309,6 +313,10 @@ impl Storage {
                 ORDER BY P.NUMBER"#,
         )
         .bind(book_id)
+        .bind(komga_core::ZIP_MEDIA_TYPE)
+        .bind(komga_core::PDF_MEDIA_TYPE)
+        .bind(komga_core::RAR4_MEDIA_TYPE)
+        .bind(komga_core::RAR5_MEDIA_TYPE)
         .bind(edge_size)
         .bind(edge_size)
         .bind(jpeg_algorithm)
@@ -1631,6 +1639,35 @@ mod tests {
                 .map(|target| target.number)
                 .collect::<Vec<_>>(),
             [6]
+        );
+
+        sqlx::query("UPDATE MEDIA SET MEDIA_TYPE=? WHERE BOOK_ID=?")
+            .bind(komga_core::RAR4_MEDIA_TYPE)
+            .bind(&book.id)
+            .execute(&storage.pool)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE MEDIA_PAGE SET FILE_HASH='' WHERE BOOK_ID=? AND NUMBER=0")
+            .bind(&book.id)
+            .execute(&storage.pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            storage
+                .list_books_with_incomplete_page_hashes(&book.library_id, 2, RGB_ALGORITHM)
+                .await
+                .unwrap(),
+            std::slice::from_ref(&book.id)
+        );
+        assert_eq!(
+            storage
+                .list_page_hash_targets(&book.id, 2, RGB_ALGORITHM)
+                .await
+                .unwrap()
+                .iter()
+                .map(|target| target.number)
+                .collect::<Vec<_>>(),
+            [0]
         );
     }
 
