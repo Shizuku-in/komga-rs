@@ -5,10 +5,12 @@ use std::{
 };
 
 use komga_core::{
-    Book, BookEvent, DomainEvent, EPUB_MEDIA_TYPE, HistoricalEvent, Library, PDF_MEDIA_TYPE, RAR4_MEDIA_TYPE,
-    RAR5_MEDIA_TYPE, SeriesEvent, ZIP_MEDIA_TYPE, scan_book_file,
+    Book, BookEvent, DomainEvent, EPUB_MEDIA_TYPE, HashedPageTarget, HistoricalEvent, Library, Media, PDF_MEDIA_TYPE,
+    RAR4_MEDIA_TYPE, RAR5_MEDIA_TYPE, SeriesEvent, ZIP_MEDIA_TYPE, scan_book_file,
 };
-use komga_media::{RarToCbzError, convert_rar_to_cbz};
+use komga_media::{
+    PageRemovalError, PageRemovalRewrite, RarToCbzError, convert_rar_to_cbz, rewrite_hashed_rar_pages_to_cbz,
+};
 use komga_storage::{StorageError, TaskRecord};
 
 use super::{BookTaskPayload, LibraryTaskPayload, TaskOutcome};
@@ -79,6 +81,7 @@ pub(super) async fn process_convert_book_task(state: &AppState, task: &TaskRecor
             return TaskOutcome::Completed;
         }
     };
+    let source_mutation_guard = state.source_mutation_lock(&payload.book_id).lock().await;
     let book = match state.storage.find_book_by_id(&payload.book_id).await {
         Ok(Some(book)) if book.deleted_date.is_none() => book,
         Ok(_) => return TaskOutcome::Completed,
@@ -158,9 +161,78 @@ pub(super) async fn process_convert_book_task(state: &AppState, task: &TaskRecor
         }
     }
     prepared.finish();
+    drop(source_mutation_guard);
     publish_file_change(state, &prepared.book, &library, task.priority).await;
     tracing::info!(book_id = %book.id, path = %prepared.target.display(), "book converted to CBZ");
     TaskOutcome::Completed
+}
+
+pub(super) async fn perform_rar_page_removal(
+    state: &AppState,
+    book: &Book,
+    media: &Media,
+    library: &Library,
+    targets: &[HashedPageTarget],
+) -> Result<PageRemovalRewrite, TaskOutcome> {
+    let recovery_book = book.clone();
+    let recovery_library = library.clone();
+    match tokio::task::spawn_blocking(move || recover_conversion_artifacts(&recovery_book, &recovery_library)).await {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => return Err(work_failure("RAR page-removal recovery", &book.id, error)),
+        Err(error) => {
+            tracing::error!(%error, book_id = %book.id, "RAR page-removal recovery panicked");
+            return Err(TaskOutcome::Retry);
+        }
+    }
+
+    let work_book = book.clone();
+    let work_media = media.clone();
+    let work_library = library.clone();
+    let work_targets = targets.to_vec();
+    let cancellation = state.shutdown.clone();
+    let prepared = tokio::task::spawn_blocking(move || {
+        prepare_rar_page_removal(&work_book, &work_media, &work_library, &work_targets, || {
+            cancellation.is_cancelled()
+        })
+    })
+    .await;
+    let mut prepared = match prepared {
+        Ok(Ok(prepared)) => prepared,
+        Ok(Err(error)) => return Err(work_failure("RAR duplicate-page removal", &book.id, error)),
+        Err(error) => {
+            tracing::error!(%error, book_id = %book.id, "RAR page-removal worker panicked");
+            return Err(TaskOutcome::Retry);
+        }
+    };
+
+    match state
+        .storage
+        .commit_rar_page_removal_if_current(
+            book,
+            media,
+            &prepared.rewrite.book,
+            &prepared.rewrite.media,
+            &prepared.rewrite.removed,
+            &prepared.rewrite.retained_original_indices,
+        )
+        .await
+    {
+        Ok(true) => {}
+        Ok(false) => {
+            tracing::warn!(book_id = %book.id, "book or media changed during RAR page-removal commit");
+            prepared.rollback();
+            enqueue_recovery_scan(state, &book.library_id).await;
+            return Err(TaskOutcome::Completed);
+        }
+        Err(error) => {
+            tracing::error!(%error, book_id = %book.id, "could not persist RAR page removal");
+            prepared.rollback();
+            enqueue_recovery_scan(state, &book.library_id).await;
+            return Err(TaskOutcome::Retry);
+        }
+    }
+    prepared.finish();
+    Ok(prepared.rewrite)
 }
 
 pub(super) async fn process_repair_extension_task(state: &AppState, task: &TaskRecord) -> TaskOutcome {
@@ -321,6 +393,32 @@ struct PreparedConversion {
     backup: PathBuf,
 }
 
+#[derive(Debug)]
+struct PreparedRarPageRemoval {
+    rewrite: PageRemovalRewrite,
+    source: PathBuf,
+    target: PathBuf,
+    temporary: PathBuf,
+    backup: PathBuf,
+}
+
+impl PreparedRarPageRemoval {
+    fn rollback(&mut self) {
+        remove_regular_file(&self.target, "RAR page-removal target");
+        if self.backup.exists()
+            && let Err(error) = fs::rename(&self.backup, &self.source)
+        {
+            tracing::error!(%error, from = %self.backup.display(), to = %self.source.display(), "could not restore RAR page-removal source");
+        }
+        remove_regular_file(&self.temporary, "RAR page-removal temporary file");
+    }
+
+    fn finish(&mut self) {
+        remove_regular_file(&self.backup, "RAR page-removal backup");
+        remove_regular_file(&self.temporary, "RAR page-removal temporary file");
+    }
+}
+
 impl PreparedConversion {
     fn rollback(&mut self) {
         remove_regular_file(&self.target, "converted target");
@@ -382,6 +480,62 @@ fn prepare_conversion(
     Ok(PreparedConversion {
         book: converted.book,
         media: converted.media,
+        source,
+        target,
+        temporary,
+        backup,
+    })
+}
+
+fn prepare_rar_page_removal(
+    book: &Book,
+    media: &Media,
+    library: &Library,
+    targets: &[HashedPageTarget],
+    cancelled: impl Fn() -> bool,
+) -> Result<PreparedRarPageRemoval, WorkError> {
+    let (root, source, parent) = validated_source(book, library)?;
+    let target = source.with_extension("cbz");
+    let (temporary, backup) = conversion_artifacts(&parent, &book.id);
+    ensure_within(&target, &parent, &root)?;
+    ensure_within(&temporary, &parent, &root)?;
+    ensure_within(&backup, &parent, &root)?;
+    ensure_absent(&target, "RAR page-removal target")?;
+    ensure_absent(&temporary, "RAR page-removal temporary file")?;
+    ensure_absent(&backup, "RAR page-removal backup")?;
+
+    let mut rewrite =
+        rewrite_hashed_rar_pages_to_cbz(book, media, targets, &temporary, library.analyze_dimensions, &cancelled)
+            .map_err(WorkError::from)?;
+    rewrite.book.url = url::Url::from_file_path(&target)
+        .map_err(|()| WorkError::terminal("RAR page-removal target cannot be represented as a file URL"))?;
+    rewrite.book.name = source
+        .file_stem()
+        .ok_or_else(|| WorkError::terminal("RAR page-removal source has no filename stem"))?
+        .to_string_lossy()
+        .into_owned();
+    if cancelled() {
+        remove_regular_file(&temporary, "cancelled RAR page-removal temporary file");
+        return Err(WorkError::from(PageRemovalError::Cancelled));
+    }
+
+    fs::rename(&source, &backup).map_err(WorkError::retry)?;
+    if let Err(error) = fs::rename(&temporary, &target) {
+        let _ = fs::rename(&backup, &source);
+        return Err(WorkError::retry(error));
+    }
+    if let Some(scanned) = scan_book_file(&target, &book.library_id, book.oneshot) {
+        rewrite.book.name = scanned.name;
+        rewrite.book.url = scanned.url;
+        rewrite.book.file_size = scanned.file_size;
+        rewrite.book.file_last_modified = scanned.file_last_modified;
+    } else {
+        remove_regular_file(&target, "invalid RAR page-removal target");
+        let _ = fs::rename(&backup, &source);
+        return Err(WorkError::terminal("RAR page-removal CBZ could not be scanned"));
+    }
+    Ok(PreparedRarPageRemoval {
+        rewrite,
         source,
         target,
         temporary,
@@ -677,6 +831,24 @@ impl From<RarToCbzError> for WorkError {
     }
 }
 
+impl From<PageRemovalError> for WorkError {
+    fn from(error: PageRemovalError) -> Self {
+        match error {
+            PageRemovalError::Cancelled => Self {
+                message: error.to_string(),
+                outcome: TaskOutcome::Cancelled,
+            },
+            PageRemovalError::Io(_) => Self::retry(error),
+            PageRemovalError::Stale(_)
+            | PageRemovalError::Unsupported(_)
+            | PageRemovalError::Archive(_)
+            | PageRemovalError::Pdf(_)
+            | PageRemovalError::Hash(_)
+            | PageRemovalError::Validation(_) => Self::terminal(error.to_string()),
+        }
+    }
+}
+
 fn work_failure(operation: &str, book_id: &str, error: WorkError) -> TaskOutcome {
     match error.outcome {
         TaskOutcome::Retry => {
@@ -701,7 +873,7 @@ mod tests {
     use std::{fs, path::PathBuf};
 
     use komga_core::{Library, scan_library_files};
-    use komga_media::analyze_book;
+    use komga_media::{analyze_book, extract_page, hash_page};
     use komga_storage::Storage;
     use url::Url;
 
@@ -749,6 +921,32 @@ mod tests {
         assert!(!prepared.target.exists());
         assert!(!prepared.temporary.exists());
         assert!(!prepared.backup.exists());
+    }
+
+    #[tokio::test]
+    async fn rar_page_removal_preserves_an_existing_cbz_target() {
+        let (_temporary, library, book, mut media, original) = conversion_fixture().await;
+        let source = book.url.to_file_path().unwrap();
+        let target = source.with_extension("cbz");
+        fs::write(&target, b"existing target").unwrap();
+        let content = extract_page(&book, &media, 1).unwrap();
+        media.pages[0].file_hash = hash_page(&content.bytes, &content.media_type).unwrap().hash;
+        let page = &media.pages[0];
+        let removed = HashedPageTarget {
+            file_name: page.file_name.clone(),
+            media_type: page.media_type.clone(),
+            file_hash: page.file_hash.clone(),
+            file_size: page.file_size.unwrap(),
+            page_number: 1,
+        };
+
+        let error = prepare_rar_page_removal(&book, &media, &library, &[removed], || false).unwrap_err();
+        assert_eq!(error.outcome, TaskOutcome::Completed);
+        assert_eq!(fs::read(&source).unwrap(), original);
+        assert_eq!(fs::read(&target).unwrap(), b"existing target");
+        let (conversion_temporary, backup) = conversion_artifacts(source.parent().unwrap(), &book.id);
+        assert!(!conversion_temporary.exists());
+        assert!(!backup.exists());
     }
 
     #[cfg(unix)]

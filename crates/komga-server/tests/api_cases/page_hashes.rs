@@ -261,6 +261,93 @@ async fn unknown_preview_and_persisted_known_thumbnail_are_jpeg() {
 }
 
 #[tokio::test]
+async fn rar_matches_preview_and_manual_delete_use_existing_page_hash_contract() {
+    let (_temporary, storage, tasks, scanned_book, _) =
+        analyzed_media_fixture("archives/rar4-solid.rar", "Volume.cbr").await;
+    let book = storage.find_book_by_id(&scanned_book.id).await.unwrap().unwrap();
+    let media = storage.find_media_by_book_id(&scanned_book.id).await.unwrap().unwrap();
+    let content = extract_page(&book, &media, 1).unwrap();
+    let computed = hash_page(&content.bytes, &content.media_type).unwrap();
+    assert!(
+        storage
+            .update_page_hashes_if_current(
+                &book,
+                &media,
+                &[PageHashUpdate {
+                    number: 0,
+                    file_name: media.pages[0].file_name.clone(),
+                    media_type: media.pages[0].media_type.clone(),
+                    file_hash: computed.hash.clone(),
+                    algorithm: computed.algorithm.into(),
+                }],
+            )
+            .await
+            .unwrap()
+    );
+    let app = build_app(AppState::new(storage, tasks.clone()).await.unwrap());
+    claim(&app).await;
+    let admin = basic("admin@example.org", "password");
+
+    let matches = app
+        .clone()
+        .oneshot(
+            Request::get(format!("/api/v1/page-hashes/{}", computed.hash))
+                .header(header::AUTHORIZATION, &admin)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(matches.status(), StatusCode::OK);
+    let matched = body_json(matches).await["content"][0].clone();
+    assert_eq!(matched["bookId"], book.id);
+    assert_eq!(matched["pageNumber"], 1);
+    assert_eq!(matched["fileName"], media.pages[0].file_name);
+    assert_eq!(matched["fileSize"], media.pages[0].file_size.unwrap());
+    assert_eq!(matched["mediaType"], "image/png");
+
+    let preview = app
+        .clone()
+        .oneshot(
+            Request::get(format!(
+                "/api/v1/page-hashes/unknown/{}/thumbnail?resize=50",
+                computed.hash
+            ))
+            .header(header::AUTHORIZATION, &admin)
+            .body(Body::empty())
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(preview.status(), StatusCode::OK);
+    assert_eq!(preview.headers()[header::CONTENT_TYPE], "image/jpeg");
+    assert!(body_bytes(preview).await.starts_with(&[0xff, 0xd8]));
+
+    let delete = app
+        .oneshot(
+            Request::post(format!("/api/v1/page-hashes/{}/delete-match", computed.hash))
+                .header(header::AUTHORIZATION, admin)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(matched.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(delete.status(), StatusCode::ACCEPTED);
+    let removal = tasks
+        .list()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|task| task.simple_type == "RemoveHashedPages")
+        .unwrap();
+    let payload: serde_json::Value = serde_json::from_str(&removal.payload).unwrap();
+    assert_eq!(payload["bookId"], book.id);
+    assert_eq!(payload["pages"][0]["mediaType"], "image/png");
+    assert_eq!(payload["pages"][0]["pageNumber"], 1);
+}
+
+#[tokio::test]
 async fn pdf_matches_preview_and_manual_delete_use_rendered_jpeg_contract() {
     let (_temporary, storage, tasks, scanned_book, _) = analyzed_media_fixture("pdf/komga.pdf", "Volume.pdf").await;
     let book = storage.find_book_by_id(&scanned_book.id).await.unwrap().unwrap();

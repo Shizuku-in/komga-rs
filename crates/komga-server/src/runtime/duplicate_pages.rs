@@ -7,7 +7,10 @@ use std::{
 };
 
 use chrono::{DateTime, Local};
-use komga_core::{Book, HashedPageTarget, Library, Media, PDF_MEDIA_TYPE, PageHashAction, ZIP_MEDIA_TYPE};
+use komga_core::{
+    Book, HashedPageTarget, Library, Media, PDF_MEDIA_TYPE, PageHashAction, RAR4_MEDIA_TYPE, RAR5_MEDIA_TYPE,
+    ZIP_MEDIA_TYPE,
+};
 use komga_media::{
     FileHashError, PageRemovalError, PageRemovalRewrite, hash_file, rewrite_hashed_pdf_pages, rewrite_hashed_zip_pages,
 };
@@ -184,6 +187,7 @@ pub(super) async fn process_remove_hashed_pages_task(state: &AppState, task: &Ta
             return TaskOutcome::Completed;
         }
     };
+    let source_mutation_guard = state.source_mutation_lock(&payload.book_id).lock().await;
     let book = match state.storage.find_book_by_id(&payload.book_id).await {
         Ok(Some(book)) if book.deleted_date.is_none() => book,
         Ok(_) => return TaskOutcome::Completed,
@@ -208,6 +212,15 @@ pub(super) async fn process_remove_hashed_pages_task(state: &AppState, task: &Ta
             return TaskOutcome::Retry;
         }
     };
+    if matches!(media.media_type.as_deref(), Some(RAR4_MEDIA_TYPE | RAR5_MEDIA_TYPE)) {
+        let removal =
+            match super::conversion::perform_rar_page_removal(state, &book, &media, &library, &payload.pages).await {
+                Ok(removal) => removal,
+                Err(outcome) => return outcome,
+            };
+        drop(source_mutation_guard);
+        return complete_page_removal(state, task, &book, &library, &removal).await;
+    }
     let recovery_book = book.clone();
     let recovery_media = media.clone();
     let recovery_library = library.clone();
@@ -309,8 +322,26 @@ pub(super) async fn process_remove_hashed_pages_task(state: &AppState, task: &Ta
             enqueue_recovery_scan(state, &book.library_id).await;
         }
     }
-    let removal = &prepared.rewrite;
+    let removal = prepared.rewrite;
+    drop(source_mutation_guard);
+    complete_page_removal(state, task, &book, &library, &removal).await
+}
+
+async fn complete_page_removal(
+    state: &AppState,
+    task: &TaskRecord,
+    book: &Book,
+    library: &Library,
+    removal: &PageRemovalRewrite,
+) -> TaskOutcome {
     state.publish_domain_event(DomainEvent::BookUpdated(BookEvent::from(&removal.book)));
+    let series_changed = removal.book.oneshot && removal.book.url != book.url;
+    if series_changed {
+        state.publish_domain_event(DomainEvent::SeriesUpdated(SeriesEvent {
+            series_id: removal.book.series_id.clone(),
+            library_id: removal.book.library_id.clone(),
+        }));
+    }
 
     if removal.removed_first_page
         && let Err(error) = state
@@ -354,7 +385,9 @@ pub(super) async fn process_remove_hashed_pages_task(state: &AppState, task: &Ta
         enqueue_recovery_scan(state, &book.library_id).await;
         return TaskOutcome::Retry;
     }
-    if !state.sync_books(std::slice::from_ref(&book.id)).await {
+    let books_synced = state.sync_books(std::slice::from_ref(&book.id)).await;
+    let series_synced = !series_changed || state.sync_series(std::slice::from_ref(&book.series_id)).await;
+    if !books_synced || !series_synced {
         state.recover_search_after_http_failure().await;
     }
     tracing::info!(book_id = %book.id, pages = removal.removed.len(), "duplicate pages removed");
@@ -1002,7 +1035,7 @@ async fn enqueue_recovery_scan(state: &AppState, library_id: &str) {
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, fs::File, io::Write, path::PathBuf};
+    use std::{fs, fs::File, io::Write, num::NonZeroUsize, path::PathBuf};
 
     use chrono::Utc;
     use komga_core::{Library, PageHashAction, User, page_progress, scan_library_files};
@@ -1181,6 +1214,225 @@ mod tests {
                 .iter()
                 .any(|task| task.simple_type == "ScanLibrary")
         );
+    }
+
+    #[tokio::test]
+    async fn rar_hash_and_removal_convert_to_cbz_without_library_conversion_enabled() {
+        let storage = Storage::connect_memory().await.unwrap();
+        let tasks = TaskStorage::connect_memory().await.unwrap();
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("library");
+        let series_path = root.join("Series");
+        fs::create_dir_all(&series_path).unwrap();
+        let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../komga/komga/src/test/resources/archives/rar4-solid.rar");
+        let source = series_path.join("Volume.cbr");
+        fs::copy(fixture, &source).unwrap();
+
+        let mut library = Library::new("Library".into(), Url::from_directory_path(&root).unwrap());
+        library.hash_pages = true;
+        assert!(!library.convert_to_cbz);
+        storage.create_library(&library).await.unwrap();
+        storage
+            .apply_library_scan(&library.id, &scan_library_files(&library, || false).unwrap(), false)
+            .await
+            .unwrap();
+        let book = storage
+            .list_active_books_by_library_id(&library.id)
+            .await
+            .unwrap()
+            .remove(0);
+        let analyzed = analyze_book(&book, true, || false).unwrap();
+        assert_eq!(analyzed.media_type.as_deref(), Some(RAR4_MEDIA_TYPE));
+        storage.replace_media_analysis(&analyzed).await.unwrap();
+        let state = AppState::new(storage.clone(), tasks.clone())
+            .await
+            .unwrap()
+            .with_page_hashing(NonZeroUsize::new(2).unwrap());
+
+        assert_eq!(
+            super::super::page_hashing::process_hash_book_pages_task(
+                &state,
+                &TaskRecord::hash_book_pages(&book.id, 1),
+            )
+            .await,
+            TaskOutcome::Completed
+        );
+        let media = storage.find_media_by_book_id(&book.id).await.unwrap().unwrap();
+        assert_eq!(media.pages.len(), 3);
+        assert!(media.pages.iter().all(|page| !page.file_hash.is_empty()));
+        let removed_page = &media.pages[0];
+        storage
+            .create_or_update_page_hash(
+                &removed_page.file_hash,
+                removed_page.file_size,
+                PageHashAction::DeleteManual,
+                None,
+            )
+            .await
+            .unwrap();
+        let removal = TaskRecord::remove_hashed_pages(
+            &book.id,
+            &[HashedPageTarget {
+                file_name: removed_page.file_name.clone(),
+                media_type: removed_page.media_type.clone(),
+                file_hash: removed_page.file_hash.clone(),
+                file_size: removed_page.file_size.unwrap(),
+                page_number: 1,
+            }],
+            4,
+        );
+        assert_eq!(
+            process_remove_hashed_pages_task(&state, &removal).await,
+            TaskOutcome::Completed
+        );
+
+        let target = series_path.join("Volume.cbz");
+        assert!(!source.exists());
+        assert!(target.exists());
+        assert_eq!(ZipArchive::new(File::open(&target).unwrap()).unwrap().len(), 2);
+        let saved_book = storage.find_book_by_id(&book.id).await.unwrap().unwrap();
+        assert_eq!(saved_book.url, Url::from_file_path(&target).unwrap());
+        let saved_media = storage.find_media_by_book_id(&book.id).await.unwrap().unwrap();
+        assert_eq!(saved_media.media_type.as_deref(), Some(ZIP_MEDIA_TYPE));
+        assert_eq!(saved_media.pages.len(), 2);
+        assert!(saved_media.pages.iter().all(|page| !page.file_hash.is_empty()));
+        let history = storage
+            .list_historical_events(&komga_core::PageRequest {
+                unpaged: true,
+                ..komga_core::PageRequest::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(history.total_elements, 3);
+        assert!(history.content.iter().any(|event| event.event_type == "BookConverted"));
+        assert!(
+            history
+                .content
+                .iter()
+                .any(|event| event.event_type == "DuplicatePageDeleted")
+        );
+        for extension in ["tmp", "bak"] {
+            assert!(
+                !series_path
+                    .join(format!(".komga-convert-{}.{extension}", book.id))
+                    .exists()
+            );
+        }
+        let queued = tasks
+            .list()
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|task| task.simple_type)
+            .collect::<Vec<_>>();
+        assert!(queued.iter().any(|value| value == "GenerateBookThumbnail"));
+        assert!(queued.iter().any(|value| value == "HashBookPages"));
+        assert_eq!(state.search.search(EntityKind::Book, "volume")[0].id, book.id);
+    }
+
+    #[tokio::test]
+    async fn rar_removal_and_regular_conversion_serialize_in_either_order() {
+        for removal_first in [true, false] {
+            let storage = Storage::connect_memory().await.unwrap();
+            let tasks = TaskStorage::connect_memory().await.unwrap();
+            let temporary = tempfile::tempdir().unwrap();
+            let root = temporary.path().join("library");
+            let series_path = root.join("Series");
+            fs::create_dir_all(&series_path).unwrap();
+            let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../komga/komga/src/test/resources/archives/rar4-solid.rar");
+            let source = series_path.join("Volume.cbr");
+            fs::copy(fixture, &source).unwrap();
+
+            let mut library = Library::new("Library".into(), Url::from_directory_path(&root).unwrap());
+            library.hash_pages = true;
+            library.convert_to_cbz = true;
+            storage.create_library(&library).await.unwrap();
+            storage
+                .apply_library_scan(&library.id, &scan_library_files(&library, || false).unwrap(), false)
+                .await
+                .unwrap();
+            let book = storage
+                .list_active_books_by_library_id(&library.id)
+                .await
+                .unwrap()
+                .remove(0);
+            let media = analyze_book(&book, false, || false).unwrap();
+            storage.replace_media_analysis(&media).await.unwrap();
+            let state = AppState::new(storage.clone(), tasks)
+                .await
+                .unwrap()
+                .with_page_hashing(NonZeroUsize::new(2).unwrap());
+            assert_eq!(
+                super::super::page_hashing::process_hash_book_pages_task(
+                    &state,
+                    &TaskRecord::hash_book_pages(&book.id, 1),
+                )
+                .await,
+                TaskOutcome::Completed
+            );
+            let media = storage.find_media_by_book_id(&book.id).await.unwrap().unwrap();
+            let removed = &media.pages[1];
+            let removal = TaskRecord::remove_hashed_pages(
+                &book.id,
+                &[HashedPageTarget {
+                    file_name: removed.file_name.clone(),
+                    media_type: removed.media_type.clone(),
+                    file_hash: removed.file_hash.clone(),
+                    file_size: removed.file_size.unwrap(),
+                    page_number: 2,
+                }],
+                4,
+            );
+            let conversion = TaskRecord::convert_book(&book.id, &book.series_id, 4);
+
+            let (first, second) = if removal_first {
+                let first_state = state.clone();
+                let first_task = removal.clone();
+                let first =
+                    tokio::spawn(async move { process_remove_hashed_pages_task(&first_state, &first_task).await });
+                tokio::task::yield_now().await;
+                let second_state = state.clone();
+                let second = tokio::spawn(async move {
+                    super::super::conversion::process_convert_book_task(&second_state, &conversion).await
+                });
+                (first.await.unwrap(), second.await.unwrap())
+            } else {
+                let first_state = state.clone();
+                let first = tokio::spawn(async move {
+                    super::super::conversion::process_convert_book_task(&first_state, &conversion).await
+                });
+                tokio::task::yield_now().await;
+                let second_state = state.clone();
+                let second_task = removal.clone();
+                let second =
+                    tokio::spawn(async move { process_remove_hashed_pages_task(&second_state, &second_task).await });
+                (first.await.unwrap(), second.await.unwrap())
+            };
+            assert_eq!(first, TaskOutcome::Completed, "removal_first={removal_first}");
+            assert_eq!(second, TaskOutcome::Completed, "removal_first={removal_first}");
+
+            let target = series_path.join("Volume.cbz");
+            assert!(!source.exists(), "removal_first={removal_first}");
+            assert!(target.exists(), "removal_first={removal_first}");
+            assert_eq!(
+                ZipArchive::new(File::open(&target).unwrap()).unwrap().len(),
+                2,
+                "removal_first={removal_first}"
+            );
+            let saved = storage.find_media_by_book_id(&book.id).await.unwrap().unwrap();
+            assert_eq!(saved.media_type.as_deref(), Some(ZIP_MEDIA_TYPE));
+            assert_eq!(saved.pages.len(), 2);
+            for extension in ["tmp", "bak"] {
+                assert!(
+                    !series_path
+                        .join(format!(".komga-convert-{}.{extension}", book.id))
+                        .exists(),
+                    "removal_first={removal_first}"
+                );
+            }
+        }
     }
 
     #[tokio::test]

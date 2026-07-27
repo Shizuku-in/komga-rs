@@ -1,5 +1,5 @@
 use chrono::{DateTime, Local};
-use komga_core::{MediaStatus, PDF_MEDIA_TYPE, ZIP_MEDIA_TYPE};
+use komga_core::{MediaStatus, PDF_MEDIA_TYPE, RAR4_MEDIA_TYPE, RAR5_MEDIA_TYPE, ZIP_MEDIA_TYPE};
 use komga_media::{
     MediaOperationError, PageHashError, PdfPageRenderer, RGB_PAGE_HASH_ALGORITHM, extract_page, hash_page,
 };
@@ -101,7 +101,10 @@ pub(super) async fn process_hash_book_pages_task(state: &AppState, task: &TaskRe
         }
     };
     if media.status != MediaStatus::Ready
-        || !matches!(media.media_type.as_deref(), Some(ZIP_MEDIA_TYPE | PDF_MEDIA_TYPE))
+        || !matches!(
+            media.media_type.as_deref(),
+            Some(ZIP_MEDIA_TYPE | RAR4_MEDIA_TYPE | RAR5_MEDIA_TYPE | PDF_MEDIA_TYPE)
+        )
     {
         return TaskOutcome::Completed;
     }

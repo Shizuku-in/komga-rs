@@ -57,6 +57,8 @@ pub use auth::{REMEMBER_ME_COOKIE, SESSION_COOKIE, SESSION_HEADER};
 pub use runtime::{AppRuntime, ShutdownHandle};
 
 use std::{
+    collections::hash_map::DefaultHasher,
+    hash::{Hash, Hasher},
     num::{NonZeroU16, NonZeroUsize},
     path::PathBuf,
     sync::{
@@ -64,6 +66,8 @@ use std::{
         atomic::{AtomicU16, Ordering},
     },
 };
+
+const SOURCE_MUTATION_LOCK_COUNT: usize = 64;
 
 use auth::SessionStore;
 use axum::Router;
@@ -85,6 +89,7 @@ pub struct AppState {
     tasks: TaskStorage,
     sessions: SessionStore,
     claim_lock: Arc<Mutex<()>>,
+    source_mutation_locks: Arc<[Mutex<()>; SOURCE_MUTATION_LOCK_COUNT]>,
     task_notify: Arc<Notify>,
     schedule_notify: Arc<Notify>,
     task_pool_size: watch::Sender<usize>,
@@ -170,6 +175,7 @@ impl AppState {
             tasks,
             sessions: SessionStore::new(server_settings.remember_me_duration_days),
             claim_lock: Arc::new(Mutex::new(())),
+            source_mutation_locks: Arc::new(std::array::from_fn(|_| Mutex::new(()))),
             task_notify: Arc::new(Notify::new()),
             schedule_notify: Arc::new(Notify::new()),
             task_pool_size,
@@ -197,7 +203,14 @@ impl AppState {
         })
     }
 
-    /// Overrides the number of pages hashed at each edge of ZIP books.
+    fn source_mutation_lock(&self, book_id: &str) -> &Mutex<()> {
+        let mut hasher = DefaultHasher::new();
+        book_id.hash(&mut hasher);
+        let index = usize::try_from(hasher.finish()).unwrap_or(0) % SOURCE_MUTATION_LOCK_COUNT;
+        &self.source_mutation_locks[index]
+    }
+
+    /// Overrides the number of pages hashed at each edge of ZIP, RAR, and PDF books.
     #[must_use]
     pub fn with_page_hashing(mut self, page_hashing: NonZeroUsize) -> Self {
         self.page_hashing = page_hashing;
