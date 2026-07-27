@@ -42,6 +42,20 @@ For an API-only binary without embedded Web UI assets or a Node dependency, disa
 cargo build -p komga-server --no-default-features
 ```
 
+HEIF/HEIC and AVIF page conversion is an optional native build because it links to `libheif`. The default build remains
+pure Rust and serves detected HEIF/AVIF pages unchanged. On Ubuntu 24.04, install the library and HEVC/AV1 decoder plugins,
+then enable `heif-native`:
+
+```bash
+sudo apt-get install pkg-config libheif-dev libheif-plugin-libde265 libheif-plugin-dav1d
+cargo run --release -p komga-server --features heif-native
+```
+
+`libheif` 1.17 or newer is required. macOS packagers can use `brew install libheif`; Windows packagers can provide it
+through vcpkg. At startup, a `heif-native` server logs whether HEVC and AV1 decoders are actually available. A missing
+decoder leaves its media type available for original delivery but unavailable for dimensions, conversion, and generated
+thumbnails.
+
 The defaults match Komga:
 
 - listen on `0.0.0.0:25600`;
