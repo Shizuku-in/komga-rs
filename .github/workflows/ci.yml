@@ -6,8 +6,94 @@ on:
       - "**"
   pull_request:
 
+permissions:
+  actions: read
+  contents: read
+
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      run_full: ${{ steps.scope.outputs.run_full }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Determine CI scope
+        id: scope
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          BEFORE_SHA: ${{ github.event.before }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BRANCH_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          run_full=true
+          reason="full CI is the safe default"
+          changed_files=()
+          changed_file_list="$RUNNER_TEMP/changed-files"
+          zero_sha="0000000000000000000000000000000000000000"
+
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            git diff --name-only -z "$BASE_SHA...$HEAD_SHA" > "$changed_file_list"
+            mapfile -d '' -t changed_files < "$changed_file_list"
+          elif [[ "$EVENT_NAME" == "push" && "$BEFORE_SHA" != "$zero_sha" ]]; then
+            git diff --name-only -z "$BEFORE_SHA" "$GITHUB_SHA" > "$changed_file_list"
+            mapfile -d '' -t changed_files < "$changed_file_list"
+          else
+            reason="new branches and unknown events require full CI"
+          fi
+
+          docs_only=false
+          if (( ${#changed_files[@]} > 0 )); then
+            docs_only=true
+            for changed_file in "${changed_files[@]}"; do
+              case "$changed_file" in
+                *.md|LICENSE|*/LICENSE|LICENSE.*|*/LICENSE.*|.github/readme-images/*|docs/*.gif|docs/*.jpeg|docs/*.jpg|docs/*.png|docs/*.svg|docs/*.webp)
+                  ;;
+                *)
+                  docs_only=false
+                  break
+                  ;;
+              esac
+            done
+          fi
+
+          if [[ "$docs_only" == "false" ]]; then
+            reason="the change includes files that can affect the product or CI"
+          elif [[ "$EVENT_NAME" == "pull_request" ]]; then
+            run_full=false
+            reason="the pull request changes documentation only"
+          else
+            successful_runs="$(
+              gh api \
+                "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$BEFORE_SHA&event=push&status=completed&per_page=100" \
+                --jq '.workflow_runs[] | select(.conclusion == "success") | .head_branch' \
+                | grep -Fxc "$BRANCH_NAME" || true
+            )"
+            if [[ "$successful_runs" -gt 0 ]]; then
+              run_full=false
+              reason="the push changes documentation only and its parent has successful CI"
+            else
+              reason="the documentation-only push has no successful CI result for its parent"
+            fi
+          fi
+
+          echo "run_full=$run_full" >> "$GITHUB_OUTPUT"
+          {
+            echo "### CI scope"
+            echo "- Full CI: \`$run_full\`"
+            echo "- Changed files: ${#changed_files[@]}"
+            echo "- Reason: $reason"
+          } >> "$GITHUB_STEP_SUMMARY"
+
   webui:
+    needs: changes
+    if: needs.changes.outputs.run_full == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -30,7 +116,8 @@ jobs:
           if-no-files-found: error
 
   msrv:
-    needs: webui
+    needs: [changes, webui]
+    if: needs.changes.outputs.run_full == 'true'
     runs-on: ubuntu-latest
     env:
       KOMGA_WEBUI_DIST_DIR: webui/dist
@@ -48,7 +135,8 @@ jobs:
       - run: cargo check -p komga-server --all-targets --no-default-features --locked
 
   test:
-    needs: webui
+    needs: [changes, webui]
+    if: needs.changes.outputs.run_full == 'true'
     runs-on: ubuntu-latest
     env:
       KOMGA_WEBUI_DIST_DIR: webui/dist
@@ -72,7 +160,8 @@ jobs:
           RUSTDOCFLAGS: -D warnings
 
   native-codecs:
-    needs: webui
+    needs: [changes, webui]
+    if: needs.changes.outputs.run_full == 'true'
     runs-on: ubuntu-24.04
     env:
       KOMGA_WEBUI_DIST_DIR: webui/dist
@@ -94,6 +183,8 @@ jobs:
       - run: cargo test --workspace --all-targets --features komga-media/heif-native,komga-server/heif-native
 
   docker:
+    needs: changes
+    if: needs.changes.outputs.run_full == 'true'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -124,7 +215,8 @@ jobs:
           exit 1
 
   e2e:
-    needs: webui
+    needs: [changes, webui]
+    if: needs.changes.outputs.run_full == 'true'
     runs-on: ubuntu-latest
     env:
       KOMGA_WEBUI_DIST_DIR: webui/dist
