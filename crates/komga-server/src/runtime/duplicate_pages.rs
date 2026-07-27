@@ -1304,6 +1304,14 @@ mod tests {
         let mut archive = ZipArchive::new(File::open(&source).unwrap()).unwrap();
         assert!(archive.by_name("pages/2.xhtml").is_err());
         assert!(archive.by_name("images/2.png").is_err());
+        let nav = {
+            let mut entry = archive.by_name("nav.xhtml").unwrap();
+            let mut content = String::new();
+            entry.read_to_string(&mut content).unwrap();
+            content
+        };
+        assert!(!nav.contains("pages/2.xhtml"));
+        assert!(nav.contains("pages/1.xhtml") && nav.contains("pages/3.xhtml"));
         assert_eq!(
             storage
                 .find_known_page_hash(&page.file_hash)
@@ -1361,7 +1369,13 @@ mod tests {
         writer.start_file("content.opf", options).unwrap();
         writer
             .write_all(
-                br#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0"><metadata><meta property="rendition:layout">pre-paginated</meta></metadata><manifest><item id="p1" href="pages/1.xhtml" media-type="application/xhtml+xml"/><item id="p2" href="pages/2.xhtml" media-type="application/xhtml+xml"/><item id="p3" href="pages/3.xhtml" media-type="application/xhtml+xml"/><item id="i1" href="images/1.png" media-type="image/png"/><item id="i2" href="images/2.png" media-type="image/png"/><item id="i3" href="images/3.png" media-type="image/png"/></manifest><spine><itemref idref="p1"/><itemref idref="p2"/><itemref idref="p3"/></spine></package>"#,
+                br#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0"><metadata><meta property="rendition:layout">pre-paginated</meta></metadata><manifest><item id="p1" href="pages/1.xhtml" media-type="application/xhtml+xml"/><item id="p2" href="pages/2.xhtml" media-type="application/xhtml+xml"/><item id="p3" href="pages/3.xhtml" media-type="application/xhtml+xml"/><item id="i1" href="images/1.png" media-type="image/png"/><item id="i2" href="images/2.png" media-type="image/png"/><item id="i3" href="images/3.png" media-type="image/png"/><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/></manifest><spine><itemref idref="p1"/><itemref idref="p2"/><itemref idref="p3"/></spine></package>"#,
+            )
+            .unwrap();
+        writer.start_file("nav.xhtml", options).unwrap();
+        writer
+            .write_all(
+                br#"<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><body><nav epub:type="toc"><ol><li><a href="pages/1.xhtml">One</a></li><li><a href="pages/2.xhtml">Two</a><ol><li><a href="pages/3.xhtml">Three</a></li></ol></li></ol></nav></body></html>"#,
             )
             .unwrap();
         for (index, image) in images.iter().enumerate() {
