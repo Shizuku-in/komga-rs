@@ -63,8 +63,9 @@ compares entry sets, OPF and DOM semantics, and span identities rather than comp
 custom CSS, find/replace, hyphenation, old-firmware fullscreen fixes, and the complete `kepubify` CLI are out of scope.
 
 Ordinary reflowable EPUBs advertise KEPUB without configuration. Native KEPUB and fixed-layout publications retain their
-existing delivery formats. A configured `kepubify` path remains visible through the existing settings contract and is used
-only as a fallback for invalid or incompatible content after archive safety and size checks pass. Cancellation, I/O,
+existing delivery formats. The Web UI does not show a `kepubify` path because the built-in converter requires none. A
+configured path remains available through the existing settings API, CLI, and environment compatibility contract and is
+used only as a fallback for invalid or incompatible content after archive safety and size checks pass. Cancellation, I/O,
 unsafe archives, and resource-limit failures cannot invoke the fallback. Both in-process and fallback output must reopen
 as a valid EPUB, contain a correct mimetype and package, and preserve source content documents before entering the cache.
 
