@@ -62,6 +62,8 @@ mod page_hash_cases;
 mod progress_cases;
 #[path = "api_cases/referential.rs"]
 mod referential_cases;
+#[path = "api_cases/search.rs"]
+mod search_cases;
 #[path = "api_cases/settings.rs"]
 mod settings_cases;
 #[path = "api_cases/source_deletion.rs"]

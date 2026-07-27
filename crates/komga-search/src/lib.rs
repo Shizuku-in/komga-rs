@@ -394,6 +394,7 @@ impl SearchIndex {
         let ast = match tantivy::query_grammar::parse_query(input) {
             Ok(mut ast) => {
                 rewrite_dynamic_author_fields(&mut ast);
+                normalize_negative_clauses(&mut ast);
                 ast
             }
             Err(error) => {
@@ -583,6 +584,24 @@ fn rewrite_dynamic_author_fields(ast: &mut UserInputAst) {
     }
 }
 
+fn normalize_negative_clauses(ast: &mut UserInputAst) {
+    // Lucene permits pure-negative clauses by implicitly matching every
+    // document before applying the exclusions. Tantivy rejects those clauses.
+    let UserInputAst::Clause(children) = ast else {
+        if let UserInputAst::Boost(child, _) = ast {
+            normalize_negative_clauses(child);
+        }
+        return;
+    };
+
+    for (_, child) in children.iter_mut() {
+        normalize_negative_clauses(child);
+    }
+    if !children.is_empty() && children.iter().all(|(occur, _)| *occur == Some(Occur::MustNot)) {
+        children.push((Some(Occur::Should), UserInputAst::Leaf(Box::new(UserInputLeaf::All))));
+    }
+}
+
 fn rewrite_field(field: &mut Option<String>) {
     let Some(name) = field.as_mut() else {
         return;
@@ -638,6 +657,168 @@ mod tests {
         assert_eq!(index.search(EntityKind::Book, "deleted:false")[0].id, "b1");
         assert!(index.search(EntityKind::Book, "title:(").is_empty());
         assert_eq!(index.search(EntityKind::Series, "Batman").len(), 1);
+    }
+
+    #[test]
+    fn kotlin_book_query_corpus_matches_fields_language_and_boolean_behavior() {
+        let index = SearchIndex::in_memory().unwrap();
+        index
+            .replace(
+                &[EntityKind::Book],
+                [
+                    SearchEntity::new(EntityKind::Book, "batman")
+                        .field("title", "Batman S.W.O.R.D X-Men")
+                        .field("isbn", "9782413016878")
+                        .field("tag", "tag1")
+                        .field("release_date", "1999")
+                        .field("status", "ERROR")
+                        .field("deleted", "true")
+                        .field("oneshot", "false")
+                        .author("writer", "Bob"),
+                    SearchEntity::new(EntityKind::Book, "batman-robin")
+                        .field("title", "Batman and Robin")
+                        .field("status", "READY")
+                        .field("deleted", "false"),
+                    SearchEntity::new(EntityKind::Book, "robin")
+                        .field("title", "Robin")
+                        .field("status", "READY")
+                        .field("deleted", "false"),
+                    SearchEntity::new(EntityKind::Book, "cjk")
+                        .field("title", "不道德")
+                        .field("deleted", "false"),
+                ],
+            )
+            .unwrap();
+
+        for (query, expected) in [
+            ("9782413016878", &["batman"][..]),
+            ("tag:tag1", &["batman"]),
+            ("author:bob", &["batman"]),
+            ("writer:bob", &["batman"]),
+            ("release_date:1999", &["batman"]),
+            ("release_date:[1990 TO 2010]", &["batman"]),
+            ("status:error", &["batman"]),
+            ("deleted:true", &["batman"]),
+            ("s.w.o.r.d", &["batman"]),
+            ("x-men", &["batman"]),
+            ("不道德", &["cjk"]),
+            ("batman robin", &["batman-robin"]),
+            ("\"batman and robin\"", &["batman-robin"]),
+            ("batman AND deleted:false", &["batman-robin"]),
+            ("(batman OR robin) AND NOT deleted:true", &["batman-robin", "robin"]),
+        ] {
+            assert_eq!(hit_ids(&index, EntityKind::Book, query), expected, "query: {query}");
+        }
+
+        assert!(index.search(EntityKind::Book, "penciller:bob").is_empty());
+        assert!(index.search(EntityKind::Book, "publisher:batman").is_empty());
+        assert!(index.search(EntityKind::Book, "title:(").is_empty());
+        assert!(index.search(EntityKind::Book, "   ").is_empty());
+        assert_eq!(
+            hit_id_set(&index, EntityKind::Book, "NOT deleted:true"),
+            BTreeSet::from(["batman-robin".to_owned(), "cjk".to_owned(), "robin".to_owned()])
+        );
+        assert_eq!(
+            hit_id_set(&index, EntityKind::Book, "robin OR NOT deleted:true"),
+            BTreeSet::from(["batman-robin".to_owned(), "cjk".to_owned(), "robin".to_owned()])
+        );
+    }
+
+    #[test]
+    fn kotlin_series_query_corpus_matches_every_indexed_field() {
+        let index = SearchIndex::in_memory().unwrap();
+        index
+            .replace(
+                &[EntityKind::Series],
+                [
+                    SearchEntity::new(EntityKind::Series, "batman")
+                        .field("title", "Batman")
+                        .field("publisher", "Vertigo")
+                        .field("status", "HIATUS")
+                        .field("reading_direction", "LEFT_TO_RIGHT")
+                        .field("age_rating", "12")
+                        .field("language", "en-us")
+                        .field("series_tag", "seriestag")
+                        .field("book_tag", "booktag")
+                        .field("tag", "seriestag")
+                        .field("tag", "booktag")
+                        .field("genre", "action")
+                        .field("sharing_label", "family")
+                        .field("total_book_count", "5")
+                        .field("book_count", "2")
+                        .field("release_date", "1999")
+                        .field("deleted", "true")
+                        .field("oneshot", "false")
+                        .field("complete", "false")
+                        .author("penciller", "David"),
+                    SearchEntity::new(EntityKind::Series, "robin")
+                        .field("title", "Batman and Robin")
+                        .field("deleted", "false"),
+                ],
+            )
+            .unwrap();
+
+        for query in [
+            "publisher:vertigo",
+            "status:hiatus",
+            "reading_direction:left_to_right",
+            "age_rating:12",
+            "language:en-us",
+            "book_tag:booktag",
+            "series_tag:seriestag",
+            "tag:booktag",
+            "tag:seriestag",
+            "genre:action",
+            "sharing_label:family",
+            "total_book_count:5",
+            "book_count:2",
+            "author:david",
+            "penciller:david",
+            "release_date:1999",
+            "deleted:true",
+            "oneshot:false",
+            "complete:false",
+        ] {
+            assert_eq!(hit_ids(&index, EntityKind::Series, query), ["batman"], "query: {query}");
+        }
+        assert!(index.search(EntityKind::Series, "writer:david").is_empty());
+        assert!(index.search(EntityKind::Series, "book_tag:seriestag").is_empty());
+        assert!(index.search(EntityKind::Series, "series_tag:booktag").is_empty());
+    }
+
+    #[test]
+    fn kotlin_relevance_order_and_entity_defaults_are_preserved() {
+        let index = SearchIndex::in_memory().unwrap();
+        index
+            .replace(
+                &ALL_KINDS,
+                [
+                    SearchEntity::new(EntityKind::Book, "long").field(
+                        "title",
+                        "The incredible adventures of Batman, the man who is also a bat!",
+                    ),
+                    SearchEntity::new(EntityKind::Book, "robin").field("title", "Robin"),
+                    SearchEntity::new(EntityKind::Book, "both").field("title", "Batman and Robin"),
+                    SearchEntity::new(EntityKind::Book, "exact").field("title", "Batman"),
+                    SearchEntity::new(EntityKind::Series, "series").field("title", "Batman"),
+                    SearchEntity::new(EntityKind::Collection, "collection").field("name", "Batman"),
+                    SearchEntity::new(EntityKind::ReadList, "readlist").field("name", "Batman"),
+                ],
+            )
+            .unwrap();
+
+        assert_eq!(hit_ids(&index, EntityKind::Book, "batman"), ["exact", "both", "long"]);
+        assert_eq!(hit_ids(&index, EntityKind::Series, "batman"), ["series"]);
+        assert_eq!(hit_ids(&index, EntityKind::Collection, "batman"), ["collection"]);
+        assert_eq!(hit_ids(&index, EntityKind::ReadList, "batman"), ["readlist"]);
+    }
+
+    fn hit_ids(index: &SearchIndex, kind: EntityKind, query: &str) -> Vec<String> {
+        index.search(kind, query).into_iter().map(|hit| hit.id).collect()
+    }
+
+    fn hit_id_set(index: &SearchIndex, kind: EntityKind, query: &str) -> BTreeSet<String> {
+        hit_ids(index, kind, query).into_iter().collect()
     }
 
     #[test]
