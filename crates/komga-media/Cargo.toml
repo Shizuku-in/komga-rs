@@ -5,6 +5,10 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
+[features]
+default = []
+heif-native = ["dep:libheif-rs"]
+
 [dependencies]
 chrono.workspace = true
 ego-tree.workspace = true
@@ -15,6 +19,7 @@ html5ever.workspace = true
 image.workspace = true
 infer.workspace = true
 jxl-oxide.workspace = true
+libheif-rs = { workspace = true, optional = true }
 komga-core = { path = "../komga-core" }
 md-5.workspace = true
 natord.workspace = true

@@ -17,6 +17,8 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
+    log_native_image_capabilities();
+
     let config = Config::parse();
     let database_file = config.database_file();
     let tasks_database_file = config.tasks_database_file();
@@ -88,6 +90,24 @@ async fn main() -> anyhow::Result<()> {
     runtime.shutdown().await;
     result.context("HTTP server failed")
 }
+
+#[cfg(feature = "heif-native")]
+fn log_native_image_capabilities() {
+    let hevc = komga_media::can_convert_image_media_type("image/heic");
+    let av1 = komga_media::can_convert_image_media_type("image/avif");
+    if hevc && av1 {
+        tracing::info!(hevc, av1, "native HEIF image conversion is available");
+    } else {
+        tracing::warn!(
+            hevc,
+            av1,
+            "native HEIF feature is enabled but one or more decoders are unavailable"
+        );
+    }
+}
+
+#[cfg(not(feature = "heif-native"))]
+fn log_native_image_capabilities() {}
 
 async fn shutdown_signal() {
     let ctrl_c = async {

@@ -1008,14 +1008,16 @@ mod tests {
         ] {
             assert!(can_convert_image_media_type(media_type), "{media_type}");
         }
-        for media_type in [
-            "image/avif",
-            "image/heif",
-            "image/svg+xml",
-            "application/pdf",
-            "application/octet-stream",
-        ] {
+        for media_type in ["image/svg+xml", "application/pdf", "application/octet-stream"] {
             assert!(!can_convert_image_media_type(media_type), "{media_type}");
+        }
+        #[cfg(not(feature = "heif-native"))]
+        for media_type in ["image/avif", "image/heif", "image/heic"] {
+            assert!(!can_convert_image_media_type(media_type), "{media_type}");
+        }
+        #[cfg(feature = "heif-native")]
+        for media_type in ["image/avif", "image/heif", "image/heic"] {
+            assert!(can_convert_image_media_type(media_type), "{media_type}");
         }
     }
 

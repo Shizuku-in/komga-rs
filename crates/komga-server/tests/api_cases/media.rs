@@ -236,6 +236,84 @@ async fn jpeg_xl_pages_are_analyzed_served_and_converted() {
     assert!(body_bytes(thumbnail).await.starts_with(&[0xff, 0xd8]));
 }
 
+#[cfg(feature = "heif-native")]
+#[tokio::test]
+async fn avif_pages_are_analyzed_served_and_converted() {
+    let avif = hex_fixture(include_str!("../../../komga-media/tests/fixtures/blue.avif.hex"));
+    let mut archive = ZipWriter::new(Cursor::new(Vec::new()));
+    archive.start_file("page.avif", SimpleFileOptions::default()).unwrap();
+    archive.write_all(&avif).unwrap();
+    let bytes = archive.finish().unwrap().into_inner();
+    let (_temporary, storage, tasks, book, media) = analyzed_media_bytes_fixture(&bytes, "Volume.cbz").await;
+    assert_eq!(media.page_count, 1);
+    assert_eq!(media.pages[0].media_type, "image/avif");
+    assert_eq!(
+        media.pages[0].dimension,
+        Some(komga_core::Dimension { width: 3, height: 2 })
+    );
+
+    let app = build_app(AppState::new(storage, tasks).await.unwrap());
+    assert_eq!(claim(&app).await.status(), StatusCode::OK);
+    let admin = basic("admin@example.org", "password");
+    let page_path = format!("/api/v1/books/{}/pages/1", book.id);
+
+    let original = app
+        .clone()
+        .oneshot(
+            Request::get(&page_path)
+                .header(header::AUTHORIZATION, &admin)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(original.status(), StatusCode::OK);
+    assert_eq!(original.headers()[header::CONTENT_TYPE], "image/avif");
+    assert!(
+        original.headers()[header::CONTENT_DISPOSITION]
+            .to_str()
+            .unwrap()
+            .ends_with(".avif\"")
+    );
+    assert_eq!(body_bytes(original).await, avif);
+
+    let converted = app
+        .clone()
+        .oneshot(
+            Request::get(format!("{page_path}?convert=jpeg"))
+                .header(header::AUTHORIZATION, &admin)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(converted.status(), StatusCode::OK);
+    assert_eq!(converted.headers()[header::CONTENT_TYPE], "image/jpeg");
+    assert!(body_bytes(converted).await.starts_with(&[0xff, 0xd8]));
+
+    let thumbnail = app
+        .oneshot(
+            Request::get(format!("{page_path}/thumbnail"))
+                .header(header::AUTHORIZATION, admin)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(thumbnail.status(), StatusCode::OK);
+    assert_eq!(thumbnail.headers()[header::CONTENT_TYPE], "image/jpeg");
+    assert!(body_bytes(thumbnail).await.starts_with(&[0xff, 0xd8]));
+}
+
+#[cfg(feature = "heif-native")]
+fn hex_fixture(value: &str) -> Vec<u8> {
+    value
+        .split_ascii_whitespace()
+        .flat_map(|line| line.as_bytes().chunks_exact(2))
+        .map(|byte| u8::from_str_radix(std::str::from_utf8(byte).unwrap(), 16).unwrap())
+        .collect()
+}
+
 #[tokio::test]
 async fn book_and_series_thumbnail_management_contract() {
     let (_temporary, storage, tasks, book, media) = analyzed_media_fixture("archives/zip.zip", "Volume.cbz").await;

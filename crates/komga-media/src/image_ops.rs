@@ -1,4 +1,7 @@
-use std::io::Cursor;
+use std::{io::Cursor, sync::Once};
+
+#[cfg(feature = "heif-native")]
+use std::sync::OnceLock;
 
 use hayro_jpeg2000::integration::Jp2Decoder;
 use image::{
@@ -87,6 +90,11 @@ pub(crate) fn can_decode_media_type(media_type: &str) -> bool {
         .unwrap_or(media_type)
         .trim()
         .to_ascii_lowercase();
+    match media_type.as_str() {
+        "image/heif" | "image/heic" | "image/heic-sequence" => return native_heif_capabilities().hevc,
+        "image/avif" | "image/avif-sequence" => return native_heif_capabilities().av1,
+        _ => {}
+    }
     matches!(
         media_type.as_str(),
         "image/jpeg"
@@ -144,6 +152,10 @@ fn decode(bytes: &[u8]) -> image::ImageResult<DynamicImage> {
     if bytes.starts_with(JP2_MAGIC) || bytes.starts_with(J2C_MAGIC) {
         return DynamicImage::from_decoder(Jp2Decoder::new(Cursor::new(bytes))?);
     }
+    if is_native_heif(bytes) {
+        ensure_heif_hooks();
+        return ImageReader::new(Cursor::new(bytes)).with_guessed_format()?.decode();
+    }
     if let Ok(format) = image::guess_format(bytes) {
         return ImageReader::with_format(Cursor::new(bytes), format).decode();
     }
@@ -161,6 +173,14 @@ fn dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
             .ok()
             .map(|decoder| decoder.dimensions());
     }
+    if is_native_heif(bytes) {
+        ensure_heif_hooks();
+        return ImageReader::new(Cursor::new(bytes))
+            .with_guessed_format()
+            .ok()?
+            .into_dimensions()
+            .ok();
+    }
     if let Ok(format) = image::guess_format(bytes) {
         return ImageReader::with_format(Cursor::new(bytes), format)
             .into_dimensions()
@@ -171,12 +191,49 @@ fn dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
         .ok()
 }
 
+#[derive(Clone, Copy, Default)]
+struct NativeHeifCapabilities {
+    hevc: bool,
+    av1: bool,
+}
+
+#[cfg(feature = "heif-native")]
+fn native_heif_capabilities() -> NativeHeifCapabilities {
+    static CAPABILITIES: OnceLock<NativeHeifCapabilities> = OnceLock::new();
+    *CAPABILITIES.get_or_init(|| {
+        use libheif_rs::{CompressionFormat, LibHeif};
+
+        let lib = LibHeif::new();
+        NativeHeifCapabilities {
+            hevc: !lib.decoder_descriptors(1, Some(CompressionFormat::Hevc)).is_empty(),
+            av1: !lib.decoder_descriptors(1, Some(CompressionFormat::Av1)).is_empty(),
+        }
+    })
+}
+
+#[cfg(not(feature = "heif-native"))]
+fn native_heif_capabilities() -> NativeHeifCapabilities {
+    NativeHeifCapabilities::default()
+}
+
+fn ensure_heif_hooks() {
+    static REGISTER: Once = Once::new();
+    REGISTER.call_once(|| {
+        #[cfg(feature = "heif-native")]
+        libheif_rs::integration::image::register_all_decoding_hooks();
+    });
+}
+
 fn is_jxl(bytes: &[u8]) -> bool {
     bytes.starts_with(JXL_CODESTREAM_MAGIC) || bytes.starts_with(JXL_CONTAINER_MAGIC)
 }
 
 fn is_tga(bytes: &[u8]) -> bool {
     bytes.ends_with(TGA_FOOTER) || TgaDecoder::new(Cursor::new(bytes)).is_ok()
+}
+
+fn is_native_heif(bytes: &[u8]) -> bool {
+    infer::get(bytes).is_some_and(|kind| matches!(kind.mime_type(), "image/heif" | "image/avif"))
 }
 
 fn flatten_alpha(image: &DynamicImage) -> RgbImage {
@@ -261,6 +318,42 @@ mod tests {
         assert_eq!(detected_media_type(&dds), Some("image/vnd-ms.dds"));
         assert_eq!(dimensions(&dds), Some((4, 4)));
         assert_eq!(decode(&dds).unwrap().dimensions(), (4, 4));
+    }
+
+    #[cfg(feature = "heif-native")]
+    #[test]
+    fn decodes_heic_and_avif_with_native_codecs() {
+        let fixtures = [
+            (
+                hex_fixture(include_str!("../tests/fixtures/red.heic.hex")),
+                "image/heif",
+                (64, 48),
+            ),
+            (
+                hex_fixture(include_str!("../tests/fixtures/blue.avif.hex")),
+                "image/avif",
+                (3, 2),
+            ),
+        ];
+        for (source, media_type, expected_dimension) in fixtures {
+            assert_eq!(crate::detect_image_media_type(&source).as_deref(), Some(media_type));
+            assert_eq!(dimensions(&source), Some(expected_dimension));
+            let output = convert(&source, ImageOutput::Png, None).unwrap();
+            assert_eq!(output.media_type, "image/png");
+            assert_eq!(
+                image::load_from_memory(&output.bytes).unwrap().dimensions(),
+                expected_dimension
+            );
+        }
+    }
+
+    #[cfg(feature = "heif-native")]
+    fn hex_fixture(value: &str) -> Vec<u8> {
+        value
+            .split_ascii_whitespace()
+            .flat_map(|line| line.as_bytes().chunks_exact(2))
+            .map(|byte| u8::from_str_radix(std::str::from_utf8(byte).unwrap(), 16).unwrap())
+            .collect()
     }
 
     fn dxt1_dds() -> Vec<u8> {

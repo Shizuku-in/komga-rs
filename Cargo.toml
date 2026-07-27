@@ -43,6 +43,7 @@ image = { version = "0.25.10", default-features = false, features = ["bmp", "dds
 infer = "0.22"
 iso8601-duration = "0.2"
 jxl-oxide = { version = "0.12.6", default-features = false, features = ["image"] }
+libheif-rs = { version = "2.7.0", default-features = false, features = ["v1_17", "image"] }
 mime_guess = "2.0.5"
 rand = "0.9"
 rars = "0.4.7"
