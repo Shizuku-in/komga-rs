@@ -34,6 +34,8 @@ jobs:
       KOMGA_WEBUI_DIST_DIR: webui/dist
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true
       - uses: actions/download-artifact@v4
         with:
           name: webui-dist
@@ -50,6 +52,8 @@ jobs:
       KOMGA_WEBUI_DIST_DIR: webui/dist
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true
       - uses: actions/download-artifact@v4
         with:
           name: webui-dist
@@ -72,6 +76,8 @@ jobs:
       KOMGA_WEBUI_DIST_DIR: webui/dist
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true
       - uses: actions/download-artifact@v4
         with:
           name: webui-dist
@@ -84,6 +90,36 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy --workspace --all-targets --features komga-media/heif-native,komga-server/heif-native -- -D warnings
       - run: cargo test --workspace --all-targets --features komga-media/heif-native,komga-server/heif-native
+
+  docker:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          load: true
+          tags: komga-rs:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Start container and wait for health check
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --detach --name komga-rs-ci komga-rs:ci
+          trap 'docker logs komga-rs-ci; docker rm --force komga-rs-ci' EXIT
+          for attempt in {1..30}; do
+            status="$(docker inspect --format '{{.State.Health.Status}}' komga-rs-ci)"
+            if [[ "$status" == healthy ]]; then
+              exit 0
+            fi
+            if [[ "$status" == unhealthy ]]; then
+              exit 1
+            fi
+            sleep 2
+          done
+          exit 1
 
   e2e:
     needs: webui

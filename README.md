@@ -59,6 +59,35 @@ through vcpkg. At startup, a `heif-native` server logs whether HEVC and AV1 deco
 decoder leaves its media type available for original delivery but unavailable for dimensions, conversion, and generated
 thumbnails.
 
+## Docker
+
+The container image builds the embedded Web UI and enables native HEIF/HEIC and AVIF conversion. It runs as the
+unprivileged user `komga` with UID and GID 1000, stores application state in `/config`, and listens on port 25600.
+
+Create a writable library directory and start the local Compose configuration:
+
+```bash
+mkdir -p books
+docker compose up --build -d
+```
+
+Open `http://localhost:25600`. The named `komga-config` volume persists both SQLite databases, the search index, OAuth
+configuration, and local fonts. The host directory selected by `KOMGA_LIBRARY_DIR` is mounted read-write at `/data` because
+imports, source deletion, conversion, extension repair, and duplicate-page removal can modify library files:
+
+```bash
+KOMGA_LIBRARY_DIR=/srv/books KOMGA_HTTP_PORT=8080 docker compose up --build -d
+```
+
+Bind-mounted configuration and library directories must be accessible to UID/GID 1000. Alternative image ownership can
+be selected at build time with `--build-arg KOMGA_UID=... --build-arg KOMGA_GID=...`. Put `oauth2.json` in `/config` and
+pass provider secrets through Compose `environment` or an override file; do not bake secrets into the image.
+
+The image health check calls `/actuator/health` and honors `KOMGA_PORT` and `KOMGA_CONTEXT_PATH`. Database-backed
+`serverPort` and `serverContextPath` settings still override environment configuration, so clear incompatible persisted
+overrides before moving an existing database into the container. The Compose file builds locally and does not publish or
+pull a project image.
+
 The defaults match Komga:
 
 - listen on `0.0.0.0:25600`;
