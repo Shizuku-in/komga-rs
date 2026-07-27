@@ -1,6 +1,6 @@
 use std::{
     cell::RefCell,
-    collections::BTreeSet,
+    collections::{BTreeSet, HashSet},
     fs::{self, File, Metadata, OpenOptions},
     io::{self, Write},
     path::{Path, PathBuf},
@@ -9,13 +9,16 @@ use std::{
 };
 
 use chrono::{DateTime, Local};
-use komga_core::{Book, Media, MediaStatus, RAR4_MEDIA_TYPE, RAR5_MEDIA_TYPE, ZIP_MEDIA_TYPE};
+use komga_core::{Book, HashedPageTarget, Media, MediaStatus, RAR4_MEDIA_TYPE, RAR5_MEDIA_TYPE, ZIP_MEDIA_TYPE};
 use rars::{ArchiveReader, Error as RarError};
 use thiserror::Error;
 use url::Url;
 use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
 
-use crate::{FileHashError, MediaAnalysisError, analyze_book, archive, hash_file};
+use crate::{
+    FileHashError, MediaAnalysisError, PageRemovalError, PageRemovalRewrite, analyze_book, archive, hash_file,
+    hash_page,
+};
 
 /// Validated temporary CBZ produced from one RAR-backed book.
 #[derive(Debug)]
@@ -88,7 +91,8 @@ pub fn convert_rar_to_cbz(
     let file = OpenOptions::new().write(true).create_new(true).open(destination)?;
     let mut guard = DestinationGuard::new(destination);
 
-    write_cbz(&source, file, media, &cancelled)?;
+    let expected = registered_entries(media);
+    write_cbz(&source, file, &expected, &cancelled)?;
     fs::set_permissions(destination, initial_metadata.permissions())?;
     if cancelled() {
         return Err(RarToCbzError::Cancelled);
@@ -112,7 +116,7 @@ pub fn convert_rar_to_cbz(
         analyze_book(&converted_book, analyze_dimensions, &cancelled).map_err(|error| match error {
             MediaAnalysisError::Cancelled => RarToCbzError::Cancelled,
         })?;
-    validate_converted_media(&converted_media, media)?;
+    validate_converted_media(&converted_media, &media.pages, &media.files)?;
     for page in &mut converted_media.pages {
         let previous = media
             .pages
@@ -132,19 +136,161 @@ pub fn convert_rar_to_cbz(
     })
 }
 
-fn write_cbz(
-    source: &Path,
-    destination: File,
+/// Rewrites selected pages from a ready RAR4/RAR5 book into a validated CBZ.
+///
+/// Targets are bound to the analyzed page number, name, media type, size, and
+/// hash. The source is never changed, and `destination` must not exist. The
+/// returned book points at the temporary destination; callers that install it
+/// at a final `.cbz` path must update that URL from the final filesystem scan.
+///
+/// # Errors
+///
+/// Returns [`PageRemovalError::Stale`] when the source or any target no longer
+/// matches, [`PageRemovalError::Cancelled`] when cancellation is requested,
+/// and validation, archive, or I/O errors when a safe CBZ cannot be produced.
+pub fn rewrite_hashed_rar_pages_to_cbz(
+    book: &Book,
     media: &Media,
-    cancelled: &impl Fn() -> bool,
-) -> Result<(), RarToCbzError> {
-    let archive = ArchiveReader::read_path(source).map_err(|error| RarToCbzError::Archive(error.to_string()))?;
-    let expected = media
+    targets: &[HashedPageTarget],
+    destination: &Path,
+    analyze_dimensions: bool,
+    cancelled: impl Fn() -> bool,
+) -> Result<PageRemovalRewrite, PageRemovalError> {
+    if cancelled() {
+        return Err(PageRemovalError::Cancelled);
+    }
+    if media.status != MediaStatus::Ready
+        || !matches!(media.media_type.as_deref(), Some(RAR4_MEDIA_TYPE | RAR5_MEDIA_TYPE))
+    {
+        return Err(PageRemovalError::Unsupported(
+            "media must be a ready RAR4 or RAR5 archive".into(),
+        ));
+    }
+    if targets.is_empty() {
+        return Err(PageRemovalError::Stale("no pages were requested".into()));
+    }
+    let source = book
+        .url
+        .to_file_path()
+        .map_err(|()| PageRemovalError::Unsupported("book URL is not a local file".into()))?;
+    if source == destination {
+        return Err(PageRemovalError::Unsupported(
+            "destination must differ from the source".into(),
+        ));
+    }
+    let initial_metadata = fs::metadata(&source)?;
+    ensure_book_snapshot(book, &initial_metadata).map_err(page_removal_error)?;
+    let initial_fingerprint = source_fingerprint(&source, &cancelled).map_err(page_removal_error)?;
+
+    let mut target_indices = HashSet::new();
+    for target in targets {
+        let index = target
+            .page_number
+            .checked_sub(1)
+            .and_then(|value| usize::try_from(value).ok())
+            .ok_or_else(|| PageRemovalError::Stale("page number is not positive".into()))?;
+        if !target_indices.insert(index) {
+            return Err(PageRemovalError::Stale(
+                "the same page was requested more than once".into(),
+            ));
+        }
+        let page = media
+            .pages
+            .get(index)
+            .ok_or_else(|| PageRemovalError::Stale("page number is outside current media".into()))?;
+        if page.file_name != target.file_name
+            || page.media_type != target.media_type
+            || page.file_hash != target.file_hash
+            || page.file_size != Some(target.file_size)
+            || target.file_hash.is_empty()
+        {
+            return Err(PageRemovalError::Stale(format!(
+                "page {} no longer matches its task payload",
+                target.page_number
+            )));
+        }
+        if cancelled() {
+            return Err(PageRemovalError::Cancelled);
+        }
+        let bytes = archive::extract_rar_entry(&source, &page.file_name)
+            .map_err(|error| PageRemovalError::Archive(error.to_string()))?;
+        if hash_page(&bytes, &page.media_type)?.hash != target.file_hash {
+            return Err(PageRemovalError::Stale(format!(
+                "entry hash changed for {:?}",
+                target.file_name
+            )));
+        }
+    }
+    if target_indices.len() >= media.pages.len() {
+        return Err(PageRemovalError::Stale("removal would delete every page".into()));
+    }
+
+    let retained_original_indices = media
         .pages
+        .iter()
+        .enumerate()
+        .filter_map(|(index, _)| (!target_indices.contains(&index)).then_some(index))
+        .collect::<Vec<_>>();
+    let retained_pages = retained_original_indices
+        .iter()
+        .map(|index| media.pages[*index].clone())
+        .collect::<Vec<_>>();
+    let expected = retained_pages
         .iter()
         .map(|page| page.file_name.clone())
         .chain(media.files.iter().map(|file| file.file_name.clone()))
         .collect::<BTreeSet<_>>();
+    let file = OpenOptions::new().write(true).create_new(true).open(destination)?;
+    let mut guard = DestinationGuard::new(destination);
+    write_cbz(&source, file, &expected, &cancelled).map_err(page_removal_error)?;
+    fs::set_permissions(destination, initial_metadata.permissions())?;
+    if cancelled() {
+        return Err(PageRemovalError::Cancelled);
+    }
+
+    let output_metadata = fs::metadata(destination)?;
+    let mut rewritten_book = book.clone();
+    rewritten_book.url = Url::from_file_path(destination)
+        .map_err(|()| PageRemovalError::Unsupported("destination cannot be represented as a file URL".into()))?;
+    rewritten_book.file_size = i64::try_from(output_metadata.len()).unwrap_or(i64::MAX);
+    rewritten_book.file_last_modified = scan_timestamp(&output_metadata);
+    rewritten_book.file_hash.clear();
+    rewritten_book.file_hash_koreader.clear();
+    let mut rewritten_media =
+        analyze_book(&rewritten_book, analyze_dimensions, &cancelled).map_err(|error| match error {
+            MediaAnalysisError::Cancelled => PageRemovalError::Cancelled,
+        })?;
+    validate_converted_media(&rewritten_media, &retained_pages, &media.files).map_err(page_removal_error)?;
+    for (page, original_index) in rewritten_media.pages.iter_mut().zip(&retained_original_indices) {
+        page.file_hash.clone_from(&media.pages[*original_index].file_hash);
+    }
+
+    let current_metadata = fs::metadata(&source)?;
+    ensure_same_metadata(&initial_metadata, &current_metadata, &source).map_err(page_removal_error)?;
+    let current_fingerprint = source_fingerprint(&source, &cancelled).map_err(page_removal_error)?;
+    if current_fingerprint != initial_fingerprint {
+        return Err(PageRemovalError::Stale("source bytes changed during rewrite".into()));
+    }
+    let output_fingerprint = source_fingerprint(destination, &cancelled).map_err(page_removal_error)?;
+    guard.disarm();
+    Ok(PageRemovalRewrite {
+        book: rewritten_book,
+        media: rewritten_media,
+        removed: targets.to_vec(),
+        retained_original_indices,
+        removed_first_page: targets.iter().any(|target| target.page_number == 1),
+        source_fingerprint: initial_fingerprint,
+        output_fingerprint,
+    })
+}
+
+fn write_cbz(
+    source: &Path,
+    destination: File,
+    expected: &BTreeSet<String>,
+    cancelled: &impl Fn() -> bool,
+) -> Result<(), RarToCbzError> {
+    let archive = ArchiveReader::read_path(source).map_err(|error| RarToCbzError::Archive(error.to_string()))?;
     let written = Rc::new(RefCell::new(BTreeSet::new()));
     let zip_error = Rc::new(RefCell::new(None));
     let writer = Rc::new(RefCell::new(Some(ZipWriter::new(destination))));
@@ -182,7 +328,7 @@ fn write_cbz(
                 RarToCbzError::Archive(error.to_string())
             }
         })?;
-    if *written.borrow() != expected {
+    if *written.borrow() != *expected {
         let missing = expected.difference(&written.borrow()).cloned().collect::<Vec<_>>();
         return Err(RarToCbzError::Validation(format!(
             "source archive did not yield registered entries: {}",
@@ -223,12 +369,25 @@ impl Write for ZipEntryWriter {
     }
 }
 
-fn validate_converted_media(converted: &Media, previous: &Media) -> Result<(), RarToCbzError> {
+fn registered_entries(media: &Media) -> BTreeSet<String> {
+    media
+        .pages
+        .iter()
+        .map(|page| page.file_name.clone())
+        .chain(media.files.iter().map(|file| file.file_name.clone()))
+        .collect()
+}
+
+fn validate_converted_media(
+    converted: &Media,
+    expected_pages: &[komga_core::BookPage],
+    expected_files: &[komga_core::MediaFile],
+) -> Result<(), RarToCbzError> {
     if converted.status != MediaStatus::Ready || converted.media_type.as_deref() != Some(ZIP_MEDIA_TYPE) {
         return Err(RarToCbzError::Validation("temporary archive is not a ready ZIP".into()));
     }
-    let pages_match = converted.pages.len() == previous.pages.len()
-        && converted.pages.iter().zip(&previous.pages).all(|(left, right)| {
+    let pages_match = converted.pages.len() == expected_pages.len()
+        && converted.pages.iter().zip(expected_pages).all(|(left, right)| {
             left.file_name == right.file_name
                 && left.media_type == right.media_type
                 && left.file_size == right.file_size
@@ -238,8 +397,8 @@ fn validate_converted_media(converted: &Media, previous: &Media) -> Result<(), R
             "temporary archive does not contain exactly the original pages".into(),
         ));
     }
-    let files_match = converted.files.len() == previous.files.len()
-        && converted.files.iter().zip(&previous.files).all(|(left, right)| {
+    let files_match = converted.files.len() == expected_files.len()
+        && converted.files.iter().zip(expected_files).all(|(left, right)| {
             left.file_name == right.file_name
                 && left.media_type == right.media_type
                 && left.file_size == right.file_size
@@ -250,6 +409,17 @@ fn validate_converted_media(converted: &Media, previous: &Media) -> Result<(), R
         ));
     }
     Ok(())
+}
+
+fn page_removal_error(error: RarToCbzError) -> PageRemovalError {
+    match error {
+        RarToCbzError::Cancelled => PageRemovalError::Cancelled,
+        RarToCbzError::Stale(message) => PageRemovalError::Stale(message),
+        RarToCbzError::Unsupported(message) => PageRemovalError::Unsupported(message),
+        RarToCbzError::Archive(message) => PageRemovalError::Archive(message),
+        RarToCbzError::Io(error) => PageRemovalError::Io(error),
+        RarToCbzError::Validation(message) => PageRemovalError::Validation(message),
+    }
 }
 
 fn source_fingerprint(path: &Path, cancelled: &impl Fn() -> bool) -> Result<String, RarToCbzError> {
@@ -316,7 +486,7 @@ impl Drop for DestinationGuard {
 mod tests {
     use std::io::Read;
 
-    use komga_core::scan_book_file;
+    use komga_core::{HashedPageTarget, scan_book_file};
     use zip::ZipArchive;
 
     use super::*;
@@ -384,6 +554,96 @@ mod tests {
         assert!(matches!(
             convert_rar_to_cbz(&book, &unsupported, &destination, false, || false),
             Err(RarToCbzError::Unsupported(_))
+        ));
+        assert!(!destination.exists());
+    }
+
+    #[test]
+    fn removes_snapshot_bound_pages_from_rar4_rar5_and_solid_archives() {
+        for name in ["rar4.rar", "rar4-solid.rar", "rar5-solid.rar"] {
+            let source = fixture(name);
+            let book = scan_book_file(&source, "library", false).unwrap();
+            let mut media = analyze_book(&book, true, || false).unwrap();
+            for number in 1..=media.page_count {
+                let content = crate::extract_page(&book, &media, number).unwrap();
+                media.pages[usize::try_from(number - 1).unwrap()].file_hash =
+                    hash_page(&content.bytes, &content.media_type).unwrap().hash;
+            }
+            let removed_page = media.pages[1].clone();
+            let target = HashedPageTarget {
+                file_name: removed_page.file_name.clone(),
+                media_type: removed_page.media_type.clone(),
+                file_hash: removed_page.file_hash.clone(),
+                file_size: removed_page.file_size.unwrap(),
+                page_number: 2,
+            };
+            let temporary = tempfile::tempdir().unwrap();
+            let destination = temporary.path().join("rewritten.cbz");
+            let rewrite = rewrite_hashed_rar_pages_to_cbz(
+                &book,
+                &media,
+                std::slice::from_ref(&target),
+                &destination,
+                true,
+                || false,
+            )
+            .unwrap();
+            assert_eq!(rewrite.removed, vec![target], "{name}");
+            assert_eq!(rewrite.retained_original_indices, vec![0, 2], "{name}");
+            assert_eq!(rewrite.media.media_type.as_deref(), Some(ZIP_MEDIA_TYPE), "{name}");
+            assert_eq!(rewrite.media.pages.len(), 2, "{name}");
+            assert_eq!(rewrite.media.pages[0].file_hash, media.pages[0].file_hash, "{name}");
+            assert_eq!(rewrite.media.pages[1].file_hash, media.pages[2].file_hash, "{name}");
+            assert!(
+                !rewrite
+                    .media
+                    .pages
+                    .iter()
+                    .any(|page| page.file_name == removed_page.file_name)
+            );
+        }
+    }
+
+    #[test]
+    fn stale_all_page_and_cancelled_rar_removals_leave_no_output() {
+        let source = fixture("rar4.rar");
+        let book = scan_book_file(&source, "library", false).unwrap();
+        let mut media = analyze_book(&book, false, || false).unwrap();
+        for number in 1..=media.page_count {
+            let content = crate::extract_page(&book, &media, number).unwrap();
+            media.pages[usize::try_from(number - 1).unwrap()].file_hash =
+                hash_page(&content.bytes, &content.media_type).unwrap().hash;
+        }
+        let targets = media
+            .pages
+            .iter()
+            .enumerate()
+            .map(|(index, page)| HashedPageTarget {
+                file_name: page.file_name.clone(),
+                media_type: page.media_type.clone(),
+                file_hash: page.file_hash.clone(),
+                file_size: page.file_size.unwrap(),
+                page_number: i32::try_from(index + 1).unwrap(),
+            })
+            .collect::<Vec<_>>();
+        let temporary = tempfile::tempdir().unwrap();
+        let destination = temporary.path().join("rewritten.cbz");
+        assert!(matches!(
+            rewrite_hashed_rar_pages_to_cbz(&book, &media, &targets, &destination, false, || false),
+            Err(PageRemovalError::Stale(_))
+        ));
+        assert!(!destination.exists());
+
+        let mut stale = targets[0].clone();
+        stale.file_hash = "00000000000000000000000000000000".into();
+        assert!(matches!(
+            rewrite_hashed_rar_pages_to_cbz(&book, &media, &[stale], &destination, false, || false),
+            Err(PageRemovalError::Stale(_))
+        ));
+        assert!(!destination.exists());
+        assert!(matches!(
+            rewrite_hashed_rar_pages_to_cbz(&book, &media, &targets[..1], &destination, false, || true),
+            Err(PageRemovalError::Cancelled)
         ));
         assert!(!destination.exists());
     }
