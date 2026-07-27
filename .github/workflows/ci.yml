@@ -3,8 +3,12 @@ name: Rust CI
 on:
   push:
     branches:
-      - "**"
+      - main
   pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   actions: read
@@ -12,7 +16,8 @@ permissions:
 
 jobs:
   changes:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
     outputs:
       run_full: ${{ steps.scope.outputs.run_full }}
     steps:
@@ -91,10 +96,23 @@ jobs:
             echo "- Reason: $reason"
           } >> "$GITHUB_STEP_SUMMARY"
 
+  workflows:
+    needs: changes
+    if: needs.changes.outputs.run_full == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Lint GitHub Actions workflows
+        uses: docker://rhysd/actionlint:1.7.12
+        with:
+          args: -color
+
   webui:
     needs: changes
     if: needs.changes.outputs.run_full == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: webui
@@ -114,11 +132,13 @@ jobs:
           name: webui-dist
           path: webui/dist
           if-no-files-found: error
+          retention-days: 1
 
   msrv:
     needs: [changes, webui]
     if: needs.changes.outputs.run_full == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
     env:
       KOMGA_WEBUI_DIST_DIR: webui/dist
     steps:
@@ -137,7 +157,8 @@ jobs:
   test:
     needs: [changes, webui]
     if: needs.changes.outputs.run_full == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
     env:
       KOMGA_WEBUI_DIST_DIR: webui/dist
     steps:
@@ -153,9 +174,9 @@ jobs:
           components: clippy,rustfmt
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all -- --check
-      - run: cargo clippy --workspace --all-targets -- -D warnings
-      - run: cargo test --workspace --all-targets
-      - run: cargo doc --workspace --no-deps
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo test --workspace --all-targets --locked
+      - run: cargo doc --workspace --no-deps --locked
         env:
           RUSTDOCFLAGS: -D warnings
 
@@ -163,6 +184,7 @@ jobs:
     needs: [changes, webui]
     if: needs.changes.outputs.run_full == 'true'
     runs-on: ubuntu-24.04
+    timeout-minutes: 45
     env:
       KOMGA_WEBUI_DIST_DIR: webui/dist
     steps:
@@ -179,13 +201,14 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
-      - run: cargo clippy --workspace --all-targets --features komga-media/heif-native,komga-server/heif-native -- -D warnings
-      - run: cargo test --workspace --all-targets --features komga-media/heif-native,komga-server/heif-native
+      - run: cargo clippy -p komga-media -p komga-server --all-targets --locked --features komga-media/heif-native,komga-server/heif-native -- -D warnings
+      - run: cargo test -p komga-media -p komga-server --all-targets --locked --features komga-media/heif-native,komga-server/heif-native
 
   docker:
     needs: changes
     if: needs.changes.outputs.run_full == 'true'
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v4
@@ -202,7 +225,8 @@ jobs:
           set -euo pipefail
           docker run --detach --name komga-rs-ci komga-rs:ci
           trap 'docker logs komga-rs-ci; docker rm --force komga-rs-ci' EXIT
-          for attempt in {1..30}; do
+          deadline=$((SECONDS + 60))
+          while (( SECONDS < deadline )); do
             status="$(docker inspect --format '{{.State.Health.Status}}' komga-rs-ci)"
             if [[ "$status" == healthy ]]; then
               exit 0
@@ -212,12 +236,14 @@ jobs:
             fi
             sleep 2
           done
+          echo "::error::container did not become healthy within 60 seconds"
           exit 1
 
   e2e:
     needs: [changes, webui]
     if: needs.changes.outputs.run_full == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     env:
       KOMGA_WEBUI_DIST_DIR: webui/dist
     steps:
@@ -247,3 +273,4 @@ jobs:
             webui/playwright-report
             webui/test-results
           if-no-files-found: ignore
+          retention-days: 7

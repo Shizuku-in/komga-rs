@@ -7,16 +7,21 @@ on:
 
 concurrency:
   group: release-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 permissions:
-  actions: read
   contents: read
-  packages: write
 
 jobs:
-  publish-image:
+  validate:
+    name: Validate release source
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      image: ${{ steps.release.outputs.image }}
     env:
       DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
       GH_TOKEN: ${{ github.token }}
@@ -25,6 +30,7 @@ jobs:
         with:
           fetch-depth: 0
       - name: Validate release source
+        id: release
         shell: bash
         run: |
           set -euo pipefail
@@ -49,9 +55,35 @@ jobs:
             echo "::error::$GITHUB_SHA has no successful branch CI run on $DEFAULT_BRANCH"
             exit 1
           fi
-      - uses: docker/setup-qemu-action@v4
-        with:
-          platforms: arm64
+
+          echo "image=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build ${{ matrix.platform }} image
+    needs: validate
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        include:
+          - platform: linux/amd64
+            arch: amd64
+            runner: ubuntu-24.04
+            cache_from: |
+              type=gha,scope=komga-rs-container
+            cache_to: type=gha,mode=max,scope=komga-rs-container
+          - platform: linux/arm64
+            arch: arm64
+            runner: ubuntu-24.04-arm
+            cache_from: |
+              type=gha,scope=komga-rs-container-arm64
+              type=gha,scope=komga-rs-container
+            cache_to: type=gha,mode=max,scope=komga-rs-container-arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v4
       - uses: docker/login-action@v4
         with:
@@ -61,25 +93,152 @@ jobs:
       - name: Generate image metadata
         id: metadata
         uses: docker/metadata-action@v6
-        env:
-          DOCKER_METADATA_ANNOTATIONS_LEVELS: manifest,index
         with:
-          images: ghcr.io/${{ github.repository }}
+          images: ${{ needs.validate.outputs.image }}
           flavor: latest=auto
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
-      - name: Build and publish image
+      - name: Build and push ${{ matrix.platform }} image
+        id: image
         uses: docker/build-push-action@v7
         with:
           context: .
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.metadata.outputs.tags }}
+          platforms: ${{ matrix.platform }}
+          outputs: type=image,name=${{ needs.validate.outputs.image }},push-by-digest=true,name-canonical=true,push=true
           labels: ${{ steps.metadata.outputs.labels }}
           annotations: ${{ steps.metadata.outputs.annotations }}
-          cache-from: type=gha,scope=komga-rs-container
-          cache-to: type=gha,mode=max,scope=komga-rs-container
+          cache-from: ${{ matrix.cache_from }}
+          cache-to: ${{ matrix.cache_to }}
           provenance: mode=max
           sbom: true
+      - name: Export image digest
+        shell: bash
+        env:
+          ARCH: ${{ matrix.arch }}
+          DIGEST: ${{ steps.image.outputs.digest }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::invalid image digest: $DIGEST"
+            exit 1
+          fi
+          mkdir -p "$RUNNER_TEMP/digests"
+          touch "$RUNNER_TEMP/digests/$ARCH-${DIGEST#sha256:}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digests-${{ matrix.arch }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    name: Publish multi-platform image
+    needs: [validate, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: digests-*
+          path: ${{ runner.temp }}/digests
+          merge-multiple: true
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Generate manifest metadata
+        id: metadata
+        uses: docker/metadata-action@v6
+        env:
+          DOCKER_METADATA_ANNOTATIONS_LEVELS: index
+        with:
+          images: ${{ needs.validate.outputs.image }}
+          flavor: latest=auto
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+      - name: Create and verify multi-platform image
+        shell: bash
+        env:
+          IMAGE: ${{ needs.validate.outputs.image }}
+          TAGS: ${{ steps.metadata.outputs.tags }}
+          ANNOTATIONS: ${{ steps.metadata.outputs.annotations }}
+          DIGESTS_DIRECTORY: ${{ runner.temp }}/digests
+        run: |
+          set -euo pipefail
+
+          tags=()
+          while IFS= read -r tag; do
+            [[ -n "$tag" ]] && tags+=("$tag")
+          done <<< "$TAGS"
+          if [[ "${#tags[@]}" -eq 0 ]]; then
+            echo "::error::image metadata produced no tags"
+            exit 1
+          fi
+
+          tag_args=()
+          for tag in "${tags[@]}"; do
+            tag_args+=(--tag "$tag")
+          done
+
+          annotation_args=()
+          while IFS= read -r annotation; do
+            [[ -n "$annotation" ]] && annotation_args+=(--annotation "$annotation")
+          done <<< "$ANNOTATIONS"
+
+          shopt -s nullglob
+          digest_files=("$DIGESTS_DIRECTORY"/*)
+          if [[ "${#digest_files[@]}" -ne 2 ]]; then
+            echo "::error::expected two platform digests, found ${#digest_files[@]}"
+            exit 1
+          fi
+
+          declare -A seen_arches=()
+          sources=()
+          for digest_file in "${digest_files[@]}"; do
+            artifact="$(basename "$digest_file")"
+            if [[ ! "$artifact" =~ ^(amd64|arm64)-([0-9a-f]{64})$ ]]; then
+              echo "::error::invalid digest artifact: $artifact"
+              exit 1
+            fi
+            arch="${BASH_REMATCH[1]}"
+            digest="${BASH_REMATCH[2]}"
+            if [[ -n "${seen_arches[$arch]:-}" ]]; then
+              echo "::error::duplicate digest artifact for $arch"
+              exit 1
+            fi
+            seen_arches["$arch"]=true
+            sources+=("$IMAGE@sha256:$digest")
+          done
+
+          for arch in amd64 arm64; do
+            if [[ -z "${seen_arches[$arch]:-}" ]]; then
+              echo "::error::missing digest artifact for $arch"
+              exit 1
+            fi
+          done
+
+          docker buildx imagetools create \
+            "${tag_args[@]}" \
+            "${annotation_args[@]}" \
+            "${sources[@]}"
+
+          manifest="$(docker buildx imagetools inspect "${tags[0]}" --raw)"
+          for arch in amd64 arm64; do
+            if ! jq -e --arg arch "$arch" \
+              '.manifests | any(.platform.os == "linux" and .platform.architecture == $arch)' \
+              <<< "$manifest" > /dev/null; then
+              echo "::error::published manifest is missing linux/$arch"
+              exit 1
+            fi
+          done
+          docker buildx imagetools inspect "${tags[0]}"
