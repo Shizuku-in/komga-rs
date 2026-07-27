@@ -84,8 +84,10 @@ KOMGA_HTTP_PORT=8080
 
 Then run `docker compose up --build -d`.
 
-Stable `vMAJOR.MINOR.PATCH` Git tags publish `linux/amd64` and `linux/arm64` images to GHCR after every CI job succeeds.
-The release receives full, major/minor, major, and `latest` tags. To run a published image through the same Compose file:
+After a commit passes the complete branch CI on the default branch, a stable `vMAJOR.MINOR.PATCH` Git tag starts the
+separate release workflow. The release workflow verifies that prior result, then publishes `linux/amd64` and `linux/arm64`
+images to GHCR without repeating the Rust, WebUI, Docker health, or E2E jobs. The image receives full, major/minor, major,
+and `latest` tags. To run a published image through the same Compose file:
 
 ```bash
 export KOMGA_IMAGE=ghcr.io/shizuku-in/komga-rs:latest
@@ -93,8 +95,9 @@ docker compose pull
 docker compose up -d --no-build
 ```
 
-Create and push a signed release tag with `git tag -s v0.1.0 -m "v0.1.0"` followed by
-`git push origin v0.1.0`. The first GHCR package may need to be made public in its GitHub package settings.
+After branch CI succeeds, create and push a signed release tag on that tested commit with
+`git tag -s v0.1.0 -m "v0.1.0"` followed by `git push origin v0.1.0`. The first GHCR package may need to be made public in
+its GitHub package settings.
 
 Bind-mounted configuration and library directories must be accessible to UID/GID 1000. Alternative image ownership can
 be selected at build time with `--build-arg KOMGA_UID=... --build-arg KOMGA_GID=...`. Put `oauth2.json` in `/config` and
