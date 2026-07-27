@@ -244,8 +244,8 @@ impl Storage {
         .await?)
     }
 
-    /// Lists active ready ZIP, RAR4, RAR5, or PDF books whose configured edge
-    /// pages require hashes.
+    /// Lists active ready ZIP, RAR4, RAR5, PDF, or Divina-compatible EPUB books
+    /// whose configured edge pages require hashes.
     ///
     /// Existing non-JPEG hashes are compatible with Kotlin and remain valid.
     /// JPEG hashes are valid only when their algorithm marker matches
@@ -268,7 +268,8 @@ impl Storage {
                  JOIN MEDIA_PAGE P ON P.BOOK_ID = B.ID
                 WHERE B.LIBRARY_ID = ? AND B.DELETED_DATE IS NULL
                   AND M.STATUS = 'READY'
-                  AND M.MEDIA_TYPE IN (?, ?, ?, ?)
+                  AND M.MEDIA_TYPE IN (?, ?, ?, ?, ?)
+                  AND (M.MEDIA_TYPE <> ? OR M.EPUB_DIVINA_COMPATIBLE = 1)
                   AND (P.NUMBER < ? OR P.NUMBER >= MAX(M.PAGE_COUNT - ?, 0))
                   AND (P.FILE_HASH = '' OR
                        ((M.MEDIA_TYPE = 'application/pdf' OR P.MEDIA_TYPE = 'image/jpeg') AND
@@ -280,6 +281,8 @@ impl Storage {
         .bind(komga_core::PDF_MEDIA_TYPE)
         .bind(komga_core::RAR4_MEDIA_TYPE)
         .bind(komga_core::RAR5_MEDIA_TYPE)
+        .bind(komga_core::EPUB_MEDIA_TYPE)
+        .bind(komga_core::EPUB_MEDIA_TYPE)
         .bind(edge_size)
         .bind(edge_size)
         .bind(jpeg_algorithm)
@@ -288,7 +291,7 @@ impl Storage {
     }
 
     /// Lists edge pages that currently need hashing for one ready ZIP, RAR4,
-    /// RAR5, or PDF book.
+    /// RAR5, PDF, or Divina-compatible EPUB book.
     ///
     /// # Errors
     ///
@@ -305,7 +308,8 @@ impl Storage {
                  FROM MEDIA M
                  JOIN MEDIA_PAGE P ON P.BOOK_ID = M.BOOK_ID
                 WHERE M.BOOK_ID = ? AND M.STATUS = 'READY'
-                  AND M.MEDIA_TYPE IN (?, ?, ?, ?)
+                  AND M.MEDIA_TYPE IN (?, ?, ?, ?, ?)
+                  AND (M.MEDIA_TYPE <> ? OR M.EPUB_DIVINA_COMPATIBLE = 1)
                   AND (P.NUMBER < ? OR P.NUMBER >= MAX(M.PAGE_COUNT - ?, 0))
                   AND (P.FILE_HASH = '' OR
                        ((M.MEDIA_TYPE = 'application/pdf' OR P.MEDIA_TYPE = 'image/jpeg') AND
@@ -317,6 +321,8 @@ impl Storage {
         .bind(komga_core::PDF_MEDIA_TYPE)
         .bind(komga_core::RAR4_MEDIA_TYPE)
         .bind(komga_core::RAR5_MEDIA_TYPE)
+        .bind(komga_core::EPUB_MEDIA_TYPE)
+        .bind(komga_core::EPUB_MEDIA_TYPE)
         .bind(edge_size)
         .bind(edge_size)
         .bind(jpeg_algorithm)
@@ -1648,6 +1654,50 @@ mod tests {
             .await
             .unwrap();
         sqlx::query("UPDATE MEDIA_PAGE SET FILE_HASH='' WHERE BOOK_ID=? AND NUMBER=0")
+            .bind(&book.id)
+            .execute(&storage.pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            storage
+                .list_books_with_incomplete_page_hashes(&book.library_id, 2, RGB_ALGORITHM)
+                .await
+                .unwrap(),
+            std::slice::from_ref(&book.id)
+        );
+        assert_eq!(
+            storage
+                .list_page_hash_targets(&book.id, 2, RGB_ALGORITHM)
+                .await
+                .unwrap()
+                .iter()
+                .map(|target| target.number)
+                .collect::<Vec<_>>(),
+            [0]
+        );
+
+        sqlx::query("UPDATE MEDIA SET MEDIA_TYPE=?,EPUB_DIVINA_COMPATIBLE=0 WHERE BOOK_ID=?")
+            .bind(EPUB_MEDIA_TYPE)
+            .bind(&book.id)
+            .execute(&storage.pool)
+            .await
+            .unwrap();
+        assert!(
+            storage
+                .list_books_with_incomplete_page_hashes(&book.library_id, 2, RGB_ALGORITHM)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            storage
+                .list_page_hash_targets(&book.id, 2, RGB_ALGORITHM)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+
+        sqlx::query("UPDATE MEDIA SET EPUB_DIVINA_COMPATIBLE=1 WHERE BOOK_ID=?")
             .bind(&book.id)
             .execute(&storage.pool)
             .await

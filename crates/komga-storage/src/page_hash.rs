@@ -200,7 +200,8 @@ impl Storage {
         )
     }
 
-    /// Lists snapshot-bound pages selected by known actions and optional library.
+    /// Lists snapshot-bound pages in currently removable media selected by
+    /// known actions and optional library.
     pub async fn page_targets_by_actions(
         &self,
         actions: &[PageHashAction],
@@ -227,7 +228,17 @@ impl Storage {
         if let Some(library_id) = library_id {
             query.push(" AND b.LIBRARY_ID = ").push_bind(library_id.to_owned());
         }
-        query.push(" AND b.DELETED_DATE IS NULL ORDER BY mp.BOOK_ID, mp.NUMBER");
+        query.push(" AND b.DELETED_DATE IS NULL AND m.STATUS = 'READY' AND m.MEDIA_TYPE IN (");
+        let mut media_types = query.separated(", ");
+        for media_type in [
+            komga_core::ZIP_MEDIA_TYPE,
+            komga_core::RAR4_MEDIA_TYPE,
+            komga_core::RAR5_MEDIA_TYPE,
+            komga_core::PDF_MEDIA_TYPE,
+        ] {
+            media_types.push_bind(media_type);
+        }
+        media_types.push_unseparated(") ORDER BY mp.BOOK_ID, mp.NUMBER");
         let rows = query
             .build_query_as::<(String, String, String, String, i64, i32)>()
             .fetch_all(&self.pool)
@@ -247,6 +258,25 @@ impl Storage {
                 )
             })
             .collect())
+    }
+
+    /// Returns whether a hash currently matches media that cannot remove pages.
+    pub async fn page_hash_has_non_removable_matches(&self, page_hash: &str) -> Result<bool> {
+        Ok(sqlx::query_scalar(
+            r#"SELECT EXISTS(
+                 SELECT 1 FROM MEDIA_PAGE mp
+                JOIN MEDIA m ON m.BOOK_ID = mp.BOOK_ID
+                WHERE mp.FILE_HASH = ?
+                  AND (m.STATUS <> 'READY' OR m.MEDIA_TYPE IS NULL
+                       OR m.MEDIA_TYPE NOT IN (?, ?, ?, ?)))"#,
+        )
+        .bind(page_hash)
+        .bind(komga_core::ZIP_MEDIA_TYPE)
+        .bind(komga_core::RAR4_MEDIA_TYPE)
+        .bind(komga_core::RAR5_MEDIA_TYPE)
+        .bind(komga_core::PDF_MEDIA_TYPE)
+        .fetch_one(&self.pool)
+        .await?)
     }
 }
 
@@ -526,5 +556,63 @@ mod tests {
             storage.find_known_page_hash("negative").await.unwrap().unwrap().size,
             None
         );
+    }
+
+    #[tokio::test]
+    async fn removal_targets_exclude_epub_and_report_mixed_hashes() {
+        let storage = Storage::connect_memory().await.unwrap();
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("library");
+        fs::create_dir_all(root.join("Series")).unwrap();
+        fs::write(root.join("Series/A.cbz"), b"a").unwrap();
+        fs::write(root.join("Series/B.epub"), b"b").unwrap();
+        let library = Library::new("Library".into(), Url::from_directory_path(&root).unwrap());
+        storage.create_library(&library).await.unwrap();
+        let scan = scan_library_files(&library, || false).unwrap();
+        storage.apply_library_scan(&library.id, &scan, false).await.unwrap();
+        let series = storage.list_series_by_library_id(&library.id).await.unwrap();
+        let books = storage.list_books_by_series_id(&series[0].id).await.unwrap();
+        let epub = books.iter().find(|book| book.url.path().ends_with(".epub")).unwrap();
+        let zip = books.iter().find(|book| book.url.path().ends_with(".cbz")).unwrap();
+        for (book, media_type) in [(zip, komga_core::ZIP_MEDIA_TYPE), (epub, komga_core::EPUB_MEDIA_TYPE)] {
+            sqlx::query("UPDATE MEDIA SET STATUS='READY',MEDIA_TYPE=?,PAGE_COUNT=1 WHERE BOOK_ID=?")
+                .bind(media_type)
+                .bind(&book.id)
+                .execute(&storage.pool)
+                .await
+                .unwrap();
+            sqlx::query(
+                "INSERT INTO MEDIA_PAGE (BOOK_ID,NUMBER,FILE_NAME,MEDIA_TYPE,FILE_HASH,FILE_SIZE) VALUES (?,0,'page.jpg','image/jpeg','duplicate',10)",
+            )
+            .bind(&book.id)
+            .execute(&storage.pool)
+            .await
+            .unwrap();
+        }
+        storage
+            .create_or_update_page_hash("duplicate", Some(10), PageHashAction::DeleteAuto, None)
+            .await
+            .unwrap();
+
+        let targets = storage
+            .page_targets_by_actions(&[PageHashAction::DeleteAuto], Some(&library.id))
+            .await
+            .unwrap();
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].0, zip.id);
+        assert!(storage.page_hash_has_non_removable_matches("duplicate").await.unwrap());
+
+        sqlx::query("UPDATE MEDIA_PAGE SET FILE_HASH='epub-only' WHERE BOOK_ID=?")
+            .bind(&epub.id)
+            .execute(&storage.pool)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE MEDIA_PAGE SET FILE_HASH='zip-only' WHERE BOOK_ID=?")
+            .bind(&zip.id)
+            .execute(&storage.pool)
+            .await
+            .unwrap();
+        assert!(storage.page_hash_has_non_removable_matches("epub-only").await.unwrap());
+        assert!(!storage.page_hash_has_non_removable_matches("zip-only").await.unwrap());
     }
 }
