@@ -56,6 +56,8 @@ FROM ${UBUNTU_IMAGE} AS runtime
 ARG KOMGA_UID=1000
 ARG KOMGA_GID=1000
 
+# Ubuntu 24.04 may already reserve UID/GID 1000, so reuse those identities
+# instead of creating duplicate numeric IDs.
 RUN apt-get update \
     && apt-get install --yes --no-install-recommends \
         ca-certificates \
@@ -64,9 +66,24 @@ RUN apt-get update \
         libheif-plugin-dav1d \
         libheif-plugin-libde265 \
     && rm -rf /var/lib/apt/lists/* \
-    && groupadd --gid "${KOMGA_GID}" komga \
-    && useradd --uid "${KOMGA_UID}" --gid "${KOMGA_GID}" \
-        --home-dir /config --create-home --shell /usr/sbin/nologin komga
+    && current_group="$(getent group "${KOMGA_GID}" | cut -d: -f1)" \
+    && if [ -z "${current_group}" ]; then \
+        groupadd --gid "${KOMGA_GID}" komga; \
+    elif [ "${current_group}" != komga ]; then \
+        groupmod --new-name komga "${current_group}"; \
+    fi \
+    && current_user="$(getent passwd "${KOMGA_UID}" | cut -d: -f1)" \
+    && if [ -z "${current_user}" ]; then \
+        useradd --uid "${KOMGA_UID}" --gid "${KOMGA_GID}" \
+            --home-dir /config --shell /usr/sbin/nologin komga; \
+    elif [ "${current_user}" != komga ]; then \
+        usermod --login komga --gid "${KOMGA_GID}" \
+            --home /config --shell /usr/sbin/nologin "${current_user}"; \
+    else \
+        usermod --gid "${KOMGA_GID}" --home /config \
+            --shell /usr/sbin/nologin komga; \
+    fi \
+    && install -d -o "${KOMGA_UID}" -g "${KOMGA_GID}" /config
 
 COPY --from=builder /out/komga-server /usr/local/bin/komga-server
 COPY LICENSE /usr/share/licenses/komga-rs/
