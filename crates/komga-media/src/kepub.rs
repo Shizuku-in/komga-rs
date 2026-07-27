@@ -40,10 +40,12 @@ use quick_xml::{
     Reader, Writer,
     events::{BytesEnd, BytesStart, Event},
 };
-use roxmltree::{Document, Node as XmlNode};
+use roxmltree::Node as XmlNode;
 use scraper::{Html, Node};
 use thiserror::Error;
 use zip::{CompressionMethod, ZipArchive, ZipWriter, result::ZipError, write::SimpleFileOptions};
+
+use crate::epub::package as epub_package;
 
 const EPUB_MIMETYPE: &str = "application/epub+zip";
 const CONTAINER_PATH: &str = "META-INF/container.xml";
@@ -461,9 +463,9 @@ fn read_package<R: Read + Seek>(
     let container_index = resolve_exact(index, CONTAINER_PATH)
         .ok_or_else(|| KepubConversionError::InvalidEpub("OCF container is missing".into()))?;
     let container = read_document(archive, container_index, cancelled)?;
-    let container = std::str::from_utf8(strip_bom(&container))
-        .map_err(|error| KepubConversionError::InvalidEpub(format!("container is not UTF-8: {error}")))?;
-    let document = Document::parse(container)
+    let container = epub_package::decode_xml_text(&container)
+        .map_err(|error| KepubConversionError::InvalidEpub(format!("invalid container encoding: {error}")))?;
+    let document = epub_package::parse_xml(&container)
         .map_err(|error| KepubConversionError::InvalidEpub(format!("invalid OCF container: {error}")))?;
     let root = document.root_element();
     if !local_name(root, "container") || root.attribute("version") != Some("1.0") {
@@ -480,10 +482,10 @@ fn read_package<R: Read + Seek>(
     let package_index = resolve_exact(index, &package_path)
         .ok_or_else(|| KepubConversionError::InvalidEpub("OPF rootfile is missing".into()))?;
     let opf = read_document(archive, package_index, cancelled)?;
-    let opf = std::str::from_utf8(strip_bom(&opf))
-        .map_err(|error| KepubConversionError::InvalidEpub(format!("OPF is not UTF-8: {error}")))?;
-    let document =
-        Document::parse(opf).map_err(|error| KepubConversionError::InvalidEpub(format!("invalid OPF: {error}")))?;
+    let opf = epub_package::decode_xml_text(&opf)
+        .map_err(|error| KepubConversionError::InvalidEpub(format!("invalid OPF encoding: {error}")))?;
+    let document = epub_package::parse_xml(&opf)
+        .map_err(|error| KepubConversionError::InvalidEpub(format!("invalid OPF: {error}")))?;
     if !local_name(document.root_element(), "package") {
         return Err(KepubConversionError::InvalidEpub(
             "OPF root element is not package".into(),
@@ -1528,7 +1530,7 @@ mod tests {
             .unwrap();
         writer
             .write_all(
-                br#"<?xml version="1.0"?><container xmlns="urn:oasis:names:tc:opendocument:xmlns:container" version="1.0"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#,
+                br#"<?xml version="1.0"?><!DOCTYPE container><container xmlns="urn:oasis:names:tc:opendocument:xmlns:container" version="1.0"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#,
             )
             .unwrap();
         writer
@@ -1536,7 +1538,7 @@ mod tests {
             .unwrap();
         write!(
             writer,
-            r#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0"><metadata><meta name="cover" content="cover"/><meta name="calibre:timestamp" content="now"/><contributor role="bkp">calibre</contributor></metadata><manifest><item id="cover" href="cover.jpg" media-type="image/jpeg"/><item id="chapter" href="chapter.xhtml" media-type="application/xhtml+xml"/>{opf_extra}</manifest><spine><itemref idref="chapter"/></spine></package>"#
+            r#"<?xml version="1.0"?><!DOCTYPE package><package xmlns="http://www.idpf.org/2007/opf" version="3.0"><metadata><meta name="cover" content="cover"/><meta name="calibre:timestamp" content="now"/><contributor role="bkp">calibre</contributor></metadata><manifest><item id="cover" href="cover.jpg" media-type="image/jpeg"/><item id="chapter" href="chapter.xhtml" media-type="application/xhtml+xml"/>{opf_extra}</manifest><spine><itemref idref="chapter"/></spine></package>"#
         )
         .unwrap();
         writer

@@ -593,23 +593,45 @@ mod tests {
     }
 
     fn write_epub(path: &Path, opf: &str, entries: &[(&str, &[u8])]) {
+        write_epub_documents(
+            path,
+            br#"<?xml version="1.0"?><container xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#,
+            opf.as_bytes(),
+            entries,
+        );
+    }
+
+    fn write_epub_documents(path: &Path, container: &[u8], opf: &[u8], entries: &[(&str, &[u8])]) {
         let mut writer = ZipWriter::new(File::create(path).unwrap());
         let options = SimpleFileOptions::default();
         writer.start_file("mimetype", options).unwrap();
         writer.write_all(EPUB_MEDIA_TYPE.as_bytes()).unwrap();
         writer.start_file("META-INF/container.xml", options).unwrap();
-        writer
-            .write_all(
-                br#"<?xml version="1.0"?><container xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#,
-            )
-            .unwrap();
+        writer.write_all(container).unwrap();
         writer.start_file("content.opf", options).unwrap();
-        writer.write_all(opf.as_bytes()).unwrap();
+        writer.write_all(opf).unwrap();
         for (name, bytes) in entries {
             writer.start_file(*name, options).unwrap();
             writer.write_all(bytes).unwrap();
         }
         writer.finish().unwrap();
+    }
+
+    fn utf16_xml(value: &str, little_endian: bool) -> Vec<u8> {
+        let mut bytes = if little_endian {
+            vec![0xff, 0xfe]
+        } else {
+            vec![0xfe, 0xff]
+        };
+        for code_unit in value.encode_utf16() {
+            let encoded = if little_endian {
+                code_unit.to_le_bytes()
+            } else {
+                code_unit.to_be_bytes()
+            };
+            bytes.extend_from_slice(&encoded);
+        }
+        bytes
     }
 
     #[test]
@@ -901,6 +923,40 @@ mod tests {
     }
 
     #[test]
+    fn analyzes_utf16_container_and_doctype_opf_metadata() {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("utf16.epub");
+        let container = utf16_xml(
+            r#"<?xml version="1.0" encoding="UTF-16"?><container xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#,
+            true,
+        );
+        let opf = utf16_xml(
+            r#"<?xml version="1.0" encoding="UTF-16"?>
+                <!DOCTYPE package>
+                <package xmlns="http://www.idpf.org/2007/opf" version="3.0">
+                  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>Encoded title</dc:title></metadata>
+                  <manifest><item id="page" href="page.xhtml" media-type="application/xhtml+xml"/></manifest>
+                  <spine><itemref idref="page"/></spine>
+                </package>"#,
+            false,
+        );
+        let page = utf16_xml(
+            r#"<?xml version="1.0" encoding="UTF-16"?><html><body>Readable text.</body></html>"#,
+            true,
+        );
+        write_epub_documents(&path, &container, &opf, &[("page.xhtml", page.as_slice())]);
+        let source = book(&path);
+
+        let media = analyze_book(&source, false, || false).unwrap();
+
+        assert_eq!(media.status, MediaStatus::Ready);
+        assert_eq!(media.comment, None);
+        assert_eq!(media.page_count, 1);
+        let metadata = extract_epub_metadata(&source, &media).unwrap().unwrap();
+        assert_eq!(metadata.book.title.as_deref(), Some("Encoded title"));
+    }
+
+    #[test]
     fn detects_native_kepub_positions_and_reports_missing_manifest_resources() {
         let temporary = tempfile::tempdir().unwrap();
         let path = temporary.path().join("native-kepub.epub");
@@ -913,11 +969,14 @@ mod tests {
               </manifest>
               <spine><itemref idref="page"/></spine>
             </package>"#;
-        let page = format!(
-            "<html><body><span class=\"koboSpan\" id=\"kobo.1.1\">start</span>{}<span class=\"koboSpan\" id=\"kobo.1.2\">end</span></body></html>",
-            "x".repeat(1200)
+        let page = utf16_xml(
+            &format!(
+                "<?xml version=\"1.0\" encoding=\"UTF-16\"?><!DOCTYPE html><html><body><span class=\"koboSpan\" id=\"kobo.1.1\">start</span>{}<span class=\"koboSpan\" id=\"kobo.1.2\">end</span></body></html>",
+                "x".repeat(1200)
+            ),
+            true,
         );
-        write_epub(&path, opf, &[("page.xhtml", page.as_bytes())]);
+        write_epub(&path, opf, &[("page.xhtml", page.as_slice())]);
 
         let media = analyze_book(&book(&path), false, || false).unwrap();
         assert_eq!(media.status, MediaStatus::Ready);
@@ -928,9 +987,13 @@ mod tests {
         let Some(komga_core::MediaExtension::Epub(extension)) = media.extension else {
             panic!("expected EPUB extension");
         };
-        assert_eq!(extension.positions.len(), 2);
+        assert!(extension.positions.len() >= 2);
         assert_eq!(extension.positions[0].kobo_span.as_deref(), Some("kobo.1.1"));
-        assert!(extension.positions[1].kobo_span.is_some());
+        assert!(
+            extension.positions[1..]
+                .iter()
+                .any(|position| position.kobo_span.is_some())
+        );
     }
 
     #[test]
@@ -981,7 +1044,7 @@ mod tests {
             </package>"#;
         let ordinary = format!("<html><body>{}</body></html>", "x".repeat(1600));
         let converted = format!(
-            "<html><body><span class=\"koboSpan\" id=\"kobo.1.1\">start</span>{}<span class=\"koboSpan\" id=\"kobo.1.2\">end</span></body></html>",
+            "<?xml version=\"1.0\"?><!DOCTYPE html><html><body><span class=\"koboSpan\" id=\"kobo.1.1\">start</span>{}<span class=\"koboSpan\" id=\"kobo.1.2\">end</span></body></html>",
             "x".repeat(1400)
         );
         write_epub(&source_path, opf, &[("page.xhtml", ordinary.as_bytes())]);

@@ -8,11 +8,10 @@
 use std::{collections::HashMap, fs::File};
 
 use komga_core::{EPUB_PAGE_SUBTYPE, MediaFile, R2Location, R2Locator};
-use roxmltree::Document;
 use scraper::{Html, Selector};
 use zip::ZipArchive;
 
-use super::package::read_entry_text;
+use super::package::{parse_xml, read_entry_text};
 
 /// Failures surfaced separately so analysis can preserve Kotlin error codes.
 pub(crate) enum PositionError {
@@ -192,7 +191,7 @@ fn locator(file: &MediaFile, progression: f32, position: i32, kobo_span: Option<
 
 /// Approximates each native Kobo span's resource progression from XML offsets.
 fn positions_from_kobo_spans(content: &str, file_size: Option<i64>) -> Vec<(String, f32)> {
-    let Ok(document) = Document::parse(content) else {
+    let Ok(document) = parse_xml(content) else {
         return Vec::new();
     };
     let denominator = file_size

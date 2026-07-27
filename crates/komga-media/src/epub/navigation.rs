@@ -7,10 +7,10 @@
 use std::fs::File;
 
 use komga_core::EpubTocEntry;
-use roxmltree::{Document, Node, ParsingOptions};
+use roxmltree::Node;
 use zip::ZipArchive;
 
-use super::package::{EpubPackage, is_element, normalize_href, parent, read_entry_text};
+use super::package::{EpubPackage, is_element, normalize_href, parent, parse_xml, read_entry_text};
 
 /// Reads the EPUB 3 TOC, falling back to the EPUB 2 NCX navigation map.
 pub(super) fn toc(archive: &mut ZipArchive<File>, package: &EpubPackage) -> Result<Vec<EpubTocEntry>, String> {
@@ -55,7 +55,7 @@ fn nav_entries(
 }
 
 fn parse_nav(content: &str, resource_path: &str, nav_type: &str) -> Result<Vec<EpubTocEntry>, String> {
-    let document = Document::parse(content).map_err(|error| error.to_string())?;
+    let document = parse_xml(content)?;
     let nav_node = document.descendants().find(|node| {
         is_element(*node, "nav")
             && node
@@ -116,14 +116,7 @@ fn parse_ncx(
     container_name: &str,
     item_name: &str,
 ) -> Result<Vec<EpubTocEntry>, String> {
-    let document = Document::parse_with_options(
-        content,
-        ParsingOptions {
-            allow_dtd: true,
-            ..ParsingOptions::default()
-        },
-    )
-    .map_err(|error| error.to_string())?;
+    let document = parse_xml(content)?;
     let Some(container) = document.descendants().find(|node| is_element(*node, container_name)) else {
         return Ok(Vec::new());
     };
@@ -201,6 +194,34 @@ mod tests {
         let pages = parse_nav(&fixture("nav.xhtml"), "nav.xhtml", "page-list").unwrap();
         assert_eq!(pages.len(), 8);
         assert_eq!(pages[2].href.as_deref(), Some("xhtml/chapter1.xhtml#pg_1"));
+    }
+
+    #[test]
+    fn parses_epub3_navigation_with_html_doctype() {
+        let content = r#"<?xml version="1.0" encoding="utf-8"?>
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+  <body>
+    <nav epub:type="toc">
+      <ol><li><a href="text/0000.xhtml">Volume 1</a></li></ol>
+    </nav>
+  </body>
+</html>"#;
+
+        let toc = parse_nav(content, "OPS/navigation_standard.xhtml", "toc").unwrap();
+        assert_eq!(toc.len(), 1);
+        assert_eq!(toc[0].title, "Volume 1");
+        assert_eq!(toc[0].href.as_deref(), Some("OPS/text/0000.xhtml"));
+        assert!(
+            parse_nav(content, "OPS/navigation_standard.xhtml", "landmarks")
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            parse_nav(content, "OPS/navigation_standard.xhtml", "page-list")
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]

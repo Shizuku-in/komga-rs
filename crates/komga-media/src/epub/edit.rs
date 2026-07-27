@@ -523,7 +523,7 @@ fn opf_references(
     target_indices: &HashSet<usize>,
     removed_content_paths: &HashSet<&str>,
 ) -> Result<OpfReferences, PageRemovalError> {
-    let document = Document::parse(opf)
+    let document = package::parse_xml(opf)
         .map_err(|error| PageRemovalError::Unsupported(format!("could not parse EPUB package: {error}")))?;
     let mut references = OpfReferences::default();
     let mut itemref_index = 0_usize;
@@ -632,7 +632,7 @@ fn rewrite_nav_document(
 ) -> Result<Option<Vec<u8>>, PageRemovalError> {
     let source = std::str::from_utf8(bytes)
         .map_err(|error| PageRemovalError::Unsupported(format!("EPUB navigation document is not UTF-8: {error}")))?;
-    let document = Document::parse(source)
+    let document = package::parse_xml(source)
         .map_err(|error| PageRemovalError::Unsupported(format!("could not parse EPUB navigation: {error}")))?;
     reject_navigation_base(&document)?;
     let base_dir = package::parent(resource_path);
@@ -726,14 +726,8 @@ fn rewrite_ncx_document(
 ) -> Result<Option<Vec<u8>>, PageRemovalError> {
     let source = std::str::from_utf8(bytes)
         .map_err(|error| PageRemovalError::Unsupported(format!("EPUB NCX document is not UTF-8: {error}")))?;
-    let document = Document::parse_with_options(
-        source,
-        roxmltree::ParsingOptions {
-            allow_dtd: true,
-            ..roxmltree::ParsingOptions::default()
-        },
-    )
-    .map_err(|error| PageRemovalError::Unsupported(format!("could not parse EPUB NCX: {error}")))?;
+    let document = package::parse_xml(source)
+        .map_err(|error| PageRemovalError::Unsupported(format!("could not parse EPUB NCX: {error}")))?;
     reject_navigation_base(&document)?;
     let base_dir = package::parent(resource_path);
     let mut replacements = Vec::new();
@@ -1394,7 +1388,7 @@ mod tests {
             ""
         };
         let opf = format!(
-            r#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0"><metadata><meta property="rendition:layout">pre-paginated</meta></metadata><manifest><item id="p1" href="pages/1.xhtml" media-type="application/xhtml+xml"/><item id="p2" href="pages/2.xhtml" media-type="application/xhtml+xml"/><item id="p3" href="pages/3.xhtml" media-type="application/xhtml+xml"/><item id="i1" href="images/1.png" media-type="image/png"/><item id="i2" href="images/2.png" media-type="image/png"/><item id="i3" href="images/3.png" media-type="image/png"/>{nav_item}</manifest><spine><itemref idref="p1"/><itemref idref="p2"/><itemref idref="p3"/></spine></package>"#
+            r#"<?xml version="1.0"?><!DOCTYPE package><package xmlns="http://www.idpf.org/2007/opf" version="3.0"><metadata><meta property="rendition:layout">pre-paginated</meta></metadata><manifest><item id="p1" href="pages/1.xhtml" media-type="application/xhtml+xml"/><item id="p2" href="pages/2.xhtml" media-type="application/xhtml+xml"/><item id="p3" href="pages/3.xhtml" media-type="application/xhtml+xml"/><item id="i1" href="images/1.png" media-type="image/png"/><item id="i2" href="images/2.png" media-type="image/png"/><item id="i3" href="images/3.png" media-type="image/png"/>{nav_item}</manifest><spine><itemref idref="p1"/><itemref idref="p2"/><itemref idref="p3"/></spine></package>"#
         );
         writer.start_file("content.opf", options).unwrap();
         writer.write_all(opf.as_bytes()).unwrap();
@@ -1420,7 +1414,7 @@ mod tests {
             writer.start_file("nav.xhtml", options).unwrap();
             writer
                 .write_all(
-                    br#"<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><body><nav epub:type="toc"><ol><li><a href="pages/1.xhtml">One</a></li><li><a href="pages/2.xhtml?mode=reader#panel">Two</a><ol><li><a href="pages/3.xhtml">Three</a></li></ol></li></ol></nav><nav epub:type="landmarks"><ol><li><a href="pages/2.xhtml">Two</a></li></ol></nav><nav epub:type="page-list"><ol><li><a href="pages/2.xhtml#page">2</a></li></ol></nav></body></html>"#,
+                    br#"<?xml version="1.0"?><!DOCTYPE html><html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><body><nav epub:type="toc"><ol><li><a href="pages/1.xhtml">One</a></li><li><a href="pages/2.xhtml?mode=reader#panel">Two</a><ol><li><a href="pages/3.xhtml">Three</a></li></ol></li></ol></nav><nav epub:type="landmarks"><ol><li><a href="pages/2.xhtml">Two</a></li></ol></nav><nav epub:type="page-list"><ol><li><a href="pages/2.xhtml#page">2</a></li></ol></nav></body></html>"#,
                 )
                 .unwrap();
         }

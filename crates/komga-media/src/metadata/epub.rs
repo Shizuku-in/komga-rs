@@ -26,7 +26,7 @@ pub fn extract_epub_metadata(book: &Book, media: &Media) -> Result<Option<Embedd
 }
 
 fn parse_metadata(xml: &str) -> Result<EmbeddedMetadata, MediaOperationError> {
-    let doc = roxmltree::Document::parse(xml).map_err(|error| MediaOperationError::Read(error.to_string()))?;
+    let doc = epub::package::parse_xml(xml).map_err(MediaOperationError::Read)?;
     let metadata = doc
         .descendants()
         .find(|node| node.is_element() && node.tag_name().name() == "metadata")

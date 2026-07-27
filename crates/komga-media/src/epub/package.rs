@@ -8,7 +8,7 @@ use std::{collections::BTreeSet, fs::File, io::Read, path::Path};
 
 use komga_core::EpubTocEntry;
 use percent_encoding::percent_decode_str;
-use roxmltree::{Document, Node};
+use roxmltree::{Document, Node, ParsingOptions};
 use zip::ZipArchive;
 
 /// One normalized OPF manifest item used by later EPUB analysis stages.
@@ -31,6 +31,19 @@ pub(super) struct EpubPackage {
     pub(super) cover: Option<ManifestItem>,
     pub(super) nav: Option<ManifestItem>,
     pub(super) ncx: Option<ManifestItem>,
+}
+
+/// Parses EPUB XML while accepting document type declarations without resolving
+/// external entities.
+pub(crate) fn parse_xml(content: &str) -> Result<Document<'_>, String> {
+    Document::parse_with_options(
+        content,
+        ParsingOptions {
+            allow_dtd: true,
+            ..ParsingOptions::default()
+        },
+    )
+    .map_err(|error| error.to_string())
 }
 
 /// Opens the ZIP and resolves its root OPF through `META-INF/container.xml`.
@@ -63,7 +76,7 @@ pub(super) fn has_epub_mimetype(path: &Path) -> bool {
 
 pub(super) fn package_path(archive: &mut ZipArchive<File>) -> Result<String, String> {
     let container = read_entry_text(archive, "META-INF/container.xml")?;
-    let document = Document::parse(&container).map_err(|error| error.to_string())?;
+    let document = parse_xml(&container)?;
     let rootfile = document
         .descendants()
         .find(|node| is_element(*node, "rootfile"))
@@ -73,7 +86,7 @@ pub(super) fn package_path(archive: &mut ZipArchive<File>) -> Result<String, Str
 }
 
 pub(super) fn parse_package(xml: &str, base_dir: &str) -> Result<EpubPackage, String> {
-    let document = Document::parse(xml).map_err(|error| error.to_string())?;
+    let document = parse_xml(xml)?;
     let manifest_node = document
         .descendants()
         .find(|node| is_element(*node, "manifest"))
@@ -218,7 +231,42 @@ pub(super) fn read_entry(archive: &mut ZipArchive<File>, name: &str) -> Result<V
 }
 
 pub(super) fn read_entry_text(archive: &mut ZipArchive<File>, name: &str) -> Result<String, String> {
-    String::from_utf8(read_entry(archive, name)?).map_err(|error| error.to_string())
+    decode_xml_text(&read_entry(archive, name)?)
+}
+
+pub(crate) fn decode_xml_text(bytes: &[u8]) -> Result<String, String> {
+    if let Some(bytes) = bytes.strip_prefix(&[0xef, 0xbb, 0xbf]) {
+        return std::str::from_utf8(bytes)
+            .map(str::to_owned)
+            .map_err(|error| error.to_string());
+    }
+    if let Some(bytes) = bytes.strip_prefix(&[0xff, 0xfe]) {
+        return decode_utf16(bytes, u16::from_le_bytes);
+    }
+    if let Some(bytes) = bytes.strip_prefix(&[0xfe, 0xff]) {
+        return decode_utf16(bytes, u16::from_be_bytes);
+    }
+    if bytes.starts_with(&[0x3c, 0x00, 0x3f, 0x00]) {
+        return decode_utf16(bytes, u16::from_le_bytes);
+    }
+    if bytes.starts_with(&[0x00, 0x3c, 0x00, 0x3f]) {
+        return decode_utf16(bytes, u16::from_be_bytes);
+    }
+    std::str::from_utf8(bytes)
+        .map(str::to_owned)
+        .map_err(|error| error.to_string())
+}
+
+fn decode_utf16(bytes: &[u8], decode: fn([u8; 2]) -> u16) -> Result<String, String> {
+    let mut chunks = bytes.chunks_exact(2);
+    let code_units = chunks
+        .by_ref()
+        .map(|chunk| decode([chunk[0], chunk[1]]))
+        .collect::<Vec<_>>();
+    if !chunks.remainder().is_empty() {
+        return Err("UTF-16 EPUB resource has an odd byte length".to_owned());
+    }
+    String::from_utf16(&code_units).map_err(|error| error.to_string())
 }
 
 pub(super) fn entry_sizes(archive: &mut ZipArchive<File>, name: &str) -> Option<(i64, u64)> {
@@ -254,6 +302,23 @@ mod tests {
 
     use super::*;
 
+    fn utf16_bytes(value: &str, little_endian: bool) -> Vec<u8> {
+        let mut bytes = if little_endian {
+            vec![0xff, 0xfe]
+        } else {
+            vec![0xfe, 0xff]
+        };
+        for code_unit in value.encode_utf16() {
+            let encoded = if little_endian {
+                code_unit.to_le_bytes()
+            } else {
+                code_unit.to_be_bytes()
+            };
+            bytes.extend_from_slice(&encoded);
+        }
+        bytes
+    }
+
     #[test]
     fn parses_opf_guide_and_normalizes_encoded_paths() {
         let content = fs::read_to_string(
@@ -272,5 +337,21 @@ mod tests {
             "OPS/Images/cover page.jpg#cover"
         );
         assert!(normalize_href("", "../outside.xhtml").is_err());
+    }
+
+    #[test]
+    fn decodes_standard_xml_encodings_and_accepts_doctype() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-16"?><!DOCTYPE package><package/>"#;
+        for encoded in [utf16_bytes(xml, true), utf16_bytes(xml, false)] {
+            let decoded = decode_xml_text(&encoded).unwrap();
+            assert_eq!(decoded, xml);
+            assert_eq!(parse_xml(&decoded).unwrap().root_element().tag_name().name(), "package");
+            assert_eq!(decode_xml_text(&encoded[2..]).unwrap(), xml);
+        }
+
+        let mut utf8_bom = vec![0xef, 0xbb, 0xbf];
+        utf8_bom.extend_from_slice(xml.as_bytes());
+        assert_eq!(decode_xml_text(&utf8_bom).unwrap(), xml);
+        assert!(decode_xml_text(&[0xff, 0xfe, 0x3c]).is_err());
     }
 }
