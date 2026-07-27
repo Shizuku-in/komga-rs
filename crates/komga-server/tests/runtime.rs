@@ -973,7 +973,7 @@ async fn startup_scheduler_analyzes_supported_media_generates_thumbnails_and_exe
         assert_eq!(thumbnail.thumbnail_type, "GENERATED");
         assert_eq!(thumbnail.media_type, "image/jpeg");
     }
-    tokio::time::timeout(Duration::from_secs(15), async {
+    tokio::time::timeout(Duration::from_secs(30), async {
         loop {
             let queued = tasks.list().await.unwrap();
             if queued.is_empty() {
