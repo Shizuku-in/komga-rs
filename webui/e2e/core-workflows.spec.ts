@@ -30,6 +30,12 @@ test('claim, login, library reading and COPY import work in a browser', async ({
   await page.reload()
   await expect(page.getByRole('heading', {name: 'Welcome to Komga'})).toBeVisible()
 
+  await page.getByText('Log Out', {exact: true}).click()
+  await signInWithOAuth(page)
+  await page.goto(`${state.rootUrl}/account/authentication-activity`)
+  await expect(page.getByText('OAuth2:E2E OAuth', {exact: true})).toBeVisible()
+  await page.goto(state.rootUrl)
+
   await page.getByRole('button', {name: 'Add library'}).click()
   const libraryDialog = page.getByRole('dialog').filter({hasText: 'Add Library'})
   await libraryDialog.getByLabel('Name').fill('E2E Library')
@@ -103,7 +109,7 @@ test('context-path login, deep-link refresh and static assets stay under /komga'
 
   await claimThroughUi(page, state.contextUrl)
   await page.getByText('Log Out', {exact: true}).click()
-  await signIn(page)
+  await signInWithOAuth(page)
   await page.goto(`${state.contextUrl}/settings/server`)
   await expect(page.getByText('Server Settings', {exact: true})).toBeVisible()
   await page.reload()
@@ -126,8 +132,17 @@ async function claimThroughUi(page: Page, baseUrl: string): Promise<void> {
 async function signIn(page: Page): Promise<void> {
   await page.getByLabel('Email').fill(ADMIN_EMAIL)
   await page.getByLabel('Password').fill(ADMIN_PASSWORD)
-  await page.getByRole('button', {name: 'Sign in'}).click()
+  await page.getByRole('button', {name: 'Sign in', exact: true}).click()
   await expect(page).not.toHaveURL(/\/login(?:\?|$)/)
+}
+
+async function signInWithOAuth(page: Page): Promise<void> {
+  const popupPromise = page.waitForEvent('popup')
+  await page.getByRole('button', {name: 'Sign in with E2E OAuth'}).click()
+  const popup = await popupPromise
+  if (!popup.isClosed()) await popup.waitForEvent('close')
+  await expect(page).not.toHaveURL(/\/login(?:\?|$)/)
+  await expect(page.getByRole('heading', {name: 'Welcome to Komga'})).toBeVisible()
 }
 
 async function pollJsonArray(
