@@ -65,7 +65,7 @@ async fn actuator_info_is_admin_only_and_exposes_webui_build_fields() {
 }
 
 #[tokio::test]
-async fn library_and_series_analysis_queue_active_books_at_priority_six() {
+async fn library_and_series_analysis_queue_all_books_at_priority_six() {
     let storage = Storage::connect_memory().await.unwrap();
     let tasks = TaskStorage::connect_memory().await.unwrap();
     let temporary = tempfile::tempdir().unwrap();
@@ -80,7 +80,13 @@ async fn library_and_series_analysis_queue_active_books_at_priority_six() {
         .await
         .unwrap();
     let series = storage.list_series_by_library_id(&library.id).await.unwrap().remove(0);
+    fs::remove_file(root.join("Series/Two.cbz")).unwrap();
+    storage
+        .apply_library_scan(&library.id, &scan_library_files(&library, || false).unwrap(), true)
+        .await
+        .unwrap();
     let books = storage.list_books_by_series_id(&series.id).await.unwrap();
+    assert_eq!(books.iter().filter(|book| book.deleted_date.is_some()).count(), 1);
 
     let app = build_app(AppState::new(storage, tasks.clone()).await.unwrap());
     assert_eq!(claim(&app).await.status(), StatusCode::OK);

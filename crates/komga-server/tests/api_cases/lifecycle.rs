@@ -47,6 +47,69 @@ async fn deleting_a_non_empty_library_cascades_database_content_but_preserves_fi
 }
 
 #[tokio::test]
+async fn library_metadata_refresh_accepts_missing_ids_and_queues_kotlin_task_set() {
+    let storage = Storage::connect_memory().await.unwrap();
+    let tasks = TaskStorage::connect_memory().await.unwrap();
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path().join("library");
+    fs::create_dir_all(root.join("Series")).unwrap();
+    fs::write(root.join("Series/Volume.cbz"), [1_u8]).unwrap();
+    let library = Library::new("Metadata refresh".into(), Url::from_directory_path(&root).unwrap());
+    storage.create_library(&library).await.unwrap();
+    storage
+        .apply_library_scan(&library.id, &scan_library_files(&library, || false).unwrap(), false)
+        .await
+        .unwrap();
+    let series = storage.list_series_by_library_id(&library.id).await.unwrap().remove(0);
+    let book = storage.list_books_by_series_id(&series.id).await.unwrap().remove(0);
+
+    let app = build_app(AppState::new(storage, tasks.clone()).await.unwrap());
+    assert_eq!(claim(&app).await.status(), StatusCode::OK);
+    let missing = app
+        .clone()
+        .oneshot(
+            Request::post("/api/v1/libraries/missing/metadata/refresh")
+                .header(header::AUTHORIZATION, basic("admin@example.org", "password"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(missing.status(), StatusCode::ACCEPTED);
+    assert!(tasks.list().await.unwrap().is_empty());
+
+    let response = app
+        .oneshot(
+            Request::post(format!("/api/v1/libraries/{}/metadata/refresh", library.id))
+                .header(header::AUTHORIZATION, basic("admin@example.org", "password"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    let queued = tasks.list().await.unwrap();
+    assert_eq!(queued.len(), 3);
+    assert!(queued.iter().all(|task| task.priority == 6));
+    assert!(
+        queued
+            .iter()
+            .any(|task| task.id == format!("REFRESH_BOOK_METADATA_{}", book.id))
+    );
+    assert!(
+        queued
+            .iter()
+            .any(|task| task.id == format!("REFRESH_BOOK_LOCAL_ARTWORK_{}", book.id))
+    );
+    assert!(
+        queued
+            .iter()
+            .any(|task| task.id == format!("REFRESH_SERIES_LOCAL_ARTWORK_{}", series.id))
+    );
+    assert!(queued.iter().all(|task| task.simple_type != "RefreshSeriesMetadata"));
+}
+
+#[tokio::test]
 async fn comicrack_match_requires_admin_and_returns_complete_preview() {
     let storage = Storage::connect_memory().await.unwrap();
     let app = app_with_storage(storage.clone()).await;

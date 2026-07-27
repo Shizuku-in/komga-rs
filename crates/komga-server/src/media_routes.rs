@@ -81,7 +81,7 @@ pub(crate) async fn analyze_library(
     Path(library_id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
     require_admin(&auth)?;
-    for book in state.storage.list_active_books_by_library_id(&library_id).await? {
+    for book in state.storage.list_books_by_library_id(&library_id).await? {
         state
             .enqueue_task(&TaskRecord::analyze_book(&book.id, &book.series_id, 6))
             .await?;
@@ -95,13 +95,7 @@ pub(crate) async fn analyze_series(
     Path(series_id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
     require_admin(&auth)?;
-    for book in state
-        .storage
-        .list_books_by_series_id(&series_id)
-        .await?
-        .into_iter()
-        .filter(|book| book.deleted_date.is_none())
-    {
+    for book in state.storage.list_books_by_series_id(&series_id).await? {
         state
             .enqueue_task(&TaskRecord::analyze_book(&book.id, &book.series_id, 6))
             .await?;

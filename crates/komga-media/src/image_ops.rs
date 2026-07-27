@@ -145,7 +145,7 @@ pub(crate) fn detected_media_type(bytes: &[u8]) -> Option<&'static str> {
     }
 }
 
-fn decode(bytes: &[u8]) -> image::ImageResult<DynamicImage> {
+pub(crate) fn decode(bytes: &[u8]) -> image::ImageResult<DynamicImage> {
     if is_jxl(bytes) {
         return DynamicImage::from_decoder(JxlDecoder::new(Cursor::new(bytes))?);
     }

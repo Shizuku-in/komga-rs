@@ -679,6 +679,22 @@ pub struct SeriesMetadataPatch {
     pub alternate_titles_lock: Option<bool>,
 }
 
+/// Builds the automatic series metadata supplied for a one-shot book.
+///
+/// The book title and summary become the series identity, publication status
+/// is ended, and the expected book count is fixed at one. Fields outside the
+/// one-shot provider's contract remain untouched when the patch is applied.
+pub fn oneshot_series_metadata_patch(book: &BookMetadata) -> SeriesMetadataPatch {
+    SeriesMetadataPatch {
+        status: Some(SeriesStatus::Ended),
+        title: Some(book.title.clone()),
+        title_sort: Some(book.title.clone()),
+        summary: Some(book.summary.clone()),
+        total_book_count: MetadataUpdate::Set(1),
+        ..Default::default()
+    }
+}
+
 /// Validation error produced by metadata updates or persisted enum parsing.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum MetadataError {
@@ -950,6 +966,24 @@ mod tests {
                     ..Default::default()
                 })
                 .is_err()
+        );
+    }
+
+    #[test]
+    fn oneshot_series_patch_uses_book_identity_and_ended_status() {
+        let mut source = book("1", 1.0, "Standalone summary");
+        source.title = "Standalone title".into();
+
+        assert_eq!(
+            oneshot_series_metadata_patch(&source),
+            SeriesMetadataPatch {
+                status: Some(SeriesStatus::Ended),
+                title: Some("Standalone title".into()),
+                title_sort: Some("Standalone title".into()),
+                summary: Some("Standalone summary".into()),
+                total_book_count: MetadataUpdate::Set(1),
+                ..Default::default()
+            }
         );
     }
 

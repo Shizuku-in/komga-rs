@@ -139,7 +139,9 @@ pub(super) async fn process_refresh_book_metadata_task(state: &AppState, task: &
         )
     {
         let extraction_book = book.clone();
-        let result = tokio::task::spawn_blocking(move || extract_epub_metadata(&extraction_book, &media)).await;
+        let extraction_media = media.clone();
+        let result =
+            tokio::task::spawn_blocking(move || extract_epub_metadata(&extraction_book, &extraction_media)).await;
         if let Ok(Ok(Some(value))) = result {
             match metadata.apply_provider_patch(value.book) {
                 Ok(v) => metadata = v,
@@ -147,6 +149,21 @@ pub(super) async fn process_refresh_book_metadata_task(state: &AppState, task: &
             }
         } else if let Ok(Err(error)) = result {
             tracing::warn!(%error, book_id=%book.id, "could not import EPUB metadata");
+        }
+    }
+    if library.import_barcode_isbn && has_capability(&payload.capabilities, &[MetadataCapability::Isbn]) {
+        let extraction_book = book.clone();
+        let extraction_media = media.clone();
+        match tokio::task::spawn_blocking(move || extract_isbn_barcode(&extraction_book, &extraction_media)).await {
+            Ok(Some(isbn)) => match metadata.apply_provider_patch(BookMetadataPatch {
+                isbn: MetadataUpdate::Set(isbn),
+                ..Default::default()
+            }) {
+                Ok(value) => metadata = value,
+                Err(error) => tracing::warn!(%error, book_id=%book.id, "invalid barcode ISBN metadata"),
+            },
+            Ok(None) => {}
+            Err(error) => tracing::warn!(%error, book_id=%book.id, "barcode ISBN extraction panicked"),
         }
     }
     if let Err(error) = state.storage.save_book_metadata(&metadata).await {
@@ -204,7 +221,10 @@ pub(super) async fn process_refresh_series_metadata_task(state: &AppState, task:
         }
     };
     let books = match state.storage.list_books_by_series_id(&series.id).await {
-        Ok(v) => v,
+        Ok(v) => v
+            .into_iter()
+            .filter(|book| book.deleted_date.is_none())
+            .collect::<Vec<_>>(),
         Err(error) => {
             tracing::error!(%error, "could not list series books");
             return TaskOutcome::Retry;
@@ -212,7 +232,7 @@ pub(super) async fn process_refresh_series_metadata_task(state: &AppState, task:
     };
     let mut comic_patches = Vec::new();
     let mut epub_patches = Vec::new();
-    for book in books.into_iter().filter(|b| b.deleted_date.is_none()) {
+    for book in &books {
         let media = match state.storage.find_media_by_book_id(&book.id).await {
             Ok(Some(v)) if v.status == MediaStatus::Ready => v,
             Ok(_) => continue,
@@ -237,7 +257,7 @@ pub(super) async fn process_refresh_series_metadata_task(state: &AppState, task:
                 ],
             )
         {
-            match extract_comic_info_metadata(&book, &media, library.import_comic_info_series_append_volume) {
+            match extract_comic_info_metadata(book, &media, library.import_comic_info_series_append_volume) {
                 Ok(Some(v)) => comic_patches.push(v.series),
                 Err(error) => tracing::warn!(%error, book_id=%book.id, "could not import ComicInfo series metadata"),
                 _ => {}
@@ -255,7 +275,7 @@ pub(super) async fn process_refresh_series_metadata_task(state: &AppState, task:
                 ],
             )
         {
-            match extract_epub_metadata(&book, &media) {
+            match extract_epub_metadata(book, &media) {
                 Ok(Some(v)) => epub_patches.push(v.series),
                 Err(error) => tracing::warn!(%error, book_id=%book.id, "could not import EPUB series metadata"),
                 _ => {}
@@ -271,6 +291,21 @@ pub(super) async fn process_refresh_series_metadata_task(state: &AppState, task:
         && let Ok(updated) = target.apply_provider_patch(patch)
     {
         target = updated;
+    }
+    if series.oneshot
+        && let Some(book) = books.first()
+    {
+        match state.storage.find_book_metadata(&book.id).await {
+            Ok(Some(metadata)) => match target.apply_provider_patch(oneshot_series_metadata_patch(&metadata)) {
+                Ok(value) => target = value,
+                Err(error) => tracing::warn!(%error, series_id=%series.id, "invalid one-shot series metadata"),
+            },
+            Ok(None) => {}
+            Err(error) => {
+                tracing::error!(%error, book_id=%book.id, "could not load one-shot book metadata");
+                return TaskOutcome::Retry;
+            }
+        }
     }
     if library.import_mylar_series
         && has_capability(

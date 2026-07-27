@@ -28,6 +28,7 @@ percent-encoding.workspace = true
 quick-xml.workspace = true
 rars.workspace = true
 roxmltree.workspace = true
+rxing.workspace = true
 scraper.workspace = true
 serde.workspace = true
 serde_json.workspace = true

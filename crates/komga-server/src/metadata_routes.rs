@@ -22,6 +22,7 @@ use crate::{
 };
 
 const DEFAULT_TASK_PRIORITY: i32 = 4;
+const HIGH_TASK_PRIORITY: i32 = 6;
 
 /// Updates the editable metadata for one book.
 pub(crate) async fn update_book_metadata(
@@ -171,38 +172,30 @@ pub(crate) async fn refresh_series_metadata(
     Ok(StatusCode::ACCEPTED)
 }
 
-/// Queues metadata refreshes for all ready books and active series in a library.
+/// Queues metadata and local-artwork refreshes for a library's content.
 pub(crate) async fn refresh_library_metadata(
     State(state): State<AppState>,
     Extension(auth): Extension<AuthContext>,
     Path(library_id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
     require_admin(&auth)?;
-    state
-        .storage
-        .find_library_by_id(&library_id)
-        .await?
-        .ok_or_else(|| ApiError::not_found("Library not found"))?;
-    for (book_id, series_id) in state.storage.list_ready_books_by_library_id(&library_id).await? {
+    for book in state.storage.list_books_by_library_id(&library_id).await? {
         state
             .enqueue_task(&TaskRecord::refresh_book_metadata(
-                &book_id,
-                &series_id,
-                DEFAULT_TASK_PRIORITY,
+                &book.id,
+                &book.series_id,
+                HIGH_TASK_PRIORITY,
             ))
             .await?;
-    }
-    for series in state
-        .storage
-        .list_series_by_library_id(&library_id)
-        .await?
-        .into_iter()
-        .filter(|s| s.deleted_date.is_none())
-    {
         state
-            .enqueue_task(&TaskRecord::refresh_series_metadata(
+            .enqueue_task(&TaskRecord::refresh_book_local_artwork(&book.id, HIGH_TASK_PRIORITY))
+            .await?;
+    }
+    for series in state.storage.list_series_by_library_id(&library_id).await? {
+        state
+            .enqueue_task(&TaskRecord::refresh_series_local_artwork(
                 &series.id,
-                DEFAULT_TASK_PRIORITY - 1,
+                HIGH_TASK_PRIORITY,
             ))
             .await?;
     }

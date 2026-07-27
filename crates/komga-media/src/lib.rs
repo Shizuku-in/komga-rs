@@ -11,6 +11,7 @@ use komga_core::{
 };
 
 mod archive;
+mod barcode;
 mod comicrack;
 mod epub;
 mod hashing;
@@ -23,6 +24,7 @@ mod pdf_edit;
 mod rar_conversion;
 mod zip_edit;
 
+pub use barcode::extract_isbn_barcode;
 pub use comicrack::{ComicRackListError, parse_read_list};
 pub use epub::rewrite_hashed_epub_pages;
 pub use hashing::{

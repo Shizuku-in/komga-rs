@@ -58,6 +58,7 @@ pub use media::{
 pub use metadata::{
     AlternateTitle, Author, BookMetadata, BookMetadataAggregation, BookMetadataPatch, MetadataError, MetadataUpdate,
     ReadingDirection, SeriesMetadata, SeriesMetadataPatch, SeriesStatus, WebLink, aggregate_book_metadata,
+    oneshot_series_metadata_patch,
 };
 pub use page_hash::{HashedPageTarget, PageHashAction, PageHashKnown, PageHashMatch, PageHashUnknown};
 pub use pagination::{ContentPage, PageRequest, SortDirection, SortOrder};

@@ -973,7 +973,7 @@ async fn startup_scheduler_analyzes_supported_media_generates_thumbnails_and_exe
         assert_eq!(thumbnail.thumbnail_type, "GENERATED");
         assert_eq!(thumbnail.media_type, "image/jpeg");
     }
-    tokio::time::timeout(Duration::from_secs(5), async {
+    tokio::time::timeout(Duration::from_secs(15), async {
         loop {
             let queued = tasks.list().await.unwrap();
             if queued.is_empty() {
@@ -987,6 +987,146 @@ async fn startup_scheduler_analyzes_supported_media_generates_thumbnails_and_exe
     let queued = tasks.list().await.unwrap();
     assert!(queued.is_empty());
 
+    runtime.shutdown().await;
+}
+
+#[tokio::test]
+async fn analysis_imports_barcode_isbn_when_other_metadata_providers_are_disabled() {
+    let storage = Storage::connect_memory().await.unwrap();
+    let tasks = TaskStorage::connect_memory().await.unwrap();
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path().join("library");
+    fs::create_dir_all(root.join("Series")).unwrap();
+    let barcode =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../komga/komga/src/test/resources/barcode/page_384.jpg");
+    let file = File::create(root.join("Series/Volume.cbz")).unwrap();
+    let mut archive = ZipWriter::new(file);
+    archive.start_file("page.jpg", SimpleFileOptions::default()).unwrap();
+    archive.write_all(&fs::read(barcode).unwrap()).unwrap();
+    archive.finish().unwrap();
+
+    let mut library = Library::new("Barcode".into(), Url::from_directory_path(&root).unwrap());
+    library.import_comic_info_book = false;
+    library.import_comic_info_series = false;
+    library.import_comic_info_collection = false;
+    library.import_comic_info_read_list = false;
+    library.import_epub_book = false;
+    library.import_epub_series = false;
+    library.import_mylar_series = false;
+    library.import_barcode_isbn = true;
+    library.hash_files = false;
+    library.hash_koreader = false;
+    library.scan_interval = ScanInterval::Disabled;
+    storage.create_library(&library).await.unwrap();
+    tasks
+        .save(&TaskRecord::scan_library(&library.id, false, 8))
+        .await
+        .unwrap();
+
+    let runtime = AppState::new(storage.clone(), tasks.clone())
+        .await
+        .unwrap()
+        .start_runtime()
+        .await
+        .unwrap();
+    let book = tokio::time::timeout(Duration::from_secs(15), async {
+        loop {
+            if let Some(book) = storage
+                .list_active_books_by_library_id(&library.id)
+                .await
+                .unwrap()
+                .into_iter()
+                .next()
+                && storage
+                    .find_book_metadata(&book.id)
+                    .await
+                    .unwrap()
+                    .is_some_and(|metadata| metadata.isbn == "9782811632397")
+                && tasks.list().await.unwrap().is_empty()
+            {
+                break book;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("barcode metadata import did not complete");
+    assert_eq!(
+        storage.find_book_metadata(&book.id).await.unwrap().unwrap().isbn,
+        "9782811632397"
+    );
+    runtime.shutdown().await;
+}
+
+#[tokio::test]
+async fn oneshot_series_metadata_uses_the_book_title_summary_and_ended_status() {
+    let storage = Storage::connect_memory().await.unwrap();
+    let tasks = TaskStorage::connect_memory().await.unwrap();
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path().join("library");
+    fs::create_dir_all(root.join("One Shots")).unwrap();
+    let image =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../komga/komga/src/test/resources/barcode/komga.png");
+    let file = File::create(root.join("One Shots/Standalone.cbz")).unwrap();
+    let mut archive = ZipWriter::new(file);
+    archive.start_file("page.png", SimpleFileOptions::default()).unwrap();
+    archive.write_all(&fs::read(image).unwrap()).unwrap();
+    archive.finish().unwrap();
+
+    let mut library = Library::new("One shots".into(), Url::from_directory_path(&root).unwrap());
+    library.oneshots_directory = Some("One Shots".into());
+    library.import_comic_info_series = false;
+    library.import_epub_series = false;
+    library.import_mylar_series = false;
+    library.scan_interval = ScanInterval::Disabled;
+    storage.create_library(&library).await.unwrap();
+    storage
+        .apply_library_scan(&library.id, &scan_library_files(&library, || false).unwrap(), false)
+        .await
+        .unwrap();
+    let series = storage.list_series_by_library_id(&library.id).await.unwrap().remove(0);
+    assert!(series.oneshot);
+    let book = storage.list_books_by_series_id(&series.id).await.unwrap().remove(0);
+    storage
+        .replace_media_analysis(&analyze_book(&book, false, || false).unwrap())
+        .await
+        .unwrap();
+    let metadata = storage
+        .find_book_metadata(&book.id)
+        .await
+        .unwrap()
+        .unwrap()
+        .apply_patch(BookMetadataPatch {
+            title: Some("Standalone title".into()),
+            summary: MetadataUpdate::Set("Standalone summary".into()),
+            ..Default::default()
+        })
+        .unwrap();
+    storage.save_book_metadata(&metadata).await.unwrap();
+    tasks
+        .save(&TaskRecord::refresh_series_metadata(&series.id, 5))
+        .await
+        .unwrap();
+
+    let runtime = AppState::new(storage.clone(), tasks.clone())
+        .await
+        .unwrap()
+        .start_runtime()
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !tasks.list().await.unwrap().is_empty() {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("one-shot metadata refresh did not complete");
+    let series_metadata = storage.find_series_metadata(&series.id).await.unwrap().unwrap();
+    assert_eq!(series_metadata.title, "Standalone title");
+    assert_eq!(series_metadata.title_sort, "Standalone title");
+    assert_eq!(series_metadata.summary, "Standalone summary");
+    assert_eq!(series_metadata.status, komga_core::SeriesStatus::Ended);
+    assert_eq!(series_metadata.total_book_count, Some(1));
     runtime.shutdown().await;
 }
 

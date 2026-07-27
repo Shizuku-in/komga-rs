@@ -32,7 +32,8 @@ pub(super) async fn process_analyze_book_task(state: &AppState, task: &TaskRecor
         || library.import_comic_info_collection
         || library.import_comic_info_read_list
         || library.import_epub_book
-        || library.import_epub_series;
+        || library.import_epub_series
+        || library.import_barcode_isbn;
     let cancellation = state.shutdown.clone();
     let analyzed_book = book.clone();
     let result = tokio::task::spawn_blocking(move || {
