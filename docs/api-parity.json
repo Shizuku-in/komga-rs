@@ -41,6 +41,51 @@
       "image/jpeg"
     ]
   },
+  "searchContract": {
+    "entities": [
+      "Book",
+      "Series",
+      "Collection",
+      "ReadList"
+    ],
+    "fields": [
+      "title",
+      "name",
+      "isbn",
+      "tag",
+      "series_tag",
+      "book_tag",
+      "author",
+      "release_date",
+      "status",
+      "deleted",
+      "oneshot",
+      "publisher",
+      "reading_direction",
+      "age_rating",
+      "language",
+      "genre",
+      "sharing_label",
+      "total_book_count",
+      "book_count",
+      "complete",
+      "dynamic author role"
+    ],
+    "syntax": [
+      "default AND terms",
+      "quoted phrases",
+      "named fields",
+      "dynamic author roles",
+      "inclusive ranges",
+      "boolean grouping and negation",
+      "punctuation and hyphenated text",
+      "CJK"
+    ],
+    "invalidQuery": "empty results",
+    "resultLimit": 1000,
+    "index": "Tantivy v2 rebuilt from SQLite",
+    "exclusion": "Kotlin Lucene file-format interoperability"
+  },
   "exclusions": [
     {
       "paths": [

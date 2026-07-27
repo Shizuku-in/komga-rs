@@ -6,12 +6,12 @@ An incremental Rust port of the [Komga](https://github.com/gotson/komga) backend
 
 ## Port status
 
-The migration matrix currently tracks 14 functional areas: 9 are implemented or core-complete and 5 are partially implemented.
+The migration matrix currently tracks 14 functional areas: 10 are implemented or core-complete and 4 are partially implemented.
 
 | Status | Areas |
 | --- | --- |
-| Implemented / core-complete | Process and configuration; Claim and users; authentication; collections and read lists; OPDS; device sync; operations; transient Book import analysis; Web UI packaging |
-| Partial | SQLite; libraries and scanner; Series, Books, and progress; media; search |
+| Implemented / core-complete | Process and configuration; Claim and users; authentication; collections and read lists; search; OPDS; device sync; operations; transient Book import analysis; Web UI packaging |
+| Partial | SQLite; libraries and scanner; Series, Books, and progress; media |
 
 ## Compatibility target
 
@@ -178,7 +178,7 @@ ZIP removal raw-copies surviving entries in archive order. PDF removal extracts 
 
 The authenticated SSE endpoint combines the administrator task-count heartbeat with Kotlin event names and payloads for durable library, series, book, collection, read-list, progress, thumbnail, and session changes. Progress and session events are restricted to the affected user; import results are administrator-only. Search synchronization remains explicit and recoverable rather than depending on best-effort SSE delivery.
 
-The modern Series and Book list endpoints support Spring-style pagination, the complete structured condition trees, ranked multilingual `fullTextSearch`, alphabetical groups, fixed discovery feeds, and On Deck selection. Deprecated GET lists and the legacy alphabetical-groups route translate their query parameters into the same condition trees and search candidates; Series `search_regex` supports case-insensitive Rust regexes over `title` and `title_sort`. Referential filter values preserve Kotlin's scope precedence and data-source differences. Collection and read-list `search` uses the same in-process Tantivy index. Library sharing, age, sharing labels, member restrictions, and structured conditions remain enforced by SQLite before pagination. The Rust index uses `<config-dir>/search/v2`, remains independent of Kotlin's Lucene directory, and queues a priority-8 rebuild task at startup when the file index is empty or incompatible.
+The modern Series and Book list endpoints support Spring-style pagination, the complete structured condition trees, ranked multilingual `fullTextSearch`, alphabetical groups, fixed discovery feeds, and On Deck selection. Deprecated GET lists and the legacy alphabetical-groups route translate their query parameters into the same condition trees and search candidates; Series `search_regex` supports case-insensitive Rust regexes over `title` and `title_sort`. Referential filter values preserve Kotlin's scope precedence and data-source differences. Collection and read-list `search` uses the same in-process Tantivy index. The query contract covers default-AND terms, phrases, fields and dynamic author roles, ranges, boolean grouping and negation, punctuation, CJK, and Kotlin-compatible empty results for invalid syntax. Library sharing, age, sharing labels, member restrictions, and structured conditions remain enforced by SQLite before pagination. The Rust index uses `<config-dir>/search/v2`, remains independent of Kotlin's Lucene directory, and queues a priority-8 rebuild task at startup when the file index is empty or incompatible; Lucene file-format interoperability is not a compatibility target.
 
 OPDS 1.2 serves Atom navigation and acquisition feeds, OpenSearch discovery, PSE page streaming, thumbnails, and original files. OPDS 2 serves recommended and paged library feeds, browse facets, grouped search, publications, profile manifests, reading resources, and Readium progression. Both generations enforce the same library and content restrictions as REST, generate proxy-aware absolute links, and reuse the existing media and search implementations.
 

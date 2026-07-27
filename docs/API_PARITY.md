@@ -28,6 +28,18 @@ The server integration suite validates the manifest structure and probes every n
 a missing path or method fails the test. Kobo is verified through its functional tests because its
 intentional `ANY` Store-proxy fallback consumes unmatched methods.
 
+## Search contract
+
+Book and Series `fullTextSearch` and Collection/ReadList `search` use the independent Tantivy v2
+index. Supported observable syntax includes default-AND terms, quoted phrases, named fields, dynamic
+author roles, inclusive ranges, explicit boolean operators, grouping and negation, punctuation,
+hyphenated text, and CJK. Invalid syntax and fields which do not exist in an entity return no hits,
+matching the Kotlin API behavior.
+
+SQLite visibility filters are applied before pagination. Relevance is used when requested; an
+explicit business sort overrides relevance. The index is rebuilt from SQLite when empty or
+incompatible. Reading or writing the Kotlin Lucene directory is not part of the compatibility target.
+
 ## Explicit exclusions
 
 | Surface | Decision |
