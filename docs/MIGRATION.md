@@ -73,7 +73,7 @@ documents, and 4 GiB of declared uncompressed data. Duplicate, absolute, backsla
 case-ambiguous entries are rejected. A two-permit semaphore bounds conversion work, requests for the same source snapshot
 share one five-minute idle cache entry, and generated files remain process-local temporary files. Startup queues priority-0
 analysis only for READY reflowable non-native EPUBs whose nonempty positions all lack KoboSpan data. The translated code
-retains kepubify's MIT attribution in the workspace `NOTICE` file.
+retains kepubify's MIT attribution in its module documentation.
 
 Book and series metadata can be patched through the Kotlin-compatible administrator routes. The HTTP boundary preserves
 each field's distinct omitted-versus-null behavior, while `komga-core` owns normalization and validation. Bulk book
