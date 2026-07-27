@@ -1,5 +1,10 @@
 use super::*;
 
+const JXL_1X1_RED: &[u8] = &[
+    0xff, 0x0a, 0x00, 0x10, 0x10, 0x09, 0x08, 0x00, 0x01, 0x00, 0x28, 0x00, 0x4b, 0x18, 0x8b, 0x15, 0xc2, 0x49, 0x41,
+    0x4e, 0x7f, 0x00,
+];
+
 #[tokio::test]
 async fn cbz_pages_conversion_thumbnail_cache_and_manual_analysis_match_contract() {
     let (_temporary, storage, tasks, book, media) = analyzed_media_fixture("archives/zip.zip", "Volume 1.cbz").await;
@@ -162,6 +167,73 @@ async fn cbz_pages_conversion_thumbnail_cache_and_manual_analysis_match_contract
     assert_eq!(queued[0].simple_type, "AnalyzeBook");
     assert_eq!(queued[0].group_id.as_deref(), Some(book.series_id.as_str()));
     assert_eq!(queued[0].priority, 6);
+}
+
+#[tokio::test]
+async fn jpeg_xl_pages_are_analyzed_served_and_converted() {
+    let mut archive = ZipWriter::new(Cursor::new(Vec::new()));
+    archive.start_file("page.jxl", SimpleFileOptions::default()).unwrap();
+    archive.write_all(JXL_1X1_RED).unwrap();
+    let bytes = archive.finish().unwrap().into_inner();
+    let (_temporary, storage, tasks, book, media) = analyzed_media_bytes_fixture(&bytes, "Volume.cbz").await;
+    assert_eq!(media.page_count, 1);
+    assert_eq!(media.pages[0].media_type, "image/jxl");
+    assert_eq!(
+        media.pages[0].dimension,
+        Some(komga_core::Dimension { width: 1, height: 1 })
+    );
+
+    let app = build_app(AppState::new(storage, tasks).await.unwrap());
+    assert_eq!(claim(&app).await.status(), StatusCode::OK);
+    let admin = basic("admin@example.org", "password");
+    let page_path = format!("/api/v1/books/{}/pages/1", book.id);
+
+    let original = app
+        .clone()
+        .oneshot(
+            Request::get(&page_path)
+                .header(header::AUTHORIZATION, &admin)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(original.status(), StatusCode::OK);
+    assert_eq!(original.headers()[header::CONTENT_TYPE], "image/jxl");
+    assert!(
+        original.headers()[header::CONTENT_DISPOSITION]
+            .to_str()
+            .unwrap()
+            .ends_with(".jxl\"")
+    );
+    assert_eq!(body_bytes(original).await, JXL_1X1_RED);
+
+    let converted = app
+        .clone()
+        .oneshot(
+            Request::get(format!("{page_path}?convert=jpeg"))
+                .header(header::AUTHORIZATION, &admin)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(converted.status(), StatusCode::OK);
+    assert_eq!(converted.headers()[header::CONTENT_TYPE], "image/jpeg");
+    assert!(body_bytes(converted).await.starts_with(&[0xff, 0xd8]));
+
+    let thumbnail = app
+        .oneshot(
+            Request::get(format!("{page_path}/thumbnail"))
+                .header(header::AUTHORIZATION, admin)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(thumbnail.status(), StatusCode::OK);
+    assert_eq!(thumbnail.headers()[header::CONTENT_TYPE], "image/jpeg");
+    assert!(body_bytes(thumbnail).await.starts_with(&[0xff, 0xd8]));
 }
 
 #[tokio::test]

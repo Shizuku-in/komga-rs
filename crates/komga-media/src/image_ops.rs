@@ -1,9 +1,20 @@
 use std::io::Cursor;
 
-use image::{DynamicImage, GenericImageView, ImageFormat, ImageReader, Rgb, RgbImage, imageops::FilterType};
+use hayro_jpeg2000::integration::Jp2Decoder;
+use image::{
+    DynamicImage, GenericImageView, ImageDecoder, ImageFormat, ImageReader, Rgb, RgbImage, codecs::tga::TgaDecoder,
+    imageops::FilterType,
+};
+use jxl_oxide::integration::JxlDecoder;
 use komga_core::Dimension;
 
 use crate::{ImageOutput, MediaOperationError, TypedBytes};
+
+const JXL_CODESTREAM_MAGIC: &[u8] = &[0xff, 0x0a];
+const JXL_CONTAINER_MAGIC: &[u8] = b"\0\0\0\x0cJXL \r\n\x87\n";
+const JP2_MAGIC: &[u8] = b"\0\0\0\x0cjP  \r\n\x87\n";
+const J2C_MAGIC: &[u8] = &[0xff, 0x4f, 0xff, 0x51];
+const TGA_FOOTER: &[u8] = b"TRUEVISION-XFILE.\0";
 
 pub(crate) fn collage(sources: &[Vec<u8>], size: u32) -> Result<Vec<u8>, MediaOperationError> {
     let width = size.max(2);
@@ -12,11 +23,7 @@ pub(crate) fn collage(sources: &[Vec<u8>], size: u32) -> Result<Vec<u8>, MediaOp
     let cell_h = height / 2;
     let mut canvas = RgbImage::new(width, height);
     for slot in 0..if sources.is_empty() { 0 } else { 4usize } {
-        let reader = ImageReader::new(Cursor::new(&sources[slot % sources.len()]))
-            .with_guessed_format()
-            .map_err(|e| MediaOperationError::Image(e.to_string()))?;
-        let tile = reader
-            .decode()
+        let tile = decode(&sources[slot % sources.len()])
             .map_err(|e| MediaOperationError::Image(e.to_string()))?
             .resize_to_fill(cell_w, cell_h, FilterType::Lanczos3)
             .to_rgb8();
@@ -39,12 +46,7 @@ pub(crate) fn convert(
     output: ImageOutput,
     max_edge: Option<u32>,
 ) -> Result<TypedBytes, MediaOperationError> {
-    let reader = ImageReader::new(Cursor::new(source))
-        .with_guessed_format()
-        .map_err(|error| MediaOperationError::Image(error.to_string()))?;
-    let mut image = reader
-        .decode()
-        .map_err(|error| MediaOperationError::Image(error.to_string()))?;
+    let mut image = decode(source).map_err(|error| MediaOperationError::Image(error.to_string()))?;
     if let Some(max_edge) = max_edge {
         let (width, height) = image.dimensions();
         if width.max(height) > max_edge {
@@ -71,8 +73,7 @@ pub(crate) fn convert(
 }
 
 pub(crate) fn dimension(bytes: &[u8]) -> Option<Dimension> {
-    let reader = ImageReader::new(Cursor::new(bytes)).with_guessed_format().ok()?;
-    let (width, height) = reader.into_dimensions().ok()?;
+    let (width, height) = dimensions(bytes)?;
     Some(Dimension {
         width: i32::try_from(width).ok()?,
         height: i32::try_from(height).ok()?,
@@ -96,7 +97,86 @@ pub(crate) fn can_decode_media_type(media_type: &str) -> bool {
             | "image/tiff"
             | "image/x-icon"
             | "image/vnd.microsoft.icon"
+            | "image/jxl"
+            | "image/jp2"
+            | "image/j2c"
+            | "image/x-j2c"
+            | "image/x-targa"
+            | "image/x-tga"
+            | "image/vnd-ms.dds"
+            | "image/x-dds"
+            | "image/vnd.radiance"
+            | "image/x-hdr"
+            | "image/x-exr"
+            | "image/exr"
+            | "image/x-portable-bitmap"
+            | "image/x-portable-graymap"
+            | "image/x-portable-pixmap"
+            | "image/x-portable-anymap"
+            | "image/x-farbfeld"
+            | "image/x-qoi"
+            | "image/qoi"
     )
+}
+
+pub(crate) fn detected_media_type(bytes: &[u8]) -> Option<&'static str> {
+    if is_jxl(bytes) {
+        return Some("image/jxl");
+    }
+    if bytes.starts_with(JP2_MAGIC) {
+        return Some("image/jp2");
+    }
+    if bytes.starts_with(J2C_MAGIC) {
+        return Some("image/j2c");
+    }
+    match image::guess_format(bytes) {
+        Ok(ImageFormat::Farbfeld) => Some("image/x-farbfeld"),
+        Ok(format) => Some(format.to_mime_type()),
+        Err(_) if is_tga(bytes) => Some("image/x-targa"),
+        Err(_) => None,
+    }
+}
+
+fn decode(bytes: &[u8]) -> image::ImageResult<DynamicImage> {
+    if is_jxl(bytes) {
+        return DynamicImage::from_decoder(JxlDecoder::new(Cursor::new(bytes))?);
+    }
+    if bytes.starts_with(JP2_MAGIC) || bytes.starts_with(J2C_MAGIC) {
+        return DynamicImage::from_decoder(Jp2Decoder::new(Cursor::new(bytes))?);
+    }
+    if let Ok(format) = image::guess_format(bytes) {
+        return ImageReader::with_format(Cursor::new(bytes), format).decode();
+    }
+    ImageReader::with_format(Cursor::new(bytes), ImageFormat::Tga).decode()
+}
+
+fn dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+    if is_jxl(bytes) {
+        return JxlDecoder::new(Cursor::new(bytes))
+            .ok()
+            .map(|decoder| decoder.dimensions());
+    }
+    if bytes.starts_with(JP2_MAGIC) || bytes.starts_with(J2C_MAGIC) {
+        return Jp2Decoder::new(Cursor::new(bytes))
+            .ok()
+            .map(|decoder| decoder.dimensions());
+    }
+    if let Ok(format) = image::guess_format(bytes) {
+        return ImageReader::with_format(Cursor::new(bytes), format)
+            .into_dimensions()
+            .ok();
+    }
+    ImageReader::with_format(Cursor::new(bytes), ImageFormat::Tga)
+        .into_dimensions()
+        .ok()
+}
+
+fn is_jxl(bytes: &[u8]) -> bool {
+    bytes.starts_with(JXL_CODESTREAM_MAGIC) || bytes.starts_with(JXL_CONTAINER_MAGIC)
+}
+
+fn is_tga(bytes: &[u8]) -> bool {
+    bytes.ends_with(TGA_FOOTER) || TgaDecoder::new(Cursor::new(bytes)).is_ok()
 }
 
 fn flatten_alpha(image: &DynamicImage) -> RgbImage {
@@ -109,4 +189,93 @@ fn flatten_alpha(image: &DynamicImage) -> RgbImage {
         };
         Rgb([blend(pixel[0]), blend(pixel[1]), blend(pixel[2])])
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const JXL_1X1_RED: &[u8] = &[
+        0xff, 0x0a, 0x00, 0x10, 0x10, 0x09, 0x08, 0x00, 0x01, 0x00, 0x28, 0x00, 0x4b, 0x18, 0x8b, 0x15, 0xc2, 0x49,
+        0x41, 0x4e, 0x7f, 0x00,
+    ];
+    const JP2_2X2_RED: &[u8] = &[
+        0x00, 0x00, 0x00, 0x0c, 0x6a, 0x50, 0x20, 0x20, 0x0d, 0x0a, 0x87, 0x0a, 0x00, 0x00, 0x00, 0x14, 0x66, 0x74,
+        0x79, 0x70, 0x6a, 0x70, 0x32, 0x20, 0x00, 0x00, 0x00, 0x00, 0x6a, 0x70, 0x32, 0x20, 0x00, 0x00, 0x00, 0x2d,
+        0x6a, 0x70, 0x32, 0x68, 0x00, 0x00, 0x00, 0x16, 0x69, 0x68, 0x64, 0x72, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00,
+        0x00, 0x02, 0x00, 0x03, 0x0f, 0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0f, 0x63, 0x6f, 0x6c, 0x72, 0x01, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00, 0x99, 0x6a, 0x70, 0x32, 0x63, 0xff, 0x4f, 0xff, 0x51, 0x00,
+        0x2f, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x03, 0x0f, 0x01, 0x01, 0x0f, 0x01, 0x01, 0x0f, 0x01, 0x01, 0xff, 0x52, 0x00, 0x0c, 0x00, 0x00, 0x00, 0x01,
+        0x01, 0x01, 0x04, 0x04, 0x00, 0x01, 0xff, 0x5c, 0x00, 0x07, 0x40, 0x80, 0x88, 0x88, 0x90, 0xff, 0x64, 0x00,
+        0x25, 0x00, 0x01, 0x43, 0x72, 0x65, 0x61, 0x74, 0x65, 0x64, 0x20, 0x62, 0x79, 0x20, 0x4f, 0x70, 0x65, 0x6e,
+        0x4a, 0x50, 0x45, 0x47, 0x20, 0x76, 0x65, 0x72, 0x73, 0x69, 0x6f, 0x6e, 0x20, 0x32, 0x2e, 0x35, 0x2e, 0x30,
+        0xff, 0x90, 0x00, 0x0a, 0x00, 0x00, 0x00, 0x00, 0x00, 0x1e, 0x00, 0x01, 0xff, 0x93, 0xcf, 0xfc, 0x30, 0x08,
+        0x07, 0xb7, 0x80, 0xdf, 0xf8, 0x90, 0x10, 0x01, 0x3f, 0x80, 0x80, 0x80, 0xff, 0xd9,
+    ];
+
+    #[test]
+    fn decodes_jpeg_xl_and_jpeg_2000() {
+        for (bytes, media_type, expected_dimension) in
+            [(JXL_1X1_RED, "image/jxl", (1, 1)), (JP2_2X2_RED, "image/jp2", (2, 2))]
+        {
+            assert_eq!(detected_media_type(bytes), Some(media_type));
+            assert_eq!(dimensions(bytes), Some(expected_dimension));
+            let output = convert(bytes, ImageOutput::Png, None).unwrap();
+            assert_eq!(output.media_type, "image/png");
+            assert_eq!(
+                image::load_from_memory(&output.bytes).unwrap().dimensions(),
+                expected_dimension
+            );
+        }
+    }
+
+    #[test]
+    fn decodes_enabled_uncommon_image_formats() {
+        let source = DynamicImage::ImageRgb8(RgbImage::from_pixel(4, 4, Rgb([240, 32, 16])));
+        for (format, media_type) in [
+            (ImageFormat::Tga, "image/x-targa"),
+            (ImageFormat::Hdr, "image/vnd.radiance"),
+            (ImageFormat::OpenExr, "image/x-exr"),
+            (ImageFormat::Pnm, "image/x-portable-anymap"),
+            (ImageFormat::Farbfeld, "image/x-farbfeld"),
+            (ImageFormat::Qoi, "image/x-qoi"),
+        ] {
+            let mut encoded = Cursor::new(Vec::new());
+            let encoded_source = if matches!(format, ImageFormat::Hdr | ImageFormat::OpenExr) {
+                DynamicImage::ImageRgb32F(source.to_rgb32f())
+            } else if format == ImageFormat::Farbfeld {
+                DynamicImage::ImageRgba16(source.to_rgba16())
+            } else {
+                source.clone()
+            };
+            encoded_source.write_to(&mut encoded, format).unwrap();
+            let encoded = encoded.into_inner();
+            assert_eq!(detected_media_type(&encoded), Some(media_type), "{format:?}");
+            assert_eq!(dimensions(&encoded), Some((4, 4)), "{format:?}");
+            assert_eq!(decode(&encoded).unwrap().dimensions(), (4, 4), "{format:?}");
+        }
+
+        let dds = dxt1_dds();
+        assert_eq!(detected_media_type(&dds), Some("image/vnd-ms.dds"));
+        assert_eq!(dimensions(&dds), Some((4, 4)));
+        assert_eq!(decode(&dds).unwrap().dimensions(), (4, 4));
+    }
+
+    fn dxt1_dds() -> Vec<u8> {
+        let mut bytes = b"DDS ".to_vec();
+        for value in [124, 0x1007, 4, 4, 8, 0, 0] {
+            bytes.extend_from_slice(&u32::to_le_bytes(value));
+        }
+        bytes.extend_from_slice(&[0; 44]);
+        bytes.extend_from_slice(&u32::to_le_bytes(32));
+        bytes.extend_from_slice(&u32::to_le_bytes(4));
+        bytes.extend_from_slice(b"DXT1");
+        bytes.extend_from_slice(&[0; 20]);
+        bytes.extend_from_slice(&u32::to_le_bytes(0x1000));
+        bytes.extend_from_slice(&[0; 16]);
+        bytes.extend_from_slice(&[0x00, 0xf8, 0x00, 0xf8, 0, 0, 0, 0]);
+        bytes
+    }
 }

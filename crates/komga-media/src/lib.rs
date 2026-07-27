@@ -482,6 +482,7 @@ pub fn detect_image_media_type(bytes: &[u8]) -> Option<String> {
     infer::get(bytes)
         .filter(|kind| kind.mime_type().starts_with("image/"))
         .map(|kind| kind.mime_type().to_owned())
+        .or_else(|| image_ops::detected_media_type(bytes).map(str::to_owned))
 }
 
 #[cfg(test)]
@@ -994,10 +995,26 @@ mod tests {
             "image/tiff",
             "image/x-icon",
             "image/vnd.microsoft.icon; charset=binary",
+            "image/jxl",
+            "image/jp2",
+            "image/j2c",
+            "image/x-tga",
+            "image/vnd-ms.dds",
+            "image/vnd.radiance",
+            "image/x-exr",
+            "image/x-portable-anymap",
+            "image/x-farbfeld",
+            "image/x-qoi",
         ] {
             assert!(can_convert_image_media_type(media_type), "{media_type}");
         }
-        for media_type in ["image/svg+xml", "application/pdf", "application/octet-stream"] {
+        for media_type in [
+            "image/avif",
+            "image/heif",
+            "image/svg+xml",
+            "application/pdf",
+            "application/octet-stream",
+        ] {
             assert!(!can_convert_image_media_type(media_type), "{media_type}");
         }
     }

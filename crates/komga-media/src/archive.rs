@@ -13,7 +13,7 @@ use komga_core::{
 use rars::{Archive, ArchiveFamily, ArchiveReader};
 use zip::ZipArchive;
 
-use crate::{MediaOperationError, image_dimension};
+use crate::{MediaOperationError, detect_image_media_type, image_dimension};
 
 const ANALYSIS_PREFIX_LIMIT: u64 = 1024 * 1024;
 
@@ -311,13 +311,8 @@ pub(crate) fn is_rar_media_type(value: &str) -> bool {
 }
 
 fn detect_entry_media_type(bytes: &[u8]) -> Option<String> {
-    infer::get(bytes)
-        .map(|kind| normalize_media_type(kind.mime_type()).to_owned())
-        .or_else(|| {
-            image::guess_format(bytes)
-                .ok()
-                .map(|format| format.to_mime_type().to_owned())
-        })
+    detect_image_media_type(bytes)
+        .or_else(|| infer::get(bytes).map(|kind| normalize_media_type(kind.mime_type()).to_owned()))
         .or_else(|| {
             let text = std::str::from_utf8(bytes).ok()?;
             (!text.contains('\0')).then(|| {
