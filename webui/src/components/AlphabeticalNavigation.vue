@@ -3,18 +3,15 @@
     <v-tooltip
       v-for="symbol in symbols"
       :key="symbol"
-      :disabled="groupCount === undefined"
-      top
+      :disabled="groupCount === undefined" location="top"
     >
-      <template v-slot:activator="{ on }">
-        <v-btn
-          text
-          small
+      <template v-slot:activator="{ props }">
+        <v-btn variant="text" size="small"
           icon
           @click="clicked(symbol)"
           :color="selected === symbol ? 'secondary' : undefined"
           :disabled="groupCount && selected !== symbol ? getCount(symbol) === 0 : false"
-          v-on="on"
+          v-bind="props"
         >
           {{ symbol }}
         </v-btn>
@@ -26,10 +23,10 @@
 </template>
 
 <script lang="ts">
-import Vue, {PropType} from 'vue'
+import {defineComponent, PropType} from 'vue'
 import {GroupCountDto} from '@/types/komga-series'
 
-export default Vue.extend({
+export default defineComponent({
   name: 'AlphabeticalNavigation',
   data: function () {
     return {}

@@ -5,7 +5,7 @@
   >
     <v-card>
       <v-card-title>{{ $t('dialog.add_to_readlist.dialog_title') }}</v-card-title>
-      <v-btn icon absolute top right @click="dialogClose">
+      <v-btn icon position="absolute" location="top right" @click="dialogClose">
         <v-icon>mdi-close</v-icon>
       </v-btn>
 
@@ -42,16 +42,15 @@
                 <div v-for="(c, index) in readListsFiltered"
                      :key="index"
                 >
-                  <v-list-item @click="addTo(c)"
-                               two-line
+                  <v-list-item @click="addTo(c)" lines="two"
                   >
-                    <v-list-item-content>
+                    <div>
                       <v-list-item-title>{{ c.name }}</v-list-item-title>
                       <v-list-item-subtitle>{{
                           $tc('dialog.add_to_readlist.card_readlist_subtitle', c.bookIds.length)
                         }}
                       </v-list-item-subtitle>
-                    </v-list-item-content>
+                    </div>
                   </v-list-item>
                   <v-divider v-if="index !== readListsFiltered.length-1"/>
                 </div>
@@ -59,8 +58,7 @@
 
               <v-alert
                 v-else
-                type="info"
-                text
+                type="info" variant="tonal"
               >{{ $t('dialog.add_to_readlist.label_no_matching_readlist') }}
               </v-alert>
             </v-col>
@@ -74,12 +72,12 @@
 </template>
 
 <script lang="ts">
-import Vue from 'vue'
+import {defineComponent} from 'vue'
 import {ERROR} from '@/types/events'
 import {stripAccents} from '@/functions/string'
 import {ReadListCreationDto, ReadListDto, ReadListUpdateDto} from '@/types/komga-readlists'
 
-export default Vue.extend({
+export default defineComponent({
   name: 'ReadListAddToDialog',
   data: () => {
     return {
@@ -90,7 +88,7 @@ export default Vue.extend({
     }
   },
   props: {
-    value: Boolean,
+    modelValue: Boolean,
     bookIds: {
       type: [Array as () => string[]],
       required: true,
@@ -123,7 +121,7 @@ export default Vue.extend({
   },
   methods: {
     dialogClose() {
-      this.$emit('input', false)
+      this.$emit('update:modelValue', false)
     },
     async addTo(readList: ReadListDto) {
       const bookIds = this.$_.uniq(readList.bookIds.concat(this.bookIds))

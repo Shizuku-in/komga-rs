@@ -6,10 +6,10 @@
 </template>
 
 <script lang="ts">
-import Vue from 'vue'
+import {defineComponent} from 'vue'
 import {getFileFromUrl} from '@/functions/file'
 
-export default Vue.extend({
+export default defineComponent({
   name: 'DropZone',
   methods: {
     async dropHandler(event: Event) {
@@ -42,12 +42,12 @@ export default Vue.extend({
 .drop-zone {
   background: repeating-linear-gradient(
     135deg,
-    var(--v-base-lighten1),
-    var(--v-base-lighten1) 20px,
-    var(--v-base-darken1) 20px,
-    var(--v-base-darken1) 40px
+    color-mix(in srgb, rgb(var(--v-theme-base)) 92%, white),
+    color-mix(in srgb, rgb(var(--v-theme-base)) 92%, white) 20px,
+    color-mix(in srgb, rgb(var(--v-theme-base)) 92%, black) 20px,
+    color-mix(in srgb, rgb(var(--v-theme-base)) 92%, black) 40px
   );
-  color: var(--v-contrast-light-2-base);
+  color: rgb(var(--v-theme-contrast-light-2));
   display: block;
   font-weight: 600;
   text-align: center;
@@ -55,10 +55,10 @@ export default Vue.extend({
 }
 
 .file-input {
-  color: var(--v-info-base);
+  color: rgb(var(--v-theme-info));
 }
 
 .file-input:hover {
-  color: var(--v-info-lighten1);
+  color: color-mix(in srgb, rgb(var(--v-theme-info)) 80%, white);
 }
 </style>

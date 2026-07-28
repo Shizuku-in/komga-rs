@@ -2,7 +2,7 @@
   <v-dialog v-model="input" scrollable
             @keydown.esc.stop=""
   >
-    <v-card :max-height="$vuetify.breakpoint.height * .9" dark>
+    <v-card :max-height="$vuetify.breakpoint.height * .9">
       <v-card-title class="justify-center">
         <v-pagination
           v-model="page"
@@ -12,7 +12,6 @@
 
         <page-size-select
           v-model="perPage"
-          dark
           :items="[10, 20, 50, 100]"
         />
       </v-card-title>
@@ -35,7 +34,7 @@
                 @click="input = false; goTo(((page - 1 ) * perPage + i + 1))"
                 style="cursor: pointer"
               />
-              <div class="white--text text-center font-weight-bold">{{ (page - 1) * perPage + i + 1 }}</div>
+              <div class="text-white text-center font-weight-bold">{{ (page - 1) * perPage + i + 1 }}</div>
             </div>
 
           </v-row>
@@ -46,18 +45,18 @@
 </template>
 
 <script lang="ts">
-import Vue from 'vue'
+import {defineComponent} from 'vue'
 import {bookPageThumbnailUrl} from '@/functions/urls'
 import PageSizeSelect from '@/components/PageSizeSelect.vue'
 
-export default Vue.extend({
+export default defineComponent({
   name: 'ThumbnailExplorerDialog',
   components: {PageSizeSelect},
   props: {
     pagesCount: {
       type: Number,
     },
-    value: {
+    modelValue: {
       type: Boolean,
     },
     bookId: {
@@ -66,17 +65,20 @@ export default Vue.extend({
   },
   data: () => {
     return {
-      input: '',
+      input: false,
       page: 1,
       perPage: 10,
     }
   },
   watch: {
-    value(val) {
+    modelValue: {
+      immediate: true,
+      handler(val) {
       this.input = val
+      },
     },
     input(val) {
-      !val && this.$emit('input', false)
+      !val && this.$emit('update:modelValue', false)
     },
     perPage(val) {
       this.$store.commit('setThumbnailsPageSize', val)
@@ -101,7 +103,7 @@ export default Vue.extend({
   },
   methods: {
     updateInput() {
-      this.$emit('input', this.input)
+      this.$emit('update:modelValue', this.input)
     },
     goTo(page: number) {
       this.$emit('go', page)

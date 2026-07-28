@@ -65,13 +65,13 @@
           @scroll-changed="(percent) => scrollChanged(loaderSeries, percent)"
         >
           <template v-slot:prepend>
-            <div class="title">{{ $tc('common.series', 2) }}</div>
+            <div class="text-h6">{{ $tc('common.series', 2) }}</div>
           </template>
           <template v-slot:content>
             <item-browser :items="loaderSeries.items"
                           nowrap
                           :edit-function="isAdmin ? singleEditSeries : undefined"
-                          :selected.sync="selectedSeries"
+                          v-model:selected="selectedSeries"
                           :selectable="selectedBooks.length === 0 && selectedCollections.length === 0 && selectedReadLists.length === 0"
                           :fixed-item-width="fixedCardWidth"
             />
@@ -85,14 +85,14 @@
           @scroll-changed="(percent) => scrollChanged(loaderBooks, percent)"
         >
           <template v-slot:prepend>
-            <div class="title">{{ $t('common.books') }}</div>
+            <div class="text-h6">{{ $t('common.books') }}</div>
           </template>
           <template v-slot:content>
             <item-browser :items="loaderBooks.items"
                           :item-context="[ItemContext.SHOW_SERIES]"
                           nowrap
                           :edit-function="isAdmin ? singleEditBook : undefined"
-                          :selected.sync="selectedBooks"
+                          v-model:selected="selectedBooks"
                           :selectable="selectedSeries.length === 0 && selectedCollections.length === 0 && selectedReadLists.length === 0"
                           :fixed-item-width="fixedCardWidth"
             />
@@ -106,13 +106,13 @@
           @scroll-changed="(percent) => scrollChanged(loaderCollections, percent)"
         >
           <template v-slot:prepend>
-            <div class="title">{{ $t('common.collections') }}</div>
+            <div class="text-h6">{{ $t('common.collections') }}</div>
           </template>
           <template v-slot:content>
             <item-browser :items="loaderCollections.items"
                           nowrap
                           :edit-function="isAdmin ? singleEditCollection : undefined"
-                          :selected.sync="selectedCollections"
+                          v-model:selected="selectedCollections"
                           :selectable="isAdmin && selectedSeries.length === 0 && selectedBooks.length === 0 && selectedReadLists.length === 0"
                           :fixed-item-width="fixedCardWidth"
             />
@@ -126,13 +126,13 @@
           @scroll-changed="(percent) => scrollChanged(loaderReadLists, percent)"
         >
           <template v-slot:prepend>
-            <div class="title">{{ $t('common.readlists') }}</div>
+            <div class="text-h6">{{ $t('common.readlists') }}</div>
           </template>
           <template v-slot:content>
             <item-browser :items="loaderReadLists.items"
                           nowrap
                           :edit-function="isAdmin ? singleEditReadList : undefined"
-                          :selected.sync="selectedReadLists"
+                          v-model:selected="selectedReadLists"
                           :selectable="isAdmin && selectedSeries.length === 0 && selectedBooks.length === 0 && selectedCollections.length === 0"
                           :fixed-item-width="fixedCardWidth"
             />
@@ -167,7 +167,7 @@ import {
   SERIES_CHANGED,
   SERIES_DELETED,
 } from '@/types/events'
-import Vue from 'vue'
+import {defineComponent} from 'vue'
 import {Oneshot, SeriesDto} from '@/types/komga-series'
 import {
   BookSseDto,
@@ -189,7 +189,7 @@ import {
   SeriesSearch,
 } from '@/types/komga-search'
 
-export default Vue.extend({
+export default defineComponent({
   name: 'SearchView',
   components: {
     EmptyState,
@@ -228,7 +228,7 @@ export default Vue.extend({
     this.$eventHub.$on(READPROGRESS_SERIES_CHANGED, this.readProgressSeriesChanged)
     this.$eventHub.$on(READPROGRESS_SERIES_DELETED, this.readProgressSeriesChanged)
   },
-  beforeDestroy() {
+  beforeUnmount() {
     this.$eventHub.$off(LIBRARY_DELETED, this.reloadResults)
     this.$eventHub.$off(SERIES_CHANGED, this.seriesChanged)
     this.$eventHub.$off(SERIES_DELETED, this.seriesChanged)

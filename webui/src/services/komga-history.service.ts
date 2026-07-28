@@ -1,7 +1,7 @@
 import {AxiosInstance} from 'axios'
 import {HistoricalEventDto} from '@/types/komga-history'
 
-const qs = require('qs')
+import qs from 'qs'
 
 const API_HISTORY = '/api/v1/history'
 

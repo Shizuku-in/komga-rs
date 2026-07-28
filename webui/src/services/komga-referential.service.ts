@@ -2,8 +2,8 @@ import {AxiosInstance} from 'axios'
 import {AuthorDto} from '@/types/komga-books'
 import {NameValue} from '@/types/filter'
 
-const qs = require('qs')
-const tags = require('language-tags')
+import qs from 'qs'
+import tags from 'language-tags'
 
 export default class KomgaReferentialService {
   private http: AxiosInstance

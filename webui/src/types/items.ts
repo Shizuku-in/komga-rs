@@ -1,5 +1,5 @@
 import {bookThumbnailUrl, collectionThumbnailUrl, readListThumbnailUrl, seriesThumbnailUrl} from '@/functions/urls'
-import {RawLocation} from 'vue-router/types/router'
+import type {RouteLocationRaw} from 'vue-router'
 import {BookDto} from '@/types/komga-books'
 import {SeriesDto} from '@/types/komga-series'
 import i18n from '@/i18n'
@@ -23,7 +23,7 @@ export enum ItemContext {
 
 export interface ItemTitle {
   title: string,
-  to: RawLocation,
+  to: RouteLocationRaw,
 }
 
 export function createItem(item: BookDto | SeriesDto | CollectionDto | ReadListDto): Item<BookDto | SeriesDto | CollectionDto | ReadListDto> {
@@ -62,9 +62,9 @@ export abstract class Item<T> {
 
   abstract body(context: ItemContext[]): string
 
-  abstract to(): RawLocation
+  abstract to(): RouteLocationRaw
 
-  abstract fabTo(): RawLocation
+  abstract fabTo(): RouteLocationRaw
 }
 
 export class BookItem extends Item<BookDto> {
@@ -147,7 +147,7 @@ export class BookItem extends Item<BookDto> {
     }
   }
 
-  to(): RawLocation {
+  to(): RouteLocationRaw {
     return this.item.oneshot ?
       {
         name: 'browse-oneshot',
@@ -161,7 +161,7 @@ export class BookItem extends Item<BookDto> {
       }
   }
 
-  seriesTo(): RawLocation {
+  seriesTo(): RouteLocationRaw {
     return this.item.oneshot ?
       {
         name: 'browse-oneshot',
@@ -174,7 +174,7 @@ export class BookItem extends Item<BookDto> {
       }
   }
 
-  fabTo(): RawLocation {
+  fabTo(): RouteLocationRaw {
     return {
       name: getBookReadRouteFromMedia(this.item?.media),
       params: {bookId: this.item.id},
@@ -228,15 +228,15 @@ export class SeriesItem extends Item<SeriesDto> {
     return `<div class="text-truncate" title="${title ? title : ''}">${text}</div>`
   }
 
-  to(): RawLocation {
+  to(): RouteLocationRaw {
     return {
       name: this.item.oneshot ? 'browse-oneshot' : 'browse-series', params: {seriesId: this.item.id.toString()},
       query: {context: this.item?.context?.origin, contextId: this.item?.context?.id},
     }
   }
 
-  fabTo(): RawLocation {
-    return undefined as unknown as RawLocation
+  fabTo(): RouteLocationRaw {
+    return undefined as unknown as RouteLocationRaw
   }
 }
 
@@ -260,12 +260,12 @@ export class CollectionItem extends Item<CollectionDto> {
     return `<span>${i18n.tc('dialog.add_to_collection.card_collection_subtitle', this.item.seriesIds.length)}</span>`
   }
 
-  to(): RawLocation {
+  to(): RouteLocationRaw {
     return {name: 'browse-collection', params: {collectionId: this.item.id.toString()}}
   }
 
-  fabTo(): RawLocation {
-    return undefined as unknown as RawLocation
+  fabTo(): RouteLocationRaw {
+    return undefined as unknown as RouteLocationRaw
   }
 }
 
@@ -289,11 +289,11 @@ export class ReadListItem extends Item<ReadListDto> {
     return `<span>${i18n.tc('dialog.add_to_readlist.card_readlist_subtitle', this.item.bookIds.length)}</span>`
   }
 
-  to(): RawLocation {
+  to(): RouteLocationRaw {
     return {name: 'browse-readlist', params: {readListId: this.item.id.toString()}}
   }
 
-  fabTo(): RawLocation {
-    return undefined as unknown as RawLocation
+  fabTo(): RouteLocationRaw {
+    return undefined as unknown as RouteLocationRaw
   }
 }

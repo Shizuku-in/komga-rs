@@ -1,55 +1,55 @@
 import '@mdi/font/css/materialdesignicons.css'
 import 'typeface-roboto/index.css'
-import Vue from 'vue'
-import Vuetify from 'vuetify/lib'
-import colors from 'vuetify/lib/util/colors'
-
-import {Touch} from 'vuetify/lib/directives'
-import i18n from '@/i18n'
+import 'vuetify/styles'
+import {createVuetify} from 'vuetify'
+import * as components from 'vuetify/components'
+import * as directives from 'vuetify/directives'
+import {aliases, mdi} from 'vuetify/iconsets/mdi'
 import IconFormatLineSpacingDown from '@/components/icons/IconFormatLineSpacingDown.vue'
 
-Vue.use(Vuetify, {
-  directives: {
-    Touch,
+export default createVuetify({
+  components,
+  directives,
+  defaults: {
+    VAutocomplete: {itemTitle: 'text', itemValue: 'value'},
+    VCombobox: {itemTitle: 'text', itemValue: 'value'},
+    VSelect: {itemTitle: 'text', itemValue: 'value'},
   },
-})
-
-export default new Vuetify({
   icons: {
-    iconfont: 'mdi',
-    values: {
+    defaultSet: 'mdi',
+    aliases: {
+      ...aliases,
       formatLineSpacingDown: {
         component: IconFormatLineSpacingDown,
       },
     },
+    sets: {mdi},
   },
-
-  lang: {
-    t: (key, ...params) => i18n.t(key, params).toString(),
-  },
-
   theme: {
-    options: {
-      customProperties: true,
-    },
     themes: {
       light: {
-        base: colors.shades.white,
-        primary: '#005ed3',
-        secondary: '#fec000',
-        accent: '#ff0335',
-        'contrast-1': colors.grey.lighten4,
-        'contrast-light-2': colors.grey.darken2,
-        'diff': colors.green.lighten4,
+        dark: false,
+        colors: {
+          base: '#ffffff',
+          primary: '#005ed3',
+          secondary: '#fec000',
+          accent: '#ff0335',
+          'contrast-1': '#f5f5f5',
+          'contrast-light-2': '#616161',
+          diff: '#c8e6c9',
+        },
       },
       dark: {
-        base: colors.shades.black,
-        primary: '#78baec',
-        secondary: '#fec000',
-        accent: '#ff0335',
-        'contrast-1': colors.grey.darken4,
-        'contrast-light-2': colors.grey.lighten2,
-        'diff': colors.green.darken4,
+        dark: true,
+        colors: {
+          base: '#000000',
+          primary: '#78baec',
+          secondary: '#fec000',
+          accent: '#ff0335',
+          'contrast-1': '#212121',
+          'contrast-light-2': '#e0e0e0',
+          diff: '#1b5e20',
+        },
       },
     },
   },

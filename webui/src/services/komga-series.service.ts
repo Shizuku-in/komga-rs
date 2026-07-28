@@ -2,7 +2,7 @@ import {AxiosInstance} from 'axios'
 import {GroupCountDto, SeriesDto, SeriesMetadataUpdateDto, SeriesThumbnailDto} from '@/types/komga-series'
 import {SeriesSearch} from '@/types/komga-search'
 
-const qs = require('qs')
+import qs from 'qs'
 
 const API_SERIES = '/api/v1/series'
 

@@ -1,18 +1,14 @@
 <template>
   <v-container fluid class="pa-6">
-    <v-data-table
+    <v-data-table-server
       :headers="headers"
       :items="items"
-      :options.sync="options"
-      :server-items-length="totalElements"
+      v-model:options="options"
+      :items-length="totalElements"
       :loading="loading"
-      sort-by="timestamp"
-      :sort-desc="true"
       multi-sort
       class="elevation-1"
-      :footer-props="{
-        itemsPerPageOptions: [20, 50, 100]
-      }"
+      :items-per-page-options="[20, 50, 100]"
     >
       <template v-slot:item.type="{ item }">
         <v-icon :title="$t(`enums.historical_event_type.${item.type}`)">{{ getIcon(item.type) }}</v-icon>
@@ -46,8 +42,8 @@
       </template>
 
       <template v-slot:item.properties="{ item }">
-        <v-btn icon small @click="showDetails(item)">
-          <v-icon small>mdi-information</v-icon>
+        <v-btn icon size="small" @click="showDetails(item)">
+          <v-icon size="small">mdi-information</v-icon>
         </v-btn>
       </template>
 
@@ -57,7 +53,7 @@
         </v-btn>
       </template>
 
-    </v-data-table>
+    </v-data-table-server>
 
     <v-dialog
       v-model="dialogDetails"
@@ -66,7 +62,7 @@
       <v-card v-if="dialogDetailsItem">
         <v-card-title>{{ $t(`enums.historical_event_type.${dialogDetailsItem.type}`) }}</v-card-title>
         <v-card-text>
-          <v-simple-table>
+          <v-table>
             <tbody>
             <tr v-for="[key, value] in Object.entries(dialogDetailsItem.properties)" :key="key">
               <td class="text-capitalize font-weight-bold">{{ key }}</td>
@@ -84,11 +80,11 @@
               </td>
             </tr>
             </tbody>
-          </v-simple-table>
+          </v-table>
         </v-card-text>
         <v-card-actions>
           <v-spacer/>
-          <v-btn @click="dialogDetails = false" text>{{ $t('common.close') }}</v-btn>
+          <v-btn @click="dialogDetails = false" variant="text">{{ $t('common.close') }}</v-btn>
         </v-card-actions>
       </v-card>
     </v-dialog>
@@ -96,14 +92,15 @@
 </template>
 
 <script lang="ts">
-import Vue from 'vue'
+import {defineComponent} from 'vue'
 import {HistoricalEventDto} from '@/types/komga-history'
 import {SeriesDto} from '@/types/komga-series'
 import {BookDto} from '@/types/komga-books'
 import {pageHashKnownThumbnailUrl} from '@/functions/urls'
 import {PageHashKnownDto} from '@/types/komga-pagehashes'
+import {createServerTableOptions, toPageRequest} from '@/functions/data-table'
 
-export default Vue.extend({
+export default defineComponent({
   name: 'HistoryView',
   data: function () {
     return {
@@ -111,7 +108,7 @@ export default Vue.extend({
       items: [] as HistoricalEventDto[],
       totalElements: 0,
       loading: true,
-      options: {} as any,
+      options: createServerTableOptions(20, [{key: 'timestamp', order: 'desc'}]),
       dialogDetails: false,
       dialogDetailsItem: undefined as HistoricalEventDto | undefined,
       seriesCache: [] as SeriesDto[],
@@ -131,11 +128,11 @@ export default Vue.extend({
   computed: {
     headers(): object[] {
       return [
-        {text: this.$t('history.header.type').toString(), value: 'type'},
-        {text: this.$t('history.header.series').toString(), value: 'seriesId'},
-        {text: this.$t('history.header.book').toString(), value: 'bookId'},
-        {text: this.$t('history.header.date').toString(), value: 'timestamp'},
-        {text: this.$t('history.header.details').toString(), value: 'properties', sortable: false},
+        {title: this.$t('history.header.type').toString(), key: 'type'},
+        {title: this.$t('history.header.series').toString(), key: 'seriesId'},
+        {title: this.$t('history.header.book').toString(), key: 'bookId'},
+        {title: this.$t('history.header.date').toString(), key: 'timestamp'},
+        {title: this.$t('history.header.details').toString(), key: 'properties', sortable: false},
       ]
     },
   },
@@ -179,17 +176,7 @@ export default Vue.extend({
     async loadData() {
       this.loading = true
 
-      const {sortBy, sortDesc, page, itemsPerPage} = this.options
-
-      const pageRequest = {
-        page: page - 1,
-        size: itemsPerPage,
-        sort: [],
-      } as PageRequest
-
-      for (let i = 0; i < sortBy.length; i++) {
-        pageRequest.sort!!.push(`${sortBy[i]},${sortDesc[i] ? 'desc' : 'asc'}`)
-      }
+      const pageRequest = toPageRequest(this.options)
 
       const itemsPage = await this.$komgaHistory.getAll(pageRequest)
       this.totalElements = itemsPage.totalElements

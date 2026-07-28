@@ -7,7 +7,7 @@ import {
   PageHashUnknownDto,
 } from '@/types/komga-pagehashes'
 
-const qs = require('qs')
+import qs from 'qs'
 
 const API_PAGE_HASH = '/api/v1/page-hashes'
 

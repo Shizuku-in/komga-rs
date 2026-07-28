@@ -1,6 +1,6 @@
 <template>
   <v-container fluid class="pa-6">
-    <v-alert type="info" text class="body-2" dismissible>
+    <v-alert type="info" variant="tonal" class="text-body-2" closable>
       <div v-html="$t('data_import.comicrack_preambule_html')"/>
     </v-alert>
     <v-form v-model="validMatch" ref="formMatch">
@@ -36,7 +36,7 @@
         <v-chip filter value="duplicate">{{ $t('common.duplicate') }}</v-chip>
       </v-chip-group>
 
-      <v-simple-table>
+      <v-table>
         <thead class="font-weight-medium">
         <tr>
           <td>#</td>
@@ -54,8 +54,8 @@
           :key="i"
         >
         <read-list-match-row :request="match.request"
-                             :series.sync="series[i]"
-                             :book.sync="form.books[i]"
+                             v-model:series="series[i]"
+                             v-model:book="form.books[i]"
                              :duplicate="isDuplicateBook(form.books[i])"
                              :error="isErrorBook(series[i], form.books[i])"
                              :hidden="shouldHideRow(i)"
@@ -63,7 +63,7 @@
           <td>{{ i + 1 }}</td>
         </read-list-match-row>
         </tbody>
-      </v-simple-table>
+      </v-table>
 
       <form novalidate>
         <v-row align="center" justify="end">
@@ -95,9 +95,9 @@
           <v-col cols="auto">
             <v-btn :color="creationFinished ? 'success': 'primary'"
                    @click="create(false)"
-                   :disabled="$v.$invalid"
+                   :disabled="v$.$invalid"
             >
-              <v-icon left v-if="creationFinished">mdi-check</v-icon>
+              <v-icon start v-if="creationFinished">mdi-check</v-icon>
               {{ $t('common.create') }}
             </v-btn>
           </v-col>
@@ -114,7 +114,7 @@
 </template>
 
 <script lang="ts">
-import Vue from 'vue'
+import {defineComponent} from 'vue'
 import {convertErrorCodes} from '@/functions/error-codes'
 import {
   ReadListCreationDto,
@@ -125,15 +125,17 @@ import {
 } from '@/types/komga-readlists'
 import ReadListMatchRow from '@/components/ReadListMatchRow.vue'
 import {ERROR, NOTIFICATION, NotificationEvent} from '@/types/events'
-import {helpers, required} from 'vuelidate/lib/validators'
+import useVuelidate from '@vuelidate/core'
+import {helpers, required} from '@vuelidate/validators'
 import ConfirmationDialog from '@/components/dialogs/ConfirmationDialog.vue'
 
 function validName(this: any, value: string) {
   return !helpers.req(value) || !this.readLists.some((e: ReadListDto) => e.name.toLowerCase() === value.toLowerCase())
 }
 
-export default Vue.extend({
+export default defineComponent({
   name: 'ImportReadLists',
+  setup: () => ({v$: useVuelidate()}),
   components: {ConfirmationDialog, ReadListMatchRow},
   data: () => ({
     file: undefined,
@@ -200,8 +202,8 @@ export default Vue.extend({
     },
     nameErrors(): string[] {
       const errors = [] as string[]
-      !this.$v?.form?.name?.required && errors.push(this.$t('common.required').toString())
-      !this.$v?.form?.name?.validName && errors.push(this.$t('dialog.add_to_readlist.field_search_create_error').toString())
+      !this.v$?.form?.name?.required && errors.push(this.$t('common.required').toString())
+      !this.v$?.form?.name?.validName && errors.push(this.$t('dialog.add_to_readlist.field_search_create_error').toString())
       return errors
     },
   },
@@ -240,8 +242,8 @@ export default Vue.extend({
         this.form.name = this.result.readListMatch.name
         this.result.requests.forEach((request, index) => {
           const match = request.matches.find(Boolean)
-          this.$set(this.series, index, match?.series)
-          this.$set(this.form.books, index, match?.books.find(Boolean))
+          this.series[index] = match?.series
+          this.form.books[index] = match?.books.find(Boolean)
         })
       } catch (e) {
         this.$eventHub.$emit(ERROR, {message: convertErrorCodes(e.message)} as ErrorEvent)
@@ -249,7 +251,7 @@ export default Vue.extend({
       this.matching = false
     },
     validateForm(): ReadListCreationDto | undefined {
-      if (this.$v.$invalid) return undefined
+      if (this.v$.$invalid) return undefined
       return {
         name: this.form.name,
         bookIds: [...new Set(this.form.books.map(b => b?.bookId).filter(Boolean))] as string[],

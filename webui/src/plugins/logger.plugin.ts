@@ -1,34 +1,34 @@
-import _Vue from 'vue'
+import type {App} from 'vue'
 import {format} from 'date-fns'
 
 export default {
-  install(Vue: typeof _Vue) {
+  install(Vue: App) {
     let isDebug = false
-    if (process.env.VUE_APP_LOG_LEVEL || window.localStorage['loglevel'])
+    if (import.meta.env.VITE_LOG_LEVEL || window.localStorage['loglevel'])
       isDebug = true
 
-    Object.defineProperty(Vue.prototype, '$debug', {
+    Object.defineProperty(Vue.config.globalProperties, '$debug', {
       get: function () {
         // eslint-disable-next-line no-console
         return isDebug ? console.log.bind(console, timestamp(), 'DEBUG ---') : noop
       },
     })
 
-    Object.defineProperty(Vue.prototype, '$info', {
+    Object.defineProperty(Vue.config.globalProperties, '$info', {
       get: function () {
         // eslint-disable-next-line no-console
         return isDebug ? console.log.bind(console, timestamp(), 'INFO ---') : noop
       },
     })
 
-    Object.defineProperty(Vue.prototype, '$warn', {
+    Object.defineProperty(Vue.config.globalProperties, '$warn', {
       get: function () {
         // eslint-disable-next-line no-console
         return isDebug ? console.warn.bind(console, timestamp(), 'WARN ---') : noop
       },
     })
 
-    Object.defineProperty(Vue.prototype, '$err', {
+    Object.defineProperty(Vue.config.globalProperties, '$err', {
       get: function () {
         // eslint-disable-next-line no-console
         return isDebug ? console.error.bind(console, timestamp(), 'ERROR ---') : noop
@@ -44,8 +44,8 @@ function timestamp() {
 function noop() {
 }
 
-declare module 'vue/types/vue' {
-  interface Vue {
+declare module '@vue/runtime-core' {
+  interface ComponentCustomProperties {
     $debug(...msg: any[]): void;
     $info(...msg: any[]): void;
     $warn(...msg: any[]): void;

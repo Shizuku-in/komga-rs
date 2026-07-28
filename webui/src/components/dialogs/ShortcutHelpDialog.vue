@@ -1,21 +1,20 @@
 <template>
-  <v-dialog
-    offset-y :max-height="$vuetify.breakpoint.height"
+  <v-dialog :max-height="$vuetify.breakpoint.height"
     v-model="model"
     scrollable
   >
     <v-card>
-      <v-btn icon absolute top right @click="model = false">
+      <v-btn icon position="absolute" location="top right" @click="model = false">
         <v-icon>mdi-close</v-icon>
       </v-btn>
       <v-card-text>
         <v-row>
-          <template v-for="(category, i) in Object.keys(shortcuts)">
-            <v-col :key="i" cols="12" md="4">
+          <template v-for="(category, i) in Object.keys(shortcuts)" :key="i">
+            <v-col cols="12" md="4">
               <div class="text-center text-h6">
                 {{ category }}
               </div>
-              <v-simple-table>
+              <v-table>
                 <template v-slot:default>
                   <thead>
                   <tr>
@@ -36,7 +35,7 @@
                   </tr>
                   </tbody>
                 </template>
-              </v-simple-table>
+              </v-table>
             </v-col>
           </template>
         </v-row>
@@ -46,9 +45,9 @@
 </template>
 
 <script lang="ts">
-import Vue from 'vue'
+import {defineComponent} from 'vue'
 
-export default Vue.extend({
+export default defineComponent({
   name: 'ShortcutHelpDialog',
   data: () => {
     return {
@@ -56,7 +55,7 @@ export default Vue.extend({
     }
   },
   props: {
-    value: {
+    modelValue: {
       type: Boolean,
       default: false,
     },
@@ -67,9 +66,9 @@ export default Vue.extend({
   },
   watch: {
     model (val) {
-      this.$emit('input', val)
+      this.$emit('update:modelValue', val)
     },
-    value (val) {
+    modelValue (val) {
       this.model = val
     },
   },

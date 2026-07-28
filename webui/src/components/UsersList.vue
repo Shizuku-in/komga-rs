@@ -1,25 +1,24 @@
 <template>
   <div style="position: relative">
     <v-list
-      elevation="3"
-      two-line
+      elevation="3" lines="two"
     >
       <div v-for="(u, index) in users" :key="index">
         <v-list-item
         >
-          <v-tooltip bottom>
-            <template v-slot:activator="{ on }">
-              <v-list-item-icon v-on="on">
-                <v-icon v-if="u.roles.includes(UserRoles.ADMIN)" color="red">mdi-account-star</v-icon>
-                <v-icon v-else>mdi-account</v-icon>
-              </v-list-item-icon>
-            </template>
-            <span>{{
+          <template #prepend>
+            <v-tooltip location="bottom">
+              <template v-slot:activator="{ props }">
+                <v-icon v-if="u.roles.includes(UserRoles.ADMIN)" color="red" v-bind="props">mdi-account-star</v-icon>
+                <v-icon v-else v-bind="props">mdi-account</v-icon>
+              </template>
+              <span>{{
                 u.roles.includes(UserRoles.ADMIN) ? $t('settings_user.role_administrator') : $t('settings_user.role_user')
               }}</span>
-          </v-tooltip>
+            </v-tooltip>
+          </template>
 
-          <v-list-item-content>
+          <div>
             <v-list-item-title>
               {{ u.email }}
             </v-list-item-title>
@@ -35,60 +34,60 @@
               }}
             </v-list-item-subtitle>
             <v-list-item-subtitle v-else>{{ $t('settings_user.no_recent_activity') }}</v-list-item-subtitle>
-          </v-list-item-content>
+          </div>
 
-          <v-list-item-action>
-            <v-tooltip bottom>
-              <template v-slot:activator="{ on }">
-                <v-btn icon @click="editRestrictions(u)" :disabled="u.roles.includes(UserRoles.ADMIN)"
-                       v-on="on">
-                  <v-icon>mdi-book-lock</v-icon>
-                </v-btn>
-              </template>
-              <span>{{ $t('settings_user.edit_restrictions') }}</span>
-            </v-tooltip>
-          </v-list-item-action>
+          <template #append>
+            <v-list-item-action>
+              <v-tooltip location="bottom">
+                <template v-slot:activator="{ props }">
+                  <v-btn icon @click="editRestrictions(u)" :disabled="u.roles.includes(UserRoles.ADMIN)"
+                         v-bind="props">
+                    <v-icon>mdi-book-lock</v-icon>
+                  </v-btn>
+                </template>
+                <span>{{ $t('settings_user.edit_restrictions') }}</span>
+              </v-tooltip>
+            </v-list-item-action>
 
-          <v-list-item-action>
-            <v-tooltip bottom>
-              <template v-slot:activator="{ on }">
-                <v-btn icon @click="changeUserPassword(u)" v-on="on">
-                  <v-icon>mdi-lock-reset</v-icon>
-                </v-btn>
-              </template>
-              <span>{{ $t('settings_user.change_password') }}</span>
-            </v-tooltip>
-          </v-list-item-action>
+            <v-list-item-action>
+              <v-tooltip location="bottom">
+                <template v-slot:activator="{ props }">
+                  <v-btn icon @click="changeUserPassword(u)" v-bind="props">
+                    <v-icon>mdi-lock-reset</v-icon>
+                  </v-btn>
+                </template>
+                <span>{{ $t('settings_user.change_password') }}</span>
+              </v-tooltip>
+            </v-list-item-action>
 
-          <v-list-item-action>
-            <v-tooltip bottom>
-              <template v-slot:activator="{ on }">
-                <v-btn icon @click="editUser(u)" :disabled="u.id === me.id" v-on="on">
-                  <v-icon>mdi-pencil</v-icon>
-                </v-btn>
-              </template>
-              <span>{{ $t('settings_user.edit_user') }}</span>
-            </v-tooltip>
-          </v-list-item-action>
+            <v-list-item-action>
+              <v-tooltip location="bottom">
+                <template v-slot:activator="{ props }">
+                  <v-btn icon @click="editUser(u)" :disabled="u.id === me.id" v-bind="props">
+                    <v-icon>mdi-pencil</v-icon>
+                  </v-btn>
+                </template>
+                <span>{{ $t('settings_user.edit_user') }}</span>
+              </v-tooltip>
+            </v-list-item-action>
 
-          <v-list-item-action>
-            <v-btn icon @click="promptDeleteUser(u)"
-                   :disabled="u.id === me.id"
-            >
-              <v-icon>mdi-delete</v-icon>
-            </v-btn>
-          </v-list-item-action>
+            <v-list-item-action>
+              <v-btn icon @click="promptDeleteUser(u)"
+                     :disabled="u.id === me.id"
+              >
+                <v-icon>mdi-delete</v-icon>
+              </v-btn>
+            </v-list-item-action>
+          </template>
         </v-list-item>
 
         <v-divider v-if="index !== users.length-1"/>
       </div>
     </v-list>
 
-    <v-btn fab absolute bottom color="primary"
-           :right="!$vuetify.rtl"
-           :left="$vuetify.rtl"
-           class="mx-6"
-           small
+    <v-btn icon position="absolute" color="primary"
+           :location="$vuetify.rtl ? 'bottom left' : 'bottom right'"
+           class="mx-6" size="small"
            :to="{name: 'settings-users-add'}">
       <v-icon>mdi-plus</v-icon>
     </v-btn>
@@ -123,13 +122,13 @@
 import UserEditDialog from '@/components/dialogs/UserEditDialog.vue'
 import UserRestrictionsEditDialog from '@/components/dialogs/UserRestrictionsEditDialog.vue'
 import {UserRoles} from '@/types/enum-users'
-import Vue from 'vue'
+import {defineComponent} from 'vue'
 import PasswordChangeDialog from '@/components/dialogs/PasswordChangeDialog.vue'
 import {ERROR} from '@/types/events'
 import ConfirmationDialog from '@/components/dialogs/ConfirmationDialog.vue'
 import { UserDto } from '@/types/komga-users'
 
-export default Vue.extend({
+export default defineComponent({
   name: 'UsersList',
   components: {
     ConfirmationDialog,
@@ -162,7 +161,7 @@ export default Vue.extend({
     users(val) {
       val.forEach((u: UserDto) => {
         this.$komgaUsers.getLatestAuthenticationActivityForUser(u.id)
-          .then(value => this.$set(this.usersLastActivity, `${u.id}`, value.dateTime))
+          .then(value => { this.usersLastActivity[`${u.id}`] = value.dateTime })
           .catch(e => {
           })
       })

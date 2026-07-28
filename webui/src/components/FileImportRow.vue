@@ -9,9 +9,9 @@
     <!--  Status icon  -->
     <td>
       <template v-if="bookAnalyzed">
-        <v-tooltip bottom :disabled="!status.message">
-          <template v-slot:activator="{ on }">
-            <v-icon :color="status.color" v-on="on">{{ status.icon }}</v-icon>
+        <v-tooltip location="bottom" :disabled="!status.message">
+          <template v-slot:activator="{ props }">
+            <v-icon :color="status.color" v-bind="props">{{ status.icon }}</v-icon>
           </template>
           {{ convertErrorCodes(status.message) }}
         </v-tooltip>
@@ -39,8 +39,7 @@
       <v-text-field v-if="!selectedSeries?.oneshot"
                     v-model.number="bookNumber"
                     type="number"
-                    step="0.1"
-                    dense
+                    step="0.1" density="compact"
                     :disabled="!selectedSeries"
       />
       <span v-else>{{ $t('common.oneshot') }}</span>
@@ -89,7 +88,7 @@
       <file-name-chooser-dialog
         v-model="modalNameChooser"
         :books="seriesBooks"
-        :name.sync="destinationName"
+        v-model:name="destinationName"
         :existing="book.name"
       />
     </td>
@@ -100,17 +99,17 @@
 
     <td>
       <template v-if="error">
-        <v-tooltip bottom>
-          <template v-slot:activator="{ on }">
-            <v-icon color="error" v-on="on">mdi-alert-circle</v-icon>
+        <v-tooltip location="bottom">
+          <template v-slot:activator="{ props }">
+            <v-icon color="error" v-bind="props">mdi-alert-circle</v-icon>
           </template>
           {{ error }}
         </v-tooltip>
       </template>
       <template v-if="!error && bookToUpgrade">
-        <v-tooltip bottom>
-          <template v-slot:activator="{ on }">
-            <v-icon color="warning" v-on="on">mdi-comment-alert</v-icon>
+        <v-tooltip location="bottom">
+          <template v-slot:activator="{ props }">
+            <v-icon color="warning" v-bind="props">mdi-comment-alert</v-icon>
           </template>
           {{ $t('book_import.row.warning_upgrade') }}
         </v-tooltip>
@@ -120,7 +119,7 @@
 </template>
 
 <script lang="ts">
-import Vue, {PropType} from 'vue'
+import {defineComponent, PropType} from 'vue'
 import {MediaStatus} from '@/types/enum-books'
 import {SeriesDto} from '@/types/komga-series'
 import {TransientBookDto} from '@/types/komga-transientbooks'
@@ -134,7 +133,7 @@ import FileNameChooserDialog from '@/components/dialogs/FileNameChooserDialog.vu
 import {SeriesSelected} from '@/types/series-slim'
 import {BookSearch, SearchConditionSeriesId, SearchOperatorIs} from '@/types/komga-search'
 
-export default Vue.extend({
+export default defineComponent({
   name: 'FileImportRow',
   components: {SeriesPickerDialog, TransientBookDetailsDialog, TransientBookViewerDialog, FileNameChooserDialog},
   props: {

@@ -63,7 +63,7 @@
           @scroll-changed="(percent) => scrollChanged(section.loader, percent)"
         >
           <template v-slot:prepend>
-            <div class="title">{{ $t(`dashboard.${section.value.toLowerCase()}`) }}</div>
+            <div class="text-h6">{{ $t(`dashboard.${section.value.toLowerCase()}`) }}</div>
           </template>
           <template v-slot:content>
             <item-browser v-if="section.type ===SectionType.BOOK"
@@ -71,7 +71,7 @@
                           :item-context="section.itemContext"
                           nowrap
                           :edit-function="isAdmin ? singleEditBook : undefined"
-                          :selected.sync="selectedBooks"
+                          v-model:selected="selectedBooks"
                           :selectable="selectedSeries.length === 0"
                           :fixed-item-width="fixedCardWidth"
             />
@@ -80,7 +80,7 @@
                           :item-context="section.itemContext"
                           nowrap
                           :edit-function="isAdmin ? singleEditSeries : undefined"
-                          :selected.sync="selectedSeries"
+                          v-model:selected="selectedSeries"
                           :selectable="selectedBooks.length === 0"
                           :fixed-item-width="fixedCardWidth"
             />
@@ -90,10 +90,9 @@
 
       <v-fab-transition>
         <v-btn
-          fab
-          bottom
-          right
-          fixed
+          icon
+          position="fixed"
+          location="bottom right"
           :class="individualLibrary && $vuetify.breakpoint.smAndDown ? 'mb-12' : undefined"
           @click="modalEditRecommended = true"
         >
@@ -103,7 +102,7 @@
 
       <edit-recommended-dialog
         v-model="modalEditRecommended"
-        :view-config.sync="viewConfig"
+        v-model:view-config="viewConfig"
         @reset-defaults="resetDefaultView"
       />
     </v-container>
@@ -132,7 +131,7 @@ import {
   SERIES_CHANGED,
   SERIES_DELETED,
 } from '@/types/events'
-import Vue from 'vue'
+import {defineComponent} from 'vue'
 import {Oneshot, SeriesDto} from '@/types/komga-series'
 import {LIBRARIES_ALL, LIBRARY_ROUTE} from '@/types/library'
 import {throttle} from 'lodash'
@@ -176,7 +175,7 @@ enum SectionType {
   BOOK,
 }
 
-export default Vue.extend({
+export default defineComponent({
   name: 'DashboardView',
   components: {
     EditRecommendedDialog,
@@ -217,7 +216,7 @@ export default Vue.extend({
     this.$eventHub.$on(READPROGRESS_SERIES_CHANGED, this.readProgressSeriesChanged)
     this.$eventHub.$on(READPROGRESS_SERIES_DELETED, this.readProgressSeriesChanged)
   },
-  beforeDestroy() {
+  beforeUnmount() {
     this.$eventHub.$off(SERIES_ADDED, this.seriesChanged)
     this.$eventHub.$off(SERIES_CHANGED, this.seriesChanged)
     this.$eventHub.$off(SERIES_DELETED, this.seriesChanged)

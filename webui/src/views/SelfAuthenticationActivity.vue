@@ -9,10 +9,10 @@
 </template>
 
 <script lang="ts">
-import Vue from 'vue'
+import {defineComponent} from 'vue'
 import AuthenticationActivityTable from '@/components/AuthenticationActivityTable.vue'
 
-export default Vue.extend({
+export default defineComponent({
   name: 'SelfAuthenticationActivity',
   components: {AuthenticationActivityTable},
 })

@@ -26,9 +26,8 @@
 
       <v-card-actions>
         <v-spacer/>
-        <v-btn text @click="dialogCancel">{{ buttonCancel || $t('common.cancel') }}</v-btn>
-        <v-btn v-if="buttonAlternate"
-               text
+        <v-btn variant="text" @click="dialogCancel">{{ buttonCancel || $t('common.cancel') }}</v-btn>
+        <v-btn v-if="buttonAlternate" variant="text"
                @click="dialogAlternate"
                :disabled="confirmText && !confirmation"
         >{{ buttonAlternate }}
@@ -44,9 +43,9 @@
 </template>
 
 <script lang="ts">
-import Vue from 'vue'
+import {defineComponent} from 'vue'
 
-export default Vue.extend({
+export default defineComponent({
   name: 'ConfirmationDialog',
   data: () => {
     return {
@@ -55,7 +54,7 @@ export default Vue.extend({
     }
   },
   props: {
-    value: Boolean,
+    modelValue: Boolean,
     title: {
       type: String,
       required: true,
@@ -90,7 +89,7 @@ export default Vue.extend({
     },
   },
   watch: {
-    value(val) {
+    modelValue(val) {
       this.modal = val
     },
     modal(val) {
@@ -100,15 +99,15 @@ export default Vue.extend({
   methods: {
     dialogCancel() {
       this.confirmation = false
-      this.$emit('input', false)
+      this.$emit('update:modelValue', false)
     },
     dialogConfirm() {
       this.$emit('confirm')
-      this.$emit('input', false)
+      this.$emit('update:modelValue', false)
     },
     dialogAlternate() {
       this.$emit('alternate')
-      this.$emit('input', false)
+      this.$emit('update:modelValue', false)
     },
   },
 })

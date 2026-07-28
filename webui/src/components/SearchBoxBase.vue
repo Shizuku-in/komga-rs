@@ -7,22 +7,22 @@
       :loading="loading"
       :items="results"
       :hide-no-data="!showResults"
-      clearable
-      solo
+      clearable variant="solo"
       hide-details
-      no-filter
-      dense
+      no-filter density="compact"
       append-icon=""
       auto-select-first
-      :search-input.sync="search"
+      v-model:search="search"
       @keydown.esc="clear"
       ref="searchbox"
     >
       <template v-slot:selection>
       </template>
 
-      <template v-slot:item="data">
-        <slot name="item" v-bind:item="data.item"></slot>
+      <template #item="{props, item}">
+        <v-list-item v-bind="props">
+          <slot name="item" :item="item.raw"/>
+        </v-list-item>
       </template>
     </v-autocomplete>
   </div>
@@ -30,9 +30,9 @@
 
 <script lang="ts">
 import {debounce} from 'lodash'
-import Vue, {PropType} from 'vue'
+import {defineComponent, PropType} from 'vue'
 
-export default Vue.extend({
+export default defineComponent({
   name: 'SearchBoxBase',
   data: function () {
     return {

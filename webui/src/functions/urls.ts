@@ -1,9 +1,9 @@
 import {PageHashKnownDto, PageHashUnknownDto} from '@/types/komga-pagehashes'
 
-const fullUrl = process.env.VUE_APP_KOMGA_API_URL
-  ? process.env.VUE_APP_KOMGA_API_URL
+const fullUrl = import.meta.env.VITE_KOMGA_API_URL
+  ? import.meta.env.VITE_KOMGA_API_URL
   : window.location.origin + window.resourceBaseUrl
-const baseUrl = process.env.NODE_ENV === 'production' ? window.resourceBaseUrl : '/'
+const baseUrl = import.meta.env.PROD ? window.resourceBaseUrl : '/'
 
 const urls = {
   origin: !fullUrl.endsWith('/') ? `${fullUrl}/` : fullUrl,

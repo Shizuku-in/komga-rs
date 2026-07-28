@@ -1,18 +1,14 @@
 <template>
   <v-navigation-drawer
     v-model="display"
-    :right="!$vuetify.rtl"
-    fixed
+    :location="$vuetify.rtl ? 'left' : 'right'"
     temporary
     disable-route-watcher
     class="fill-height"
   >
     <v-fab-transition>
       <v-btn
-        v-if="clearButton"
-        absolute
-        top
-        right
+        v-if="clearButton" position="absolute" location="top right"
         icon
         :style="'z-index: 10; background: ' + $vuetify.theme.currentTheme.base"
         elevation="2"
@@ -27,13 +23,13 @@
 
     <template v-if="$slots.filter">
       <v-divider/>
-      <v-subheader class="text-uppercase">{{ $t('filter_drawer.filter') }}</v-subheader>
+      <v-list-subheader class="text-uppercase">{{ $t('filter_drawer.filter') }}</v-list-subheader>
     </template>
     <slot name="filter"></slot>
 
     <template v-if="$slots.sort">
       <v-divider/>
-      <v-subheader class="text-uppercase">{{ $t('filter_drawer.sort') }}</v-subheader>
+      <v-list-subheader class="text-uppercase">{{ $t('filter_drawer.sort') }}</v-list-subheader>
     </template>
     <slot name="sort"></slot>
 
@@ -41,9 +37,9 @@
 </template>
 
 <script lang="ts">
-import Vue from 'vue'
+import {defineComponent} from 'vue'
 
-export default Vue.extend({
+export default defineComponent({
   name: 'FilterDrawer',
   data: () => {
     return {
@@ -51,18 +47,18 @@ export default Vue.extend({
     }
   },
   props: {
-    value: Boolean,
+    modelValue: Boolean,
     clearButton: {
       type: Boolean,
       default: false,
     },
   },
   watch: {
-    value(val) {
+    modelValue(val) {
       this.display = val
     },
     display(val) {
-      !val && this.$emit('input', false)
+      !val && this.$emit('update:modelValue', false)
     },
   },
   methods: {

@@ -3,8 +3,8 @@
     <v-expansion-panel v-for="(c, index) in collections"
                        :key="index"
     >
-      <v-expansion-panel-header>{{ $t('collections_expansion_panel.title', {name: c.name}) }}</v-expansion-panel-header>
-      <v-expansion-panel-content>
+      <v-expansion-panel-title>{{ $t('collections_expansion_panel.title', {name: c.name}) }}</v-expansion-panel-title>
+      <v-expansion-panel-text>
         <horizontal-scroller
           :tick="collectionsLoaders[index].tick"
           @scroll-changed="(percent) => scrollChanged(collectionsLoaders[index], percent)"
@@ -25,7 +25,7 @@
             />
           </template>
         </horizontal-scroller>
-      </v-expansion-panel-content>
+      </v-expansion-panel-text>
     </v-expansion-panel>
   </v-expansion-panels>
 </template>
@@ -33,12 +33,12 @@
 <script lang="ts">
 import HorizontalScroller from '@/components/HorizontalScroller.vue'
 import ItemBrowser from '@/components/ItemBrowser.vue'
-import Vue from 'vue'
+import {defineComponent} from 'vue'
 import {ContextOrigin} from '@/types/context'
 import {SeriesDto} from '@/types/komga-series'
 import {PageLoader} from '@/types/pageLoader'
 
-export default Vue.extend({
+export default defineComponent({
   name: 'CollectionsExpansionPanels',
   components: {
     HorizontalScroller,

@@ -9,10 +9,10 @@
 </template>
 
 <script lang="ts">
-import Vue from 'vue'
+import {defineComponent} from 'vue'
 import EmptyState from '@/components/EmptyState.vue'
 
-export default Vue.extend({
+export default defineComponent({
   name: 'NoPinnedLibraries',
   components: {EmptyState},
   mounted() {

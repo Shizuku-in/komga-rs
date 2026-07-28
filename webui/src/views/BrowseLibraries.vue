@@ -50,15 +50,15 @@
       <template v-slot:default>
         <filter-list
           :filters-options="filterOptionsList"
-          :filters-active.sync="filters"
+          v-model:filters-active="filters"
         />
       </template>
 
       <template v-slot:filter>
         <filter-panels
           :filters-options="filterOptionsPanel"
-          :filters-active.sync="filters"
-          :filters-active-mode.sync="filtersMode"
+          v-model:filters-active="filters"
+          v-model:filters-active-mode="filtersMode"
         />
       </template>
 
@@ -66,7 +66,7 @@
         <sort-list
           :sort-default="sortDefault"
           :sort-options="sortOptions"
-          :sort-active.sync="sortActive"
+          v-model:sort-active="sortActive"
         />
       </template>
     </filter-drawer>
@@ -108,7 +108,7 @@
         <item-browser
           :items="series"
           :item-context="itemContext"
-          :selected.sync="selectedSeries"
+          v-model:selected="selectedSeries"
           :edit-function="isAdmin ? editSingleSeries : undefined"
         />
 
@@ -144,8 +144,8 @@ import {
   SERIES_CHANGED,
   SERIES_DELETED,
 } from '@/types/events'
-import Vue from 'vue'
-import {Location} from 'vue-router'
+import {defineComponent} from 'vue'
+import type {RouteLocationRaw} from 'vue-router'
 import {LIBRARIES_ALL, LIBRARY_ROUTE} from '@/types/library'
 import FilterDrawer from '@/components/FilterDrawer.vue'
 import SortList from '@/components/SortList.vue'
@@ -211,7 +211,7 @@ import {
 } from '@/types/filter'
 import {CLIENT_SETTING, ClientSettingsSeriesGroup, SERIES_GROUP_ALPHA} from '@/types/komga-clientsettings'
 
-export default Vue.extend({
+export default defineComponent({
   name: 'BrowseLibraries',
   components: {
     AlphabeticalNavigation,
@@ -281,7 +281,7 @@ export default Vue.extend({
     this.$eventHub.$on(READPROGRESS_SERIES_CHANGED, this.readProgressChanged)
     this.$eventHub.$on(READPROGRESS_SERIES_DELETED, this.readProgressChanged)
   },
-  beforeDestroy() {
+  beforeUnmount() {
     this.$eventHub.$off(SERIES_ADDED, this.seriesChanged)
     this.$eventHub.$off(SERIES_CHANGED, this.seriesChanged)
     this.$eventHub.$off(SERIES_DELETED, this.seriesChanged)
@@ -564,7 +564,7 @@ export default Vue.extend({
     resetSortAndFilters() {
       this.drawer = false
       for (const prop in this.filters) {
-        this.$set(this.filters, prop, [])
+        this.filters[prop] = []
       }
       this.sortActive = this.sortDefault
       this.$store.commit('setLibraryFilter', {id: this.libraryId, filter: this.filters})
@@ -588,18 +588,18 @@ export default Vue.extend({
         this.$komgaReferential.getSeriesReleaseDates(requestLibraryIds),
         this.$komgaReferential.getSharingLabels(requestLibraryIds),
       ])
-      this.$set(this.filterOptions, 'genre', toNameValueCondition(genres, x => new SearchConditionGenre(new SearchOperatorIs(x)), x => new SearchConditionGenre(new SearchOperatorIsNot(x))))
-      this.$set(this.filterOptions, 'tag', toNameValueCondition(tags, x => new SearchConditionTag(new SearchOperatorIs(x)), x => new SearchConditionTag(new SearchOperatorIsNot(x))))
-      this.$set(this.filterOptions, 'publisher', toNameValueCondition(publishers, x => new SearchConditionPublisher(new SearchOperatorIs(x)), x => new SearchConditionPublisher(new SearchOperatorIsNot(x))))
-      this.$set(this.filterOptions, 'language', languages.map((x: NameValue) => {
+      this.filterOptions.genre = toNameValueCondition(genres, x => new SearchConditionGenre(new SearchOperatorIs(x)), x => new SearchConditionGenre(new SearchOperatorIsNot(x)))
+      this.filterOptions.tag = toNameValueCondition(tags, x => new SearchConditionTag(new SearchOperatorIs(x)), x => new SearchConditionTag(new SearchOperatorIsNot(x)))
+      this.filterOptions.publisher = toNameValueCondition(publishers, x => new SearchConditionPublisher(new SearchOperatorIs(x)), x => new SearchConditionPublisher(new SearchOperatorIsNot(x)))
+      this.filterOptions.language = languages.map((x: NameValue) => {
         return {
           name: x.name,
           value: new SearchConditionLanguage(new SearchOperatorIs(x.value)),
           nValue: new SearchConditionLanguage(new SearchOperatorIsNot(x.value)),
         } as NameValue
-      }))
-      this.$set(this.filterOptions, 'ageRating', toNameValueCondition(ageRatings, x => new SearchConditionAgeRating(isFinite(x) ? new SearchOperatorIs(x) : new SearchOperatorIsNull()), x => new SearchConditionAgeRating(isFinite(x) ? new SearchOperatorIsNot(x) : new SearchOperatorIsNotNull())))
-      this.$set(this.filterOptions, 'releaseDate', toNameValueCondition(
+      })
+      this.filterOptions.ageRating = toNameValueCondition(ageRatings, x => new SearchConditionAgeRating(isFinite(x) ? new SearchOperatorIs(x) : new SearchOperatorIsNull()), x => new SearchConditionAgeRating(isFinite(x) ? new SearchOperatorIsNot(x) : new SearchOperatorIsNotNull()))
+      this.filterOptions.releaseDate = toNameValueCondition(
         releaseDates,
         x => {
           const year = Number.parseInt(x)
@@ -615,8 +615,8 @@ export default Vue.extend({
               new SearchConditionReleaseDate(new SearchOperatorIsNull()),
             ],
           ),
-      ))
-      this.$set(this.filterOptions, 'sharingLabel', toNameValueCondition(sharingLabels, x => new SearchConditionSharingLabel(new SearchOperatorIs(x)), x => new SearchConditionSharingLabel(new SearchOperatorIsNot(x))))
+      )
+      this.filterOptions.sharingLabel = toNameValueCondition(sharingLabels, x => new SearchConditionSharingLabel(new SearchOperatorIs(x)), x => new SearchConditionSharingLabel(new SearchOperatorIsNot(x)))
 
       // get filter from query params or local storage and validate with available filter values
       let activeFilters: any
@@ -654,25 +654,27 @@ export default Vue.extend({
     },
     validateFiltersMode(filtersMode: any): FiltersActiveMode {
       const validFilterMode = {} as FiltersActiveMode
+      if (!filtersMode || typeof filtersMode !== 'object') return validFilterMode
       for (let key in filtersMode) {
-        if (filtersMode[key].allOf == 'true' || filtersMode[key].allOf == true) validFilterMode[key] = {allOf: true} as FilterMode
+        if (filtersMode[key]?.allOf == 'true' || filtersMode[key]?.allOf == true) validFilterMode[key] = {allOf: true} as FilterMode
       }
       return validFilterMode
     },
     validateFilters(filters: FiltersActive): FiltersActive {
+      filters ||= {} as FiltersActive
       const validFilter = {
-        status: this.$_.intersectionWith(filters.status, extractFilterOptionsValues(this.filterOptionsPanel.status.values), objIsEqual) || [],
-        readStatus: this.$_.intersectionWith(filters.readStatus, extractFilterOptionsValues(this.filterOptionsList.readStatus.values), objIsEqual) || [],
-        genre: this.$_.intersectionWith(filters.genre, extractFilterOptionsValues(this.filterOptions.genre), objIsEqual) || [],
-        tag: this.$_.intersectionWith(filters.tag, extractFilterOptionsValues(this.filterOptions.tag), objIsEqual) || [],
-        publisher: this.$_.intersectionWith(filters.publisher, extractFilterOptionsValues(this.filterOptions.publisher), objIsEqual) || [],
-        language: this.$_.intersectionWith(filters.language, extractFilterOptionsValues(this.filterOptions.language), objIsEqual) || [],
-        ageRating: this.$_.intersectionWith(filters.ageRating, extractFilterOptionsValues(this.filterOptions.ageRating), objIsEqual) || [],
-        releaseDate: this.$_.intersectionWith(filters.releaseDate, extractFilterOptionsValues(this.filterOptions.releaseDate), objIsEqual) || [],
-        complete: this.$_.intersectionWith(filters.complete, extractFilterOptionsValues(this.filterOptionsList.complete.values), objIsEqual) || [],
-        oneshot: this.$_.intersectionWith(filters.oneshot, extractFilterOptionsValues(this.filterOptionsList.oneshot.values), objIsEqual) || [],
-        sharingLabel: this.$_.intersectionWith(filters.sharingLabel, extractFilterOptionsValues(this.filterOptions.sharingLabel), objIsEqual) || [],
-        deleted: this.$_.intersectionWith(filters.deleted, extractFilterOptionsValues(this.filterOptionsList.deleted.values), objIsEqual) || [],
+        status: this.$_.intersectionWith(filters.status || [], extractFilterOptionsValues(this.filterOptionsPanel.status.values), objIsEqual),
+        readStatus: this.$_.intersectionWith(filters.readStatus || [], extractFilterOptionsValues(this.filterOptionsList.readStatus.values), objIsEqual),
+        genre: this.$_.intersectionWith(filters.genre || [], extractFilterOptionsValues(this.filterOptions.genre), objIsEqual),
+        tag: this.$_.intersectionWith(filters.tag || [], extractFilterOptionsValues(this.filterOptions.tag), objIsEqual),
+        publisher: this.$_.intersectionWith(filters.publisher || [], extractFilterOptionsValues(this.filterOptions.publisher), objIsEqual),
+        language: this.$_.intersectionWith(filters.language || [], extractFilterOptionsValues(this.filterOptions.language), objIsEqual),
+        ageRating: this.$_.intersectionWith(filters.ageRating || [], extractFilterOptionsValues(this.filterOptions.ageRating), objIsEqual),
+        releaseDate: this.$_.intersectionWith(filters.releaseDate || [], extractFilterOptionsValues(this.filterOptions.releaseDate), objIsEqual),
+        complete: this.$_.intersectionWith(filters.complete || [], extractFilterOptionsValues(this.filterOptionsList.complete.values), objIsEqual),
+        oneshot: this.$_.intersectionWith(filters.oneshot || [], extractFilterOptionsValues(this.filterOptionsList.oneshot.values), objIsEqual),
+        sharingLabel: this.$_.intersectionWith(filters.sharingLabel || [], extractFilterOptionsValues(this.filterOptions.sharingLabel), objIsEqual),
+        deleted: this.$_.intersectionWith(filters.deleted || [], extractFilterOptionsValues(this.filterOptionsList.deleted.values), objIsEqual),
       } as any
       authorRoles.forEach((role: string) => {
         validFilter[role] = filters[role] || []
@@ -754,7 +756,7 @@ export default Vue.extend({
           sort: `${this.sortActive.key},${this.sortActive.order}`,
           nav: this.selectedSymbol,
         },
-      } as Location
+      } as RouteLocationRaw
       mergeFilterParams(this.filters, loc.query)
       loc.query['filterMode'] = this.validateFiltersMode(this.filtersMode)
       this.$router.replace(loc).catch((_: any) => {

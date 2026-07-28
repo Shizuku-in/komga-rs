@@ -2,8 +2,7 @@
   <div id="root" :key="bookId">
     <v-slide-y-transition>
       <v-toolbar
-        v-if="showToolbars"
-        dense elevation="1"
+        v-if="showToolbars" density="compact" elevation="1"
         class="settings full-width"
         style="position: fixed; top: 0;z-index: 14"
       >
@@ -48,12 +47,10 @@
 
     <v-slide-y-reverse-transition>
       <!-- Bottom Toolbar-->
-      <v-toolbar
-        dense
+      <v-toolbar density="compact"
         elevation="1"
         class="settings full-width"
         style="position: fixed; bottom: 0;z-index: 14"
-        horizontal
         v-if="showToolbars"
       >
         <v-btn icon @click="previousBook">
@@ -92,13 +89,12 @@
 
     <v-navigation-drawer
       v-model="showToc"
-      fixed
       temporary
 
       :width="$vuetify.breakpoint.smAndUp ? 500 : $vuetify.breakpoint.width - 50"
       style="z-index: 15"
     >
-      <v-tabs grow>
+      <v-tabs v-model="tocTab" grow>
         <v-tab v-if="hasToc">
           <v-icon>mdi-table-of-contents</v-icon>
         </v-tab>
@@ -108,17 +104,19 @@
         <v-tab v-if="hasPageList">
           <v-icon>mdi-numeric</v-icon>
         </v-tab>
-
-        <v-tab-item v-if="hasToc" class="scrolltab">
-          <toc-list :toc="tableOfContents" @goto="goToEntry" class="scrolltab-content"/>
-        </v-tab-item>
-        <v-tab-item v-if="hasLandmarks" class="scrolltab">
-          <toc-list :toc="landmarks" @goto="goToEntry" class="scrolltab-content"/>
-        </v-tab-item>
-        <v-tab-item v-if="hasPageList" class="scrolltab">
-          <toc-list :toc="pageList" @goto="goToEntry" class="scrolltab-content"/>
-        </v-tab-item>
       </v-tabs>
+
+      <v-window v-model="tocTab">
+        <v-window-item v-if="hasToc" class="scrolltab">
+          <toc-list :toc="tableOfContents" @goto="goToEntry" class="scrolltab-content"/>
+        </v-window-item>
+        <v-window-item v-if="hasLandmarks" class="scrolltab">
+          <toc-list :toc="landmarks" @goto="goToEntry" class="scrolltab-content"/>
+        </v-window-item>
+        <v-window-item v-if="hasPageList" class="scrolltab">
+          <toc-list :toc="pageList" @goto="goToEntry" class="scrolltab-content"/>
+        </v-window-item>
+      </v-window>
     </v-navigation-drawer>
 
     <header id="headerMenu"/>
@@ -181,8 +179,8 @@
       scrollable
     >
       <v-card>
-        <v-toolbar dark color="primary">
-          <v-btn icon dark @click="showSettings = false">
+        <v-toolbar color="primary">
+          <v-btn icon @click="showSettings = false">
             <v-icon>mdi-close</v-icon>
           </v-btn>
           <v-toolbar-title>{{ $t('bookreader.reader_settings') }}</v-toolbar-title>
@@ -190,7 +188,7 @@
 
         <v-card-text class="pa-0">
           <v-list class="full-height full-width">
-            <v-subheader class="font-weight-black text-h6">{{ $t('bookreader.settings.general') }}</v-subheader>
+            <v-list-subheader class="font-weight-black text-h6">{{ $t('bookreader.settings.general') }}</v-list-subheader>
             <v-list-item v-if="fixedLayout">
               <settings-select
                 :items="readingDirs"
@@ -211,7 +209,7 @@
               />
             </v-list-item>
 
-            <v-subheader class="font-weight-black text-h6">{{ $t('bookreader.settings.display') }}</v-subheader>
+            <v-list-subheader class="font-weight-black text-h6">{{ $t('bookreader.settings.display') }}</v-list-subheader>
 
             <v-list-item v-if="fontFamilies.length > 1">
               <settings-select
@@ -252,21 +250,21 @@
             </v-list-item>
 
             <v-list-item class="justify-center">
-              <v-btn depressed @click="fontSize-=10">
-                <v-icon small>mdi-format-title</v-icon>
+              <v-btn variant="flat" @click="fontSize-=10">
+                <v-icon size="small">mdi-format-title</v-icon>
               </v-btn>
-              <span class="caption mx-8" style="width: 2rem">{{ fontSize }}%</span>
-              <v-btn depressed @click="fontSize+=10">
+              <span class="text-caption mx-8" style="width: 2rem">{{ fontSize }}%</span>
+              <v-btn variant="flat" @click="fontSize+=10">
                 <v-icon>mdi-format-title</v-icon>
               </v-btn>
             </v-list-item>
 
             <v-list-item class="justify-center">
-              <v-btn depressed @click="lineHeight-=.1">
+              <v-btn variant="flat" @click="lineHeight-=.1">
                 <v-icon>$formatLineSpacingDown</v-icon>
               </v-btn>
-              <span class="caption mx-8" style="width: 2rem">{{ Math.round(lineHeight * 100) }}%</span>
-              <v-btn depressed @click="lineHeight+=.1">
+              <span class="text-caption mx-8" style="width: 2rem">{{ Math.round(lineHeight * 100) }}%</span>
+              <v-btn variant="flat" @click="lineHeight+=.1">
                 <v-icon>mdi-format-line-spacing</v-icon>
               </v-btn>
             </v-list-item>
@@ -289,7 +287,7 @@
 
     <v-snackbar
       v-model="notification.enabled"
-      centered
+      location="center"
       :timeout="notification.timeout"
     >
       <p class="text-h6 text-center ma-0">
@@ -305,7 +303,7 @@
 </template>
 
 <script lang="ts">
-import Vue from 'vue'
+import {defineComponent} from 'vue'
 import D2Reader, {Locator} from '@d-i-t-a/reader'
 import urls, {bookManifestUrl, bookPositionsUrl} from '@/functions/urls'
 import {BookDto} from '@/types/komga-books'
@@ -315,7 +313,7 @@ import {Context, ContextOrigin} from '@/types/context'
 import SettingsSwitch from '@/components/SettingsSwitch.vue'
 import {TocEntry} from '@/types/epub'
 import TocList from '@/components/TocList.vue'
-import {Locations} from '@d-i-t-a/reader/dist/types/model/Locator'
+import type {Locations} from '@d-i-t-a/reader/dist/types/model/Locator'
 import {
   epubShortcutsMenus,
   epubShortcutsSettings,
@@ -332,7 +330,7 @@ import SettingsSelect from '@/components/SettingsSelect.vue'
 import {createR2Progression, r2ProgressionToReadingPosition} from '@/functions/readium'
 import {debounce} from 'lodash'
 
-export default Vue.extend({
+export default defineComponent({
   name: 'EpubReader',
   components: {SettingsSelect, ShortcutHelpDialog, TocList, SettingsSwitch},
   data: function () {
@@ -347,6 +345,7 @@ export default Vue.extend({
       incognito: false,
       context: {} as Context,
       contextName: '',
+      tocTab: 0,
       showSettings: false,
       showToolbars: false,
       showToc: false,
@@ -370,19 +369,19 @@ export default Vue.extend({
           text: this.$t('enums.epubreader.appearances.day').toString(),
           value: 'readium-default-on',
           color: 'white',
-          class: 'black--text',
+          class: 'text-black',
         },
         {
           text: this.$t('enums.epubreader.appearances.sepia').toString(),
           value: 'readium-sepia-on',
           color: '#faf4e8',
-          class: 'black--text',
+          class: 'text-black',
         },
         {
           text: this.$t('enums.epubreader.appearances.night').toString(),
           value: 'readium-night-on',
           color: 'black',
-          class: 'white--text',
+          class: 'text-white',
         },
       ],
       columnCounts: [
@@ -444,10 +443,10 @@ export default Vue.extend({
     this.$vuetify.rtl = false
     if (screenfull.isEnabled) screenfull.on('change', this.fullscreenChanged)
   },
-  beforeDestroy() {
+  beforeUnmount() {
     this.d2Reader.stop()
   },
-  destroyed() {
+  unmounted() {
     this.$vuetify.rtl = (this.$t('common.locale_rtl') === 'true')
     if (screenfull.isEnabled) {
       screenfull.off('change', this.fullscreenChanged)
@@ -761,7 +760,7 @@ export default Vue.extend({
         storageType: 'memory',
         lastReadingPosition: initialLocation,
         injectables: [
-          // webpack will process the new URL (https://webpack.js.org/guides/asset-modules/#url-assets)
+          // Vite resolves the bundled resource URL during the production build.
           // we use a different extension so that the css-loader rule is not used (see vue.config.js)
           {
             type: 'style',

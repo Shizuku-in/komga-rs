@@ -3,8 +3,8 @@
     <v-expansion-panel v-for="(r, index) in readLists"
                        :key="index"
     >
-      <v-expansion-panel-header>{{ $t('readlists_expansion_panel.title', {name: r.name}) }}</v-expansion-panel-header>
-      <v-expansion-panel-content>
+      <v-expansion-panel-title>{{ $t('readlists_expansion_panel.title', {name: r.name}) }}</v-expansion-panel-title>
+      <v-expansion-panel-text>
         <horizontal-scroller
           :tick="readListsLoaders[index].tick"
           @scroll-changed="(percent) => scrollChanged(readListsLoaders[index], percent)"
@@ -26,7 +26,7 @@
             />
           </template>
         </horizontal-scroller>
-      </v-expansion-panel-content>
+      </v-expansion-panel-text>
     </v-expansion-panel>
   </v-expansion-panels>
 </template>
@@ -34,14 +34,14 @@
 <script lang="ts">
 import HorizontalScroller from '@/components/HorizontalScroller.vue'
 import ItemBrowser from '@/components/ItemBrowser.vue'
-import Vue from 'vue'
+import {defineComponent} from 'vue'
 import {BookDto} from '@/types/komga-books'
 import {ContextOrigin} from '@/types/context'
 import {ItemContext} from '@/types/items'
 import {PageLoader} from '@/types/pageLoader'
 import {ReadListDto} from '@/types/komga-readlists'
 
-export default Vue.extend({
+export default defineComponent({
   name: 'ReadListsExpansionPanels',
   components: {
     HorizontalScroller,

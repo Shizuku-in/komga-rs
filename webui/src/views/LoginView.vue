@@ -14,8 +14,7 @@
           >
             <v-alert type="info"
                      icon="mdi-account-plus"
-                     prominent
-                     text
+                     prominent variant="tonal"
                      v-html="$t('login.unclaimed_html')"
             >
             </v-alert>
@@ -30,7 +29,7 @@
                             :error-messages="getErrors('login')"
                             :autocomplete="hideLogin ? '' : 'username'"
                             autofocus
-                            @blur="$v.form.login.$touch()"
+                            @blur="v$.form.login.$touch()"
               />
             </v-col>
           </v-row>
@@ -42,8 +41,8 @@
                             :error-messages="getErrors('password')"
                             type="password"
                             :autocomplete="hideLogin ? '' : 'current-password'"
-                            @input="$v.form.password.$touch()"
-                            @blur="$v.form.password.$touch()"
+                            @update:model-value="v$.form.password.$touch()"
+                            @blur="v$.form.password.$touch()"
               />
             </v-col>
           </v-row>
@@ -92,7 +91,7 @@
               :class="$_.get(socialButtons[provider.registrationId.toLowerCase()], 'text') ? `${socialButtons[provider.registrationId.toLowerCase()].text}--text` : undefined"
               :color="$_.get(socialButtons[provider.registrationId.toLowerCase()], 'color')"
             >
-              <v-icon left>mdi-{{ provider.registrationId }}</v-icon>
+              <v-icon start>mdi-{{ provider.registrationId }}</v-icon>
               Sign in with {{ provider.name }}
             </v-btn>
           </v-col>
@@ -121,13 +120,11 @@
     </v-container>
 
     <v-snackbar
-      v-model="snackbar"
-      bottom
+      v-model="snackbar" location="bottom"
       color="error"
     >
       {{ snackText }}
-      <v-btn
-        text
+      <v-btn variant="text"
         @click="snackbar = false"
       >{{ $t('common.close') }}
       </v-btn>
@@ -136,8 +133,9 @@
 </template>
 
 <script lang="ts">
-import Vue from 'vue'
-import {email, required} from 'vuelidate/lib/validators'
+import {defineComponent} from 'vue'
+import useVuelidate from '@vuelidate/core'
+import {email, required} from '@vuelidate/validators'
 import {Theme} from '@/types/themes'
 import {OAuth2ClientDto} from '@/types/komga-oauth2'
 import urls from '@/functions/urls'
@@ -145,8 +143,9 @@ import {socialButtons} from '@/types/social'
 import {convertErrorCodes} from '@/functions/error-codes'
 import {CLIENT_SETTING} from '@/types/komga-clientsettings'
 
-export default Vue.extend({
+export default defineComponent({
   name: 'LoginView',
+  setup: () => ({v$: useVuelidate()}),
   data: function () {
     return {
       urls,
@@ -159,7 +158,7 @@ export default Vue.extend({
       snackText: '',
       unclaimed: false,
       oauth2Providers: [] as OAuth2ClientDto[],
-      locales: this.$i18n.availableLocales.map((x: any) => ({text: this.$i18n.t('common.locale_name', x), value: x})),
+      locales: this.$i18n.availableLocales.map((x: any) => ({text: this.$t('common.locale_name', x), value: x})),
       clientSettings: {} as Record<string, ClientSettingDto>,
     }
   },
@@ -220,9 +219,9 @@ export default Vue.extend({
 
     themes(): object[] {
       return [
-        {text: this.$i18n.t(Theme.LIGHT), value: Theme.LIGHT},
-        {text: this.$i18n.t(Theme.DARK), value: Theme.DARK},
-        {text: this.$i18n.t(Theme.SYSTEM), value: Theme.SYSTEM},
+        {text: this.$t(Theme.LIGHT), value: Theme.LIGHT},
+        {text: this.$t(Theme.DARK), value: Theme.DARK},
+        {text: this.$t(Theme.SYSTEM), value: Theme.SYSTEM},
       ]
     },
     themeIcon(): string {
@@ -278,7 +277,7 @@ export default Vue.extend({
     getErrors(fieldName: string): string[] {
       const errors = [] as string[]
 
-      const field = this.$v.form!![fieldName] as any
+      const field = this.v$.form!![fieldName] as any
       if (field && field.$invalid && field.$dirty) {
         if (!field.required) errors.push(this.$t('common.required').toString())
         if (!field.email) errors.push(this.$t('dialog.add_user.field_email_error').toString())
@@ -318,8 +317,8 @@ export default Vue.extend({
       this.snackbar = true
     },
     isUserValid(): boolean {
-      this.$v.$touch()
-      return !this.$v.$invalid
+      this.v$.$touch()
+      return !this.v$.$invalid
     },
     async claim() {
       if (this.isUserValid()) {

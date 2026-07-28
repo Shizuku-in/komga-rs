@@ -2,9 +2,8 @@
 <html lang="en">
 <head>
     <meta charset="utf-8">
-    <meta http-equiv="X-UA-Compatible" content="IE=edge">
     <meta name="viewport" content="width=device-width,initial-scale=1.0">
-    <base href="<%= process.env.NODE_ENV === 'production' ? '__KOMGA_BASE_URL__' : '/' %>">
+    <base href="__KOMGA_BASE_URL__">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="mobile-web-app-capable" content="yes">
     <title>Komga</title>
@@ -15,16 +14,13 @@
     <meta name="msapplication-TileColor" content="#08397f">
     <meta name="msapplication-TileImage" content="mstile-144x144.png">
     <link rel="manifest" href="manifest.json">
-    <script>
-        window.resourceBaseUrl = '<%= process.env.NODE_ENV === 'production' ? '__KOMGA_BASE_URL__' : '/' %>'
-    </script>
+    <script>window.resourceBaseUrl = '__KOMGA_BASE_URL__'</script>
 </head>
 <body>
 <noscript>
-    <strong>We're sorry but Komga doesn't work properly without JavaScript enabled. Please enable it to
-        continue.</strong>
+    <strong>Komga requires JavaScript to run.</strong>
 </noscript>
 <div id="app"></div>
-<!-- built files will be auto injected -->
+<script type="module" src="/src/main.ts"></script>
 </body>
 </html>

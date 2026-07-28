@@ -5,8 +5,7 @@
     <div>
       <v-slide-y-transition>
         <!-- Top Toolbar-->
-        <v-toolbar
-          dense elevation="1"
+        <v-toolbar density="compact" elevation="1"
           v-if="showToolbars"
           class="settings full-width"
           style="position: fixed; top: 0"
@@ -20,9 +19,9 @@
           <v-toolbar-title> {{ bookTitle }}</v-toolbar-title>
           <v-spacer></v-spacer>
 
-          <v-tooltip bottom v-if="incognito">
-            <template v-slot:activator="{ on }">
-              <v-icon v-on="on">mdi-incognito</v-icon>
+          <v-tooltip location="bottom" v-if="incognito">
+            <template v-slot:activator="{ props }">
+              <v-icon v-bind="props">mdi-incognito</v-icon>
             </template>
             <span>{{ $t('bookreader.tooltip_incognito') }}</span>
           </v-tooltip>
@@ -53,9 +52,9 @@
             <v-icon>mdi-cog</v-icon>
           </v-btn>
 
-          <v-menu offset-y>
-            <template v-slot:activator="{ on }">
-              <v-btn icon v-on="on" @click.prevent="">
+          <v-menu location="bottom">
+            <template v-slot:activator="{ props }">
+              <v-btn icon v-bind="props" @click.prevent="">
                 <v-icon>mdi-dots-vertical</v-icon>
               </v-btn>
             </template>
@@ -79,12 +78,10 @@
 
       <v-slide-y-reverse-transition>
         <!-- Bottom Toolbar-->
-        <v-toolbar
-          dense
+        <v-toolbar density="compact"
           elevation="1"
           class="settings full-width"
           style="position: fixed; bottom: 0"
-          horizontal
           v-if="showToolbars"
         >
           <v-row justify="center">
@@ -93,7 +90,7 @@
               <v-slider
                 hide-details
                 thumb-label
-                @change="goTo"
+                @end="goTo"
                 v-model="goToPage"
                 class="align-center"
                 min="1"
@@ -125,7 +122,7 @@
       <continuous-reader
         v-if="continuousReader"
         :pages="pages"
-        :page.sync="page"
+        v-model:page="page"
         :animations="animations"
         :scale="continuousScale"
         :sidePadding="sidePadding"
@@ -138,7 +135,7 @@
       <paged-reader
         v-else
         :pages="pages"
-        :page.sync="page"
+        v-model:page="page"
         :reading-direction="readingDirection"
         :page-layout="pageLayout"
         :scale="scale"
@@ -165,8 +162,8 @@
       scrollable
     >
       <v-card>
-        <v-toolbar dark color="primary">
-          <v-btn icon dark @click="showSettings = false">
+        <v-toolbar color="primary">
+          <v-btn icon @click="showSettings = false">
             <v-icon>mdi-close</v-icon>
           </v-btn>
           <v-toolbar-title>{{ $t('bookreader.reader_settings') }}</v-toolbar-title>
@@ -174,7 +171,7 @@
 
         <v-card-text class="pa-0">
           <v-list class="full-height full-width">
-            <v-subheader class="font-weight-black text-h6">{{ $t('bookreader.settings.general') }}</v-subheader>
+            <v-list-subheader class="font-weight-black text-h6">{{ $t('bookreader.settings.general') }}</v-list-subheader>
             <v-list-item>
               <settings-select
                 :items="readingDirs"
@@ -197,7 +194,7 @@
                                :disabled="!screenfull.isEnabled"/>
             </v-list-item>
 
-            <v-subheader class="font-weight-black text-h6">{{ $t('bookreader.settings.display') }}</v-subheader>
+            <v-list-subheader class="font-weight-black text-h6">{{ $t('bookreader.settings.display') }}</v-list-subheader>
             <v-list-item>
               <settings-select
                 :items="backgroundColors"
@@ -207,7 +204,7 @@
             </v-list-item>
 
             <template v-if="continuousReader">
-              <v-subheader class="font-weight-black text-h6">{{ $t('bookreader.settings.webtoon') }}</v-subheader>
+              <v-list-subheader class="font-weight-black text-h6">{{ $t('bookreader.settings.webtoon') }}</v-list-subheader>
               <v-list-item>
                 <settings-select
                   :items="continuousScaleTypes"
@@ -232,7 +229,7 @@
             </template>
 
             <template v-if="!continuousReader">
-              <v-subheader class="font-weight-black text-h6">{{ $t('bookreader.settings.paged') }}</v-subheader>
+              <v-list-subheader class="font-weight-black text-h6">{{ $t('bookreader.settings.paged') }}</v-list-subheader>
               <v-list-item>
                 <settings-select
                   :items="scaleTypes"
@@ -257,13 +254,12 @@
     </v-bottom-sheet>
     <v-snackbar
       v-model="jumpToPreviousBook"
-      :timeout="jumpConfirmationDelay"
-      top
+      :timeout="jumpConfirmationDelay" location="top"
       color="rgba(0, 0, 0, 0.8)"
       multi-line
       class="mt-12"
     >
-      <div class="body-1 pa-6">
+      <div class="text-body-1 pa-6">
         <p>{{ $t('bookreader.beginning_of_book') }}</p>
         <p v-if="!$_.isEmpty(siblingPrevious)">{{ $t('bookreader.move_previous') }}</p>
       </div>
@@ -271,8 +267,7 @@
 
     <v-snackbar
       v-model="jumpToNextBook"
-      :timeout="jumpConfirmationDelay"
-      top
+      :timeout="jumpConfirmationDelay" location="top"
       color="rgba(0, 0, 0, 0.8)"
       multi-line
       class="mt-12"
@@ -286,8 +281,7 @@
 
     <v-snackbar
       v-model="notificationReadingDirection.enabled"
-      color="rgba(0, 0, 0, 0.8)"
-      bottom
+      color="rgba(0, 0, 0, 0.8)" location="bottom"
       timeout="3000"
     >
       <p class="text-body-1 text-center ma-0">
@@ -300,7 +294,7 @@
     <v-snackbar
       v-model="notification.enabled"
       color="rgba(0, 0, 0, 0.8)"
-      centered
+      location="center"
       :timeout="notification.timeout"
     >
       <p class="text-h6 text-center ma-0">
@@ -327,8 +321,8 @@ import {bookPageUrl} from '@/functions/urls'
 import {getFileFromUrl} from '@/functions/file'
 import {resizeImageFile} from '@/functions/resize-image'
 import {ReadingDirection} from '@/types/enum-books'
-import Vue from 'vue'
-import {Location} from 'vue-router'
+import {defineComponent} from 'vue'
+import type {RouteLocationRaw} from 'vue-router'
 import PagedReader from '@/components/readers/PagedReader.vue'
 import ContinuousReader from '@/components/readers/ContinuousReader.vue'
 import {ContinuousScaleType, MarginValues, PaddingPercentage, PagedReaderLayout, ScaleType} from '@/types/enum-reader'
@@ -349,7 +343,7 @@ import screenfull from 'screenfull'
 import {ItemTypes} from '@/types/items'
 import {getBookReadRouteFromMedia} from '@/functions/book-format'
 
-export default Vue.extend({
+export default defineComponent({
   name: 'DivinaReader',
   components: {
     ContinuousReader,
@@ -406,27 +400,27 @@ export default Vue.extend({
         timeout: 4000,
       },
       readingDirs: Object.values(ReadingDirection).map(x => ({
-        text: this.$i18n.t(`enums.reading_direction.${x}`),
+        text: this.$t(`enums.reading_direction.${x}`),
         value: x,
       })),
       scaleTypes: Object.values(ScaleType).map(x => ({
-        text: this.$i18n.t(x),
+        text: this.$t(x),
         value: x,
       })),
       continuousScaleTypes: Object.values(ContinuousScaleType).map(x => ({
-        text: this.$i18n.t(x),
+        text: this.$t(x),
         value: x,
       })),
       pageLayouts: Object.values(PagedReaderLayout).map(x => ({
-        text: this.$i18n.t(x),
+        text: this.$t(x),
         value: x,
       })),
       paddingPercentages: Object.values(PaddingPercentage).map(x => ({
-        text: x === 0 ? this.$i18n.t('bookreader.settings.side_padding_none').toString() : `${x}%`,
+        text: x === 0 ? this.$t('bookreader.settings.side_padding_none').toString() : `${x}%`,
         value: x,
       })),
       marginValues: Object.values(MarginValues).map(x => ({
-        text: x === 0 ? this.$i18n.t('bookreader.settings.side_padding_none').toString() : `${x}px`,
+        text: x === 0 ? this.$t('bookreader.settings.side_padding_none').toString() : `${x}px`,
         value: x,
       })),
       backgroundColors: [
@@ -469,7 +463,7 @@ export default Vue.extend({
 
     this.setup(this.bookId, Number(this.$route.query.page))
   },
-  destroyed() {
+  unmounted() {
     document.documentElement.classList.remove('html-reader')
 
     this.$vuetify.rtl = (this.$t('common.locale_rtl') === 'true')
@@ -809,7 +803,7 @@ export default Vue.extend({
           contextId: this.context.id,
           incognito: this.incognito.toString(),
         },
-      } as Location)
+      } as RouteLocationRaw)
     },
     closeBook() {
       this.$router.push(
@@ -860,7 +854,7 @@ export default Vue.extend({
       const enumValues = Object.values(PagedReaderLayout)
       const i = (enumValues.indexOf(this.settings.pageLayout) + 1) % (enumValues.length)
       this.pageLayout = enumValues[i]
-      const text = this.$i18n.t(this.pageLayout)
+      const text = this.$t(this.pageLayout)
       this.sendNotification(`${this.$t('bookreader.cycling_page_layout')}: ${text}`)
     },
     toggleToolbars() {

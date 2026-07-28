@@ -43,7 +43,7 @@
       <item-browser
         :items="collections"
         :selectable="isAdmin"
-        :selected.sync="selectedCollections"
+        v-model:selected="selectedCollections"
         :edit-function="isAdmin ? editSingleCollection : undefined"
       />
 
@@ -65,14 +65,14 @@ import LibraryNavigation from '@/components/LibraryNavigation.vue'
 import LibraryActionsMenu from '@/components/menus/LibraryActionsMenu.vue'
 import PageSizeSelect from '@/components/PageSizeSelect.vue'
 import {COLLECTION_ADDED, COLLECTION_CHANGED, COLLECTION_DELETED, LIBRARY_CHANGED} from '@/types/events'
-import Vue from 'vue'
-import {Location} from 'vue-router'
+import {defineComponent} from 'vue'
+import type {RouteLocationRaw} from 'vue-router'
 import {LIBRARIES_ALL, LIBRARY_ROUTE} from '@/types/library'
 import {LibrarySseDto} from '@/types/komga-sse'
 import MultiSelectBar from '@/components/bars/MultiSelectBar.vue'
 import {LibraryDto} from '@/types/komga-libraries'
 
-export default Vue.extend({
+export default defineComponent({
   name: 'BrowseCollections',
   components: {
     LibraryActionsMenu,
@@ -114,7 +114,7 @@ export default Vue.extend({
     this.$eventHub.$on(COLLECTION_DELETED, this.reloadCollections)
     this.$eventHub.$on(LIBRARY_CHANGED, this.reloadLibrary)
   },
-  beforeDestroy() {
+  beforeUnmount() {
     this.$eventHub.$off(COLLECTION_ADDED, this.reloadCollections)
     this.$eventHub.$off(COLLECTION_CHANGED, this.reloadCollections)
     this.$eventHub.$off(COLLECTION_DELETED, this.reloadCollections)
@@ -205,7 +205,7 @@ export default Vue.extend({
           page: `${this.page}`,
           pageSize: `${this.pageSize}`,
         },
-      } as Location).catch((_: any) => {
+      } as RouteLocationRaw).catch((_: any) => {
       })
     },
     reloadCollections() {

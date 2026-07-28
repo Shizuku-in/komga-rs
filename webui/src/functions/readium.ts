@@ -1,6 +1,6 @@
 import {Locator, ReadingPosition} from '@d-i-t-a/reader'
 import {R2Location, R2Locator, R2Progression} from '@/types/readium'
-import {Locations} from '@d-i-t-a/reader/dist/types/model/Locator'
+import type {Locations} from '@d-i-t-a/reader/dist/types/model/Locator'
 import urls from '@/functions/urls'
 
 export function createR2Progression(locator: Locator): R2Progression {
@@ -33,7 +33,7 @@ function locationsToR2Location(location: Locations): R2Location {
   }
 }
 
-export function r2ProgressionToReadingPosition(progression?: R2Progression, bookId: string): ReadingPosition | undefined {
+export function r2ProgressionToReadingPosition(progression: R2Progression | undefined, bookId: string): ReadingPosition | undefined {
   try {
     return {
       created: progression.modified,

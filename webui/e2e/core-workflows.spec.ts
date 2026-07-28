@@ -10,6 +10,30 @@ const ADMIN_PASSWORD = 'password123'
 
 test.describe.configure({mode: 'serial'})
 
+const browserProblems = new WeakMap<Page, string[]>()
+
+test.beforeEach(async ({page}) => {
+  const problems: string[] = []
+  browserProblems.set(page, problems)
+  page.on('console', message => {
+    const failedResource = message.text().startsWith('Failed to load resource:')
+    if ((message.type() === 'error' && !failedResource) || message.type() === 'warning') {
+      problems.push(`console.${message.type()}: ${message.text()}`)
+    }
+  })
+  page.on('pageerror', error => problems.push(`pageerror: ${error.message}`))
+  page.on('response', response => {
+    const resourceType = response.request().resourceType()
+    if (response.status() >= 400 && ['document', 'script', 'stylesheet'].includes(resourceType)) {
+      problems.push(`${resourceType} ${response.status()}: ${response.url()}`)
+    }
+  })
+})
+
+test.afterEach(async ({page}) => {
+  expect(browserProblems.get(page)).toEqual([])
+})
+
 test('claim, login, library reading and COPY import work in a browser', async ({page}) => {
   test.setTimeout(180_000)
   const state = readState()
@@ -74,7 +98,7 @@ test('claim, login, library reading and COPY import work in a browser', async ({
   }, {timeout: 20_000}).toBe(2)
 
   await page.goto(`${state.rootUrl}/import/books`)
-  await page.getByLabel('Import from folder').fill(state.importRoot)
+  await page.getByRole('textbox', {name: 'Import from folder', exact: true}).fill(state.importRoot)
   await page.getByRole('button', {name: 'Scan', exact: true}).click()
   await expect(page.getByText('Import Candidate', {exact: true}).first()).toBeVisible()
   await expect(page.getByText('Example Series', {exact: true}).last()).toBeVisible({timeout: 20_000})
@@ -97,6 +121,68 @@ test('claim, login, library reading and COPY import work in a browser', async ({
   expect(books.map(book => book.name).sort()).toEqual(['Import Candidate', 'Volume 1'])
   expect(fs.existsSync(path.join(state.importRoot, 'Import Candidate.cbz'))).toBe(true)
   expect(fs.existsSync(path.join(state.libraryRoot, 'Example Series', 'Import Candidate.cbz'))).toBe(true)
+})
+
+test('search, administration routes and responsive navigation render without browser errors', async ({page}, testInfo) => {
+  test.setTimeout(120_000)
+  const state = readState()
+
+  await page.goto(state.rootUrl)
+  await signIn(page)
+
+  const libraries = await pollJsonArray(page, `${state.rootUrl}/api/v1/libraries`, value => value.length === 1)
+  const libraryId = libraries[0].id as string
+
+  const search = page.getByPlaceholder('Search')
+  await search.fill('Example')
+  const searchMenu = page.locator('.v-autocomplete__content')
+  await expect(searchMenu.getByText('Example Series', {exact: true})).toBeVisible()
+  await searchMenu.getByText('Example Series', {exact: true}).click()
+  await expect(page).toHaveURL(/\/series\/[^/]+$/)
+
+  await page.locator('.v-toolbar .mdi-pencil').click()
+  const editSeriesDialog = page.getByRole('dialog').filter({hasText: 'Edit Example Series'})
+  await expect(editSeriesDialog).toBeVisible()
+  await editSeriesDialog.getByRole('tab', {name: 'Links', exact: true}).click()
+  await editSeriesDialog.locator('.mdi-plus').click()
+  await editSeriesDialog.getByLabel('Label').fill('Project')
+  await editSeriesDialog.getByLabel('URL').fill('not-a-url')
+  await editSeriesDialog.getByRole('button', {name: 'Save changes', exact: true}).last().click()
+  await expect(editSeriesDialog.getByText('Must be a valid URL', {exact: true})).toBeVisible()
+  await expect(editSeriesDialog).toBeVisible()
+  await editSeriesDialog.getByRole('button', {name: 'Cancel', exact: true}).last().click()
+  await expect(editSeriesDialog).not.toBeVisible()
+
+  const routes = [
+    `/libraries/${libraryId}/series`,
+    '/settings/users',
+    '/settings/server',
+    '/media-management/analysis',
+    '/media-management/duplicate-pages/known',
+    '/history',
+    '/account/api-keys',
+    '/import/readlist',
+  ]
+  for (const route of routes) {
+    await page.goto(`${state.rootUrl}${route}`)
+    await expect(page.getByRole('main')).toBeVisible()
+    await expect(page).not.toHaveURL(/\/login(?:\?|$)/)
+    expect(await hasHorizontalOverflow(page)).toBe(false)
+  }
+
+  await page.goto(`${state.rootUrl}/settings/server`)
+  await page.screenshot({path: testInfo.outputPath('desktop-settings.png'), fullPage: true})
+
+  await page.setViewportSize({width: 390, height: 844})
+  await page.goto(`${state.rootUrl}/libraries/${libraryId}/series`)
+  await page.locator('.v-app-bar-nav-icon').click()
+  const navigationDrawer = page.locator('.v-navigation-drawer--active').filter({hasText: 'E2E Library'})
+  await expect(navigationDrawer).toBeVisible()
+  await expect(navigationDrawer.getByText('E2E Library', {exact: true})).toBeVisible()
+  await expect.poll(async () => (await navigationDrawer.boundingBox())?.width ?? 0).toBeGreaterThan(200)
+  await expect.poll(async () => (await navigationDrawer.boundingBox())?.x ?? -1).toBeGreaterThanOrEqual(0)
+  expect(await hasHorizontalOverflow(page)).toBe(false)
+  await page.screenshot({path: testInfo.outputPath('mobile-navigation.png'), fullPage: true})
 })
 
 test('context-path login, deep-link refresh and static assets stay under /komga', async ({page}) => {
@@ -178,4 +264,8 @@ async function responseJson(response: APIResponse): Promise<any> {
     throw new Error(`${response.status()} ${response.url()}: ${await response.text()}`)
   }
   return response.json()
+}
+
+async function hasHorizontalOverflow(page: Page): Promise<boolean> {
+  return page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1)
 }

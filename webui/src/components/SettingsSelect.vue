@@ -4,63 +4,41 @@
       <span class="">{{ label }}</span>
     </v-col>
     <v-col cols="7">
-      <v-select
-        filled
-        dense
-        solo
+      <v-select density="compact" variant="solo"
         :items="items"
-        v-model="input"
-        @input="updateInput"
-        @change="updateInput"
-        hide-details="true"
+        :model-value="modelValue"
+        @update:model-value="$emit('update:modelValue', $event)"
+        hide-details
       />
     </v-col>
   </v-row>
 </template>
 
 <script lang="ts">
-import Vue from 'vue'
+import {defineComponent} from 'vue'
 
-export default Vue.extend({
+export default defineComponent({
   name: 'SettingsSelect',
   props: {
     items: null as any,
     label: {
       type: String,
     },
-    value: {
+    modelValue: {
       type: [String, Number],
     },
     display: {
       type: String,
     },
   },
-  data () {
-    return {
-      input: '',
-    }
-  },
-  watch: {
-    value: {
-      handler (after) {
-        this.input = after
-      },
-      immediate: true,
-    },
-  },
-  methods: {
-    updateInput () {
-      this.$emit('input', this.input)
-    },
-  },
 })
 </script>
 
 <style>
-  .v-text-field__details, div.v-input__control {
+  .v-input__details, div.v-input__control {
     min-height: 0 !important;
   }
-  .v-text-field__details {
+  .v-input__details {
     display: none !important;
   }
 

@@ -13,11 +13,11 @@
           <v-toolbar-title>{{ dialogTitle }}</v-toolbar-title>
           <v-spacer/>
           <v-toolbar-items>
-            <v-btn text color="primary" @click="dialogConfirm">{{ $t('dialog.edit_books.button_confirm') }}</v-btn>
+            <v-btn variant="text" color="primary" @click="dialogConfirm">{{ $t('dialog.edit_books.button_confirm') }}</v-btn>
           </v-toolbar-items>
         </v-toolbar>
 
-        <v-card-title class="hidden-xs-only">
+        <v-card-title class="hidden-xs">
           <v-icon class="mx-4">mdi-pencil</v-icon>
           {{ dialogTitle }}
         </v-card-title>
@@ -32,9 +32,9 @@
                 :cols="prop.cols ? prop.cols : undefined"
               >
                 <v-btn icon @click="changeAllLock(prop.prop, lockStatus(prop.prop) !== 2)">
-                  <v-tooltip bottom>
-                    <template v-slot:activator="{ on }">
-                      <v-icon v-on="on" :color="lockStatus(prop.prop) === 2 ? 'secondary' : ''">
+                  <v-tooltip location="bottom">
+                    <template v-slot:activator="{ props }">
+                      <v-icon v-bind="props" :color="lockStatus(prop.prop) === 2 ? 'secondary' : ''">
                         {{ lockStatus(prop.prop) !== 0 ? 'mdi-lock' : 'mdi-lock-open' }}
                       </v-icon>
                     </template>
@@ -42,28 +42,28 @@
                   </v-tooltip>
                 </v-btn>
 
-                <span class="subtitle-1">{{ prop.label }}</span>
+                <span class="text-subtitle-1">{{ prop.label }}</span>
                 <v-btn v-if="prop.prop === 'number'" icon @click="copyFromNumberSort">
-                  <v-tooltip bottom>
-                    <template v-slot:activator="{ on }">
-                      <v-icon v-on="on">mdi-content-copy</v-icon>
+                  <v-tooltip location="bottom">
+                    <template v-slot:activator="{ props }">
+                      <v-icon v-bind="props">mdi-content-copy</v-icon>
                     </template>
                     <span>{{ $t('dialog.edit_books.copy_from', {field: $t('dialog.edit_books.field_number_sort')}) }}</span>
                   </v-tooltip>
                 </v-btn>
                 <span v-if="prop.prop === 'numberSort'">
                   <v-btn icon @click="numberSortDecrement">
-                    <v-tooltip bottom>
-                    <template v-slot:activator="{ on }">
-                      <v-icon v-on="on">mdi-numeric-negative-1</v-icon>
+                    <v-tooltip location="bottom">
+                    <template v-slot:activator="{ props }">
+                      <v-icon v-bind="props">mdi-numeric-negative-1</v-icon>
                     </template>
                     <span>{{ $t('dialog.edit_books.number_sort_decrement') }}</span>
                   </v-tooltip>
                   </v-btn>
                   <v-btn icon @click="numberSortIncrement">
-                    <v-tooltip bottom>
-                    <template v-slot:activator="{ on }">
-                      <v-icon v-on="on">mdi-numeric-positive-1</v-icon>
+                    <v-tooltip location="bottom">
+                    <template v-slot:activator="{ props }">
+                      <v-icon v-bind="props">mdi-numeric-positive-1</v-icon>
                     </template>
                     <span>{{ $t('dialog.edit_books.number_sort_increment') }}</span>
                   </v-tooltip>
@@ -81,16 +81,15 @@
                  :key="book.id"
                  class="pa-2"
             >
-              <div class="subtitle-2 mb-2">{{ bookDisplayName(book) }}</div>
+              <div class="text-subtitle-2 mb-2">{{ bookDisplayName(book) }}</div>
 
               <!--  Title  -->
               <v-row>
                 <v-col>
-                  <v-text-field v-model="form[book.id].title"
-                                dense
-                                validate-on-blur
+                  <v-text-field v-model="form[book.id].title" density="compact"
+                                validate-on="blur"
                                 :rules="[validateRequired]"
-                                @change="form[book.id].titleLock = true"
+                                @update:model-value="form[book.id].titleLock = true"
                   >
                     <template v-slot:prepend>
                       <v-icon :color="form[book.id].titleLock ? 'secondary' : ''"
@@ -104,11 +103,10 @@
 
                 <!--  Number  -->
                 <v-col cols="2">
-                  <v-text-field v-model="form[book.id].number"
-                                dense
-                                validate-on-blur
+                  <v-text-field v-model="form[book.id].number" density="compact"
+                                validate-on="blur"
                                 :rules="[validateRequired]"
-                                @change="form[book.id].numberLock = true"
+                                @update:model-value="form[book.id].numberLock = true"
                   >
                     <template v-slot:prepend>
                       <v-icon :color="form[book.id].numberLock ? 'secondary' : ''"
@@ -124,11 +122,10 @@
                 <v-col cols="2">
                   <v-text-field v-model.number="form[book.id].numberSort"
                                 type="number"
-                                step="0.1"
-                                dense
+                                step="0.1" density="compact"
                                 validate-on-blur
                                 :rules="[validateRequired]"
-                                @change="form[book.id].numberSortLock = true"
+                                @update:model-value="form[book.id].numberSortLock = true"
                   >
                     <template v-slot:prepend>
                       <v-icon :color="form[book.id].numberSortLock ? 'secondary' : ''"
@@ -142,13 +139,12 @@
 
                 <!--  Release Date  -->
                 <v-col cols="2">
-                  <v-text-field v-model="form[book.id].releaseDate"
-                                dense
+                  <v-text-field v-model="form[book.id].releaseDate" density="compact"
                                 placeholder="YYYY-MM-DD"
                                 clearable
                                 validate-on-blur
                                 :rules="[validateReleaseDate]"
-                                @change="form[book.id].releaseDateLock = true"
+                                @update:model-value="form[book.id].releaseDateLock = true"
                   >
                     <template v-slot:prepend>
                       <v-icon :color="form[book.id].releaseDateLock ? 'secondary' : ''"
@@ -162,13 +158,12 @@
 
                 <!--  ISBN  -->
                 <v-col cols="2">
-                  <v-text-field v-model.trim="form[book.id].isbn"
-                                dense
+                  <v-text-field v-model.trim="form[book.id].isbn" density="compact"
                                 placeholder="978-2-20-504375-4"
                                 clearable
                                 validate-on-blur
                                 :rules="[validateIsbn]"
-                                @change="form[book.id].isbnLock = true"
+                                @update:model-value="form[book.id].isbnLock = true"
                   >
                     <template v-slot:prepend>
                       <v-icon :color="form[book.id].isbnLock ? 'secondary' : ''"
@@ -187,9 +182,9 @@
           </v-container>
         </v-card-text>
 
-        <v-card-actions class="hidden-xs-only">
+        <v-card-actions class="hidden-xs">
           <v-spacer/>
-          <v-btn text @click="dialogCancel">{{ $t('dialog.edit_books.button_cancel') }}</v-btn>
+          <v-btn variant="text" @click="dialogCancel">{{ $t('dialog.edit_books.button_cancel') }}</v-btn>
           <v-btn color="primary" @click="dialogConfirm">{{ $t('dialog.edit_books.button_confirm') }}</v-btn>
         </v-card-actions>
       </v-card>
@@ -198,13 +193,13 @@
 </template>
 
 <script lang="ts">
-import Vue from 'vue'
+import {defineComponent} from 'vue'
 import {BookDto} from '@/types/komga-books'
 import IsbnVerify from '@w0s/isbn-verify'
 import {isMatch} from 'date-fns'
 import {ERROR} from '@/types/events'
 
-export default Vue.extend({
+export default defineComponent({
   name: 'BulkEditBooksDialog',
   data: () => {
     return {
@@ -226,14 +221,14 @@ export default Vue.extend({
     }
   },
   props: {
-    value: Boolean,
+    modelValue: Boolean,
     books: {
       type: Array as () => BookDto[],
       required: true,
     },
   },
   watch: {
-    value(val) {
+    modelValue(val) {
       this.modal = val
     },
     modal(val) {
@@ -339,22 +334,23 @@ export default Vue.extend({
       }, {} as any)
     },
     dialogCancel() {
-      this.$emit('input', false)
+      this.$emit('update:modelValue', false)
       this.dialogReset(this.books)
     },
     async dialogConfirm() {
       if (await this.editBooks()) {
-        this.$emit('input', false)
+        this.$emit('update:modelValue', false)
       }
     },
-    validateForm(): any {
-      if ((this.$refs.form as any).validate()) {
+    async validateForm(): Promise<any> {
+      const {valid} = await (this.$refs.form as any).validate()
+      if (valid) {
         return this.form
       }
       return null
     },
     async editBooks(): Promise<boolean> {
-      const metadata = this.validateForm()
+      const metadata = await this.validateForm()
       if (metadata) {
         try {
           await this.$komgaBooks.updateMetadataBatch(metadata)
@@ -369,5 +365,5 @@ export default Vue.extend({
 </script>
 
 <style lang="sass" scoped>
-@import '../../styles/tabbed-dialog'
+@use '../../styles/tabbed-dialog'
 </style>

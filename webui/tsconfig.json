@@ -5,18 +5,15 @@
     "strict": true,
     "jsx": "preserve",
     "importHelpers": true,
-    "moduleResolution": "node",
-    "ignoreDeprecations": "6.0",
+    "moduleResolution": "bundler",
     "esModuleInterop": true,
     "allowSyntheticDefaultImports": true,
     "sourceMap": true,
     "useUnknownInCatchVariables": false,
     "baseUrl": ".",
     "types": [
-      "webpack-env",
-      "jest",
-      "vuetify",
-      "webpack"
+      "vite/client",
+      "vitest/globals"
     ],
     "paths": {
       "@/*": [
@@ -34,6 +31,7 @@
     "src/**/*.ts",
     "src/**/*.tsx",
     "src/**/*.vue",
+    "vite.config.ts",
     "tests/**/*.ts",
     "tests/**/*.tsx"
   ],

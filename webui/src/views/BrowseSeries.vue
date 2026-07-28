@@ -2,10 +2,10 @@
   <div v-if="!$_.isEmpty(series)">
     <toolbar-sticky v-if="selectedBooks.length === 0">
       <!--   Go back to parent library   -->
-      <v-tooltip bottom :disabled="!isAdmin">
-        <template v-slot:activator="{ on }">
+      <v-tooltip location="bottom" :disabled="!isAdmin">
+        <template v-slot:activator="{ props }">
           <v-btn icon
-                 v-on="on"
+                 v-bind="props"
                  :to="parentLocation"
           >
             <rtl-icon icon="mdi-arrow-left" rtl="mdi-arrow-right"/>
@@ -60,15 +60,15 @@
       <template v-slot:default>
         <filter-list
           :filters-options="filterOptionsList"
-          :filters-active.sync="filters"
+          v-model:filters-active="filters"
         />
       </template>
 
       <template v-slot:filter>
         <filter-panels
           :filters-options="filterOptionsPanel"
-          :filters-active.sync="filters"
-          :filters-active-mode.sync="filtersMode"
+          v-model:filters-active="filters"
+          v-model:filters-active-mode="filtersMode"
         />
       </template>
 
@@ -76,7 +76,7 @@
         <sort-list
           :sort-default="sortDefault"
           :sort-options="sortOptions"
-          :sort-active.sync="sortActive"
+          v-model:sort-active="sortActive"
         />
       </template>
     </filter-drawer>
@@ -100,7 +100,7 @@
               <v-col class="py-1">
                 <span class="text-h5" v-if="$_.get(series, 'metadata.title')">{{ series.metadata.title }}</span>
                 <router-link
-                  class="caption link-underline"
+                  class="text-caption link-underline"
                   :class="$vuetify.breakpoint.smAndUp ? 'mx-2' : ''"
                   :style="$vuetify.breakpoint.xsOnly ? 'display: block' : ''"
                   :to="{name:'browse-libraries', params: {libraryId: series.libraryId }}"
@@ -111,9 +111,9 @@
 
             <v-row v-if="series.booksMetadata.releaseDate" class="align-center text-caption">
               <v-col class="py-1">
-                <v-tooltip right>
-                  <template v-slot:activator="{ on }">
-                  <span v-on="on">{{
+                <v-tooltip location="right">
+                  <template v-slot:activator="{ props }">
+                  <span v-bind="props">{{
                       new Intl.DateTimeFormat($i18n.locale, {
                         year: 'numeric',
                         timeZone: 'UTC'
@@ -127,20 +127,20 @@
 
             <v-row class="text-body-2">
               <v-col class="py-1 pe-0" cols="auto">
-                <v-chip label small link :color="statusChip.color" :text-color="statusChip.text"
+                <v-chip label size="small" link :color="statusChip.color"
                         :to="{name:'browse-libraries', params: {libraryId: series.libraryId }, query: {status: [new SearchConditionSeriesStatus(new SearchOperatorIs(series.metadata.status))]}}">
                   {{ $t(`enums.series_status.${series.metadata.status}`) }}
                 </v-chip>
               </v-col>
               <v-col class="py-1 pe-0" cols="auto" v-if="series.metadata.ageRating">
-                <v-chip label small link
+                <v-chip label size="small" link
                         :to="{name:'browse-libraries', params: {libraryId: series.libraryId }, query: {ageRating: [new SearchConditionAgeRating(new SearchOperatorIs(series.metadata.ageRating.toString()))]}}"
                 >
                   {{ series.metadata.ageRating }}+
                 </v-chip>
               </v-col>
               <v-col class="py-1 pe-0" cols="auto" v-if="series.metadata.language">
-                <v-chip label small link
+                <v-chip label size="small" link
                         :to="{name:'browse-libraries', params: {libraryId: series.libraryId }, query: {language: [new SearchConditionLanguage(new SearchOperatorIs(series.metadata.language))]}}"
                 >
                   {{ languageDisplay }}
@@ -148,12 +148,12 @@
               </v-col>
               <v-col class="py-1 pe-0" cols="auto"
                      v-if="series.metadata.readingDirection">
-                <v-chip label small>
+                <v-chip label size="small">
                   {{ $t(`enums.reading_direction.${series.metadata.readingDirection}`) }}
                 </v-chip>
               </v-col>
               <v-col class="py-1 pe-0" cols="auto" v-if="unavailable">
-                <v-chip label small color="error">
+                <v-chip label size="small" color="error">
                   {{ $t('common.unavailable') }}
                 </v-chip>
               </v-col>
@@ -194,11 +194,10 @@
 
               <v-row class="align-center">
                 <v-col cols="auto">
-                  <v-btn :title="$t('menu.download_series')"
-                         small
+                  <v-btn :title="$t('menu.download_series')" size="small"
                          :disabled="!canDownload"
                          :href="fileUrl">
-                    <v-icon left small>mdi-file-download</v-icon>
+                    <v-icon start size="small">mdi-file-download</v-icon>
                     {{ $t('common.download') }}
                   </v-btn>
                 </v-col>
@@ -212,9 +211,9 @@
 
               <v-row v-if="!series.metadata.summary && series.booksMetadata.summary">
                 <v-col>
-                  <v-tooltip right>
-                    <template v-slot:activator="{ on }">
-                  <span v-on="on" class="text-caption">
+                  <v-tooltip location="right">
+                    <template v-slot:activator="{ props }">
+                  <span v-bind="props" class="text-caption">
                     {{ $t('browse_series.summary_from_book', {number: series.booksMetadata.summaryNumber}) }}
                   </span>
                     </template>
@@ -256,11 +255,10 @@
         <!--   Download button     -->
         <v-row class="align-center">
           <v-col cols="auto">
-            <v-btn :title="$t('menu.download_series')"
-                   small
+            <v-btn :title="$t('menu.download_series')" size="small"
                    :disabled="!canDownload"
                    :href="fileUrl">
-              <v-icon left small>mdi-file-download</v-icon>
+              <v-icon start size="small">mdi-file-download</v-icon>
               {{ $t('common.download') }}
             </v-btn>
           </v-col>
@@ -276,9 +274,9 @@
         <!--   Series summary from books     -->
         <v-row v-if="!series.metadata.summary && series.booksMetadata.summary">
           <v-col>
-            <v-tooltip right>
-              <template v-slot:activator="{ on }">
-                  <span v-on="on" class="text-caption">
+            <v-tooltip location="right">
+              <template v-slot:activator="{ props }">
+                  <span v-bind="props" class="text-caption">
                     {{ $t('browse_series.summary_from_book', {number: series.booksMetadata.summaryNumber}) }}
                   </span>
               </template>
@@ -297,9 +295,7 @@
             class="me-2"
             :title="series.metadata.publisher"
             :to="{name:'browse-libraries', params: {libraryId: series.libraryId }, query: {publisher: [new SearchConditionPublisher(new SearchOperatorIs(series.metadata.publisher))]}}"
-            label
-            small
-            outlined
+            label size="small" variant="outlined"
             link
           >{{ series.metadata.publisher }}
           </v-chip>
@@ -312,13 +308,13 @@
         <v-col cols="8" sm="9" md="10" xl="11" class="py-1 text-capitalize">
           <vue-horizontal>
             <template v-slot:btn-prev>
-              <v-btn icon small>
+              <v-btn icon size="small">
                 <v-icon>mdi-chevron-left</v-icon>
               </v-btn>
             </template>
 
             <template v-slot:btn-next>
-              <v-btn icon small>
+              <v-btn icon size="small">
                 <v-icon>mdi-chevron-right</v-icon>
               </v-btn>
             </template>
@@ -327,9 +323,7 @@
                     class="me-2"
                     :title="t"
                     :to="{name:'browse-libraries', params: {libraryId: series.libraryId }, query: {genre: [new SearchConditionGenre(new SearchOperatorIs(t))]}}"
-                    label
-                    small
-                    outlined
+                    label size="small" variant="outlined"
                     link
             >{{ t }}
             </v-chip>
@@ -344,13 +338,13 @@
         <v-col cols="8" sm="9" md="10" xl="11" class="py-1 text-capitalize">
           <vue-horizontal>
             <template v-slot:btn-prev>
-              <v-btn icon small>
+              <v-btn icon size="small">
                 <v-icon>mdi-chevron-left</v-icon>
               </v-btn>
             </template>
 
             <template v-slot:btn-next>
-              <v-btn icon small>
+              <v-btn icon size="small">
                 <v-icon>mdi-chevron-right</v-icon>
               </v-btn>
             </template>
@@ -359,9 +353,7 @@
                     class="me-2"
                     :title="t"
                     :to="{name:'browse-libraries', params: {libraryId: series.libraryId }, query: {tag: [new SearchConditionTag(new SearchOperatorIs(t))]}}"
-                    label
-                    small
-                    outlined
+                    label size="small" variant="outlined"
                     link
             >{{ t }}
             </v-chip>
@@ -370,9 +362,7 @@
                     class="me-2"
                     :title="t"
                     :to="{name:'browse-libraries', params: {libraryId: series.libraryId }, query: {tag: [new SearchConditionTag(new SearchOperatorIs(t))]}}"
-                    label
-                    small
-                    outlined
+                    label size="small" variant="outlined"
                     link
                     color="contrast-light-2"
             >{{ t }}
@@ -390,15 +380,12 @@
             rel="noreferrer"
             target="_blank"
             class="me-2"
-            label
-            small
-            outlined
+            label size="small" variant="outlined"
             link
             :key="i"
           >
             {{ link.label }}
-            <v-icon
-              x-small
+            <v-icon size="x-small"
               color="grey"
               class="ps-1"
             >
@@ -417,13 +404,13 @@
         <v-col cols="8" sm="9" md="10" xl="11" class="py-1">
           <vue-horizontal>
             <template v-slot:btn-prev>
-              <v-btn icon small>
+              <v-btn icon size="small">
                 <v-icon>mdi-chevron-left</v-icon>
               </v-btn>
             </template>
 
             <template v-slot:btn-next>
-              <v-btn icon small>
+              <v-btn icon size="small">
                 <v-icon>mdi-chevron-right</v-icon>
               </v-btn>
             </template>
@@ -433,9 +420,7 @@
                     class="me-2"
                     :title="name"
                     :to="{name:'browse-libraries', params: {libraryId: series.libraryId }, query: {[role]: [name]}}"
-                    label
-                    small
-                    outlined
+                    label size="small" variant="outlined"
                     link
             >{{ name }}
             </v-chip>
@@ -447,9 +432,9 @@
         <v-col>
           <collections-expansion-panels :collections="collections">
             <template v-slot:prepend="props">
-              <v-tooltip bottom>
-                <template v-slot:activator="{ on }">
-                  <v-btn icon class="me-2" v-on="on" @click="removeFromCollection(props.collection.id)">
+              <v-tooltip location="bottom">
+                <template v-slot:activator="{ props: activatorProps }">
+                  <v-btn icon class="me-2" v-bind="activatorProps" @click="removeFromCollection(props.collection.id)">
                     <v-icon>mdi-playlist-remove</v-icon>
                   </v-btn>
                 </template>
@@ -482,7 +467,7 @@
 
         <item-browser :items="books"
                       :item-context="itemContext"
-                      :selected.sync="selectedBooks"
+                      v-model:selected="selectedBooks"
                       :edit-function="isAdmin ? editSingleBook : undefined"
         />
 
@@ -524,8 +509,8 @@ import {
   SERIES_CHANGED,
   SERIES_DELETED,
 } from '@/types/events'
-import Vue from 'vue'
-import {Location} from 'vue-router'
+import {defineComponent} from 'vue'
+import type {RouteLocationRaw} from 'vue-router'
 import {BookDto} from '@/types/komga-books'
 import {SeriesStatus} from '@/types/enum-series'
 import FilterDrawer from '@/components/FilterDrawer.vue'
@@ -542,13 +527,12 @@ import {SeriesDto} from '@/types/komga-series'
 import {groupAuthorsByRole} from '@/functions/authors'
 import ReadMore from '@/components/ReadMore.vue'
 import {authorRoles, authorRolesSeries} from '@/types/author-roles'
-import VueHorizontal from 'vue-horizontal'
+import VueHorizontal from '@/components/VueHorizontal.vue'
 import RtlIcon from '@/components/RtlIcon.vue'
 import {throttle} from 'lodash'
 import {BookSseDto, CollectionSseDto, LibrarySseDto, ReadProgressSseDto, SeriesSseDto} from '@/types/komga-sse'
 import {ItemContext} from '@/types/items'
 import {Context, ContextOrigin} from '@/types/context'
-import {RawLocation} from 'vue-router/types/router'
 import {
   SearchConditionAgeRating,
   SearchConditionAllOfBook,
@@ -583,9 +567,9 @@ import {
   NameValue,
 } from '@/types/filter'
 
-const tags = require('language-tags')
+import tags from 'language-tags'
 
-export default Vue.extend({
+export default defineComponent({
   name: 'BrowseSeries',
   components: {
     ToolbarSticky,
@@ -787,7 +771,7 @@ export default Vue.extend({
     contextCollection(): boolean {
       return this.context.origin === ContextOrigin.COLLECTION
     },
-    parentLocation(): RawLocation {
+    parentLocation(): RouteLocationRaw {
       if (this.contextCollection)
         return {name: 'browse-collection', params: {collectionId: this.context.id}}
       else
@@ -820,7 +804,7 @@ export default Vue.extend({
     this.$eventHub.$on(COLLECTION_CHANGED, this.collectionChanged)
     this.$eventHub.$on(COLLECTION_DELETED, this.collectionChanged)
   },
-  beforeDestroy() {
+  beforeUnmount() {
     this.$eventHub.$off(SERIES_CHANGED, this.seriesChanged)
     this.$eventHub.$off(SERIES_DELETED, this.seriesDeleted)
     this.$eventHub.$off(BOOK_ADDED, this.bookChanged)
@@ -873,7 +857,7 @@ export default Vue.extend({
     resetSortAndFilters() {
       this.drawer = false
       for (const prop in this.filters) {
-        this.$set(this.filters, prop, [])
+        this.filters[prop] = []
       }
       this.sortActive = this.sortDefault
       this.updateRouteAndReload()
@@ -882,7 +866,7 @@ export default Vue.extend({
       this.sortActive = this.parseQuerySortOrDefault(route.query.sort)
 
       // load dynamic filters
-      this.$set(this.filterOptions, 'tag', toNameValueCondition(await this.$komgaReferential.getBookTags(seriesId), x => new SearchConditionTag(new SearchOperatorIs(x)), x => new SearchConditionTag(new SearchOperatorIsNot(x))))
+      this.filterOptions.tag = toNameValueCondition(await this.$komgaReferential.getBookTags(seriesId), x => new SearchConditionTag(new SearchOperatorIs(x)), x => new SearchConditionTag(new SearchOperatorIsNot(x)))
 
       // get filter from query params and validate with available filter values
       let activeFilters = {} as FiltersActive
@@ -1030,7 +1014,7 @@ export default Vue.extend({
           pageSize: `${this.pageSize}`,
           sort: `${this.sortActive.key},${this.sortActive.order}`,
         },
-      } as Location
+      } as RouteLocationRaw
       mergeFilterParams(this.filters, loc.query)
       loc.query['filterMode'] = this.validateFiltersMode(this.filtersMode)
       this.$router.replace(loc).catch((_: any) => {

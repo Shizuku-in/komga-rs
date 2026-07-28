@@ -1,59 +1,41 @@
 <template>
-  <v-menu offset-y>
-    <template v-slot:activator="{on}">
-      <v-btn icon v-on="on">
+  <v-menu location="bottom">
+    <template v-slot:activator="{ props }">
+      <v-btn icon v-bind="props">
         <v-icon>mdi-view-grid-plus</v-icon>
       </v-btn>
     </template>
-    <v-list :dark="dark">
-      <v-list-item-group v-model="selection">
-
-        <v-list-item v-for="(item, index) in items"
-                     :key="index"
-                     @click="setPageSize(item)"
-        >
-          <v-list-item-title>{{ item }}</v-list-item-title>
-        </v-list-item>
-      </v-list-item-group>
+    <v-list>
+      <v-list-item
+        v-for="item in items"
+        :key="item"
+        :active="item === modelValue"
+        @click="setPageSize(item)"
+      >
+        <v-list-item-title>{{ item }}</v-list-item-title>
+      </v-list-item>
     </v-list>
   </v-menu>
 </template>
 
 <script lang="ts">
-import Vue from 'vue'
+import {defineComponent} from 'vue'
 
-export default Vue.extend({
+export default defineComponent({
   name: 'PageSizeSelect',
-  data: () => {
-    return {
-      selection: 0,
-    }
-  },
   props: {
     items: {
-      type: Array,
+      type: Array as () => number[],
       default: () => [20, 50, 100, 200, 500],
     },
-    value: {
+    modelValue: {
       type: Number,
       required: true,
-    },
-    dark: {
-      type: Boolean,
-      default: false,
-    },
-  },
-  watch: {
-    value: {
-      handler(val) {
-        this.selection = this.items.findIndex(x => x === val)
-      },
-      immediate: true,
     },
   },
   methods: {
     setPageSize (size: number) {
-      this.$emit('input', size)
+      this.$emit('update:modelValue', size)
     },
   },
 })

@@ -6,7 +6,7 @@
     >
       <v-card>
         <v-card-title>{{ $t('dialog.book_picker.title') }}</v-card-title>
-        <v-btn icon absolute top right @click="dialogClose">
+        <v-btn icon position="absolute" location="top right" @click="dialogClose">
           <v-icon>mdi-close</v-icon>
         </v-btn>
 
@@ -26,8 +26,8 @@
 
             <v-divider/>
 
-            <v-list v-if="filteredBooks.length > 0" three-line>
-              <v-list-item-group color="primary" v-model="selectedItem">
+            <v-list v-if="filteredBooks.length > 0" lines="three">
+              <template>
                 <v-list-item
                   v-for="(book, index) in filteredBooks"
                   :key="index"
@@ -40,7 +40,7 @@
                          contain
                   />
 
-                  <v-list-item-content>
+                  <div>
                     <v-list-item-title>{{ book.metadata.title }}</v-list-item-title>
                     <v-list-item-subtitle>{{ book.metadata.number }}</v-list-item-subtitle>
                     <v-list-item-subtitle v-if="book.metadata.releaseDate">{{
@@ -50,9 +50,9 @@
                         }).format(new Date(book.metadata.releaseDate))
                       }}
                     </v-list-item-subtitle>
-                  </v-list-item-content>
+                  </div>
                 </v-list-item>
-              </v-list-item-group>
+              </template>
             </v-list>
           </v-container>
         </v-card-text>
@@ -63,11 +63,11 @@
 </template>
 
 <script lang="ts">
-import Vue, {PropType} from 'vue'
+import {defineComponent, PropType} from 'vue'
 import {BookDto} from '@/types/komga-books'
 import {bookThumbnailUrl} from '@/functions/urls'
 
-export default Vue.extend({
+export default defineComponent({
   name: 'BookPickerDialog',
   data: () => {
     return {
@@ -78,7 +78,7 @@ export default Vue.extend({
     }
   },
   props: {
-    value: Boolean,
+    modelValue: Boolean,
     books: {
       type: Array as PropType<BookDto[]>,
       required: true,
@@ -89,7 +89,7 @@ export default Vue.extend({
     },
   },
   watch: {
-    value(val) {
+    modelValue(val) {
       this.modal = val
       if (val) {
         this.clear()
@@ -122,7 +122,7 @@ export default Vue.extend({
       this.dialogClose()
     },
     dialogClose() {
-      this.$emit('input', false)
+      this.$emit('update:modelValue', false)
     },
     selectBook(books: BookDto[], book?: BookDto) {
       this.selectedItem = this.$_.findIndex(books, (b) => b.id === book?.id)

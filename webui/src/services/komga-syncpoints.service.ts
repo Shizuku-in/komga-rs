@@ -1,6 +1,6 @@
 import {AxiosInstance} from 'axios'
 
-const qs = require('qs')
+import qs from 'qs'
 
 const API_SYNCPOINTS = '/api/v1/syncpoints'
 

@@ -8,7 +8,7 @@ import {
   ReadListUpdateDto,
 } from '@/types/komga-readlists'
 
-const qs = require('qs')
+import qs from 'qs'
 
 const API_READLISTS = '/api/v1/readlists'
 

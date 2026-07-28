@@ -104,7 +104,7 @@ import CollectionEditDialog from '@/components/dialogs/CollectionEditDialog.vue'
 import EditBooksDialog from '@/components/dialogs/EditBooksDialog.vue'
 import EditSeriesDialog from '@/components/dialogs/EditSeriesDialog.vue'
 import LibraryEditDialog from '@/components/dialogs/LibraryEditDialog.vue'
-import Vue from 'vue'
+import {defineComponent} from 'vue'
 import ReadListAddToDialog from '@/components/dialogs/ReadListAddToDialog.vue'
 import ReadListEditDialog from '@/components/dialogs/ReadListEditDialog.vue'
 import {BookDto} from '@/types/komga-books'
@@ -116,7 +116,7 @@ import BulkEditBooksDialog from '@/components/dialogs/BulkEditBooksDialog.vue'
 import {ReadListDto} from '@/types/komga-readlists'
 import EditOneshotDialog from '@/components/dialogs/EditOneshotDialog.vue'
 
-export default Vue.extend({
+export default defineComponent({
   name: 'ReusableDialogs',
   components: {
     EditOneshotDialog,

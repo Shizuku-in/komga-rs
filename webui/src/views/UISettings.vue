@@ -6,7 +6,7 @@
 
         <v-radio-group
           v-model="form.seriesGroups"
-          @change="$v.form.seriesGroups.$touch()"
+          @update:model-value="v$.form.seriesGroups.$touch()"
           :label="$t('ui_settings.label_series_groups')"
           hide-details
         >
@@ -21,21 +21,21 @@
 
         <v-checkbox
           v-model="form.oauth2HideLogin"
-          @change="$v.form.oauth2HideLogin.$touch()"
+          @update:model-value="v$.form.oauth2HideLogin.$touch()"
           :label="$t('ui_settings.label_oauth2_hide_login')"
           hide-details
         />
 
         <v-checkbox
           v-model="form.oauth2AutoLogin"
-          @change="$v.form.oauth2AutoLogin.$touch()"
+          @update:model-value="v$.form.oauth2AutoLogin.$touch()"
           :label="$t('ui_settings.label_oauth2_auto_login')"
           hide-details
         >
           <template v-slot:append>
-            <v-tooltip bottom>
-              <template v-slot:activator="{ on }">
-                <v-icon v-on="on">
+            <v-tooltip location="bottom">
+              <template v-slot:activator="{ props }">
+                <v-icon v-bind="props">
                   mdi-information-outline
                 </v-icon>
               </template>
@@ -64,7 +64,8 @@
 </template>
 
 <script lang="ts">
-import Vue from 'vue'
+import {defineComponent} from 'vue'
+import useVuelidate from '@vuelidate/core'
 import {
   CLIENT_SETTING,
   ClientSettingGlobalUpdateDto,
@@ -73,8 +74,9 @@ import {
   SERIES_GROUP_JAPANESE,
 } from '@/types/komga-clientsettings'
 
-export default Vue.extend({
+export default defineComponent({
   name: 'UISettings',
+  setup: () => ({v$: useVuelidate()}),
   data: () => ({
     form: {
       oauth2HideLogin: false,
@@ -94,10 +96,10 @@ export default Vue.extend({
   },
   computed: {
     saveDisabled(): boolean {
-      return this.$v.form.$invalid || !this.$v.form.$anyDirty
+      return this.v$.form?.$invalid || !this.v$.form?.$anyDirty
     },
     discardDisabled(): boolean {
-      return !this.$v.form.$anyDirty
+      return !this.v$.form?.$anyDirty
     },
   },
   methods: {
@@ -109,23 +111,23 @@ export default Vue.extend({
         this.form.seriesGroups = (JSON.parse(this.$store.state.komgaSettings.clientSettingsGlobal[CLIENT_SETTING.WEBUI_SERIES_GROUPS]?.value) as ClientSettingsSeriesGroup)?.name
       } catch (_) {
       }
-      this.$v.form.$reset()
+      this.v$.form?.$reset?.()
     },
     async saveSettings() {
       let newSettings = {} as Record<string, ClientSettingGlobalUpdateDto>
-      if (this.$v.form?.oauth2HideLogin?.$dirty)
+      if (this.v$.form?.oauth2HideLogin?.$dirty)
         newSettings[CLIENT_SETTING.WEBUI_OAUTH2_HIDE_LOGIN] = {
           value: this.form.oauth2HideLogin ? 'true' : 'false',
           allowUnauthorized: true,
         }
 
-      if (this.$v.form?.oauth2AutoLogin?.$dirty)
+      if (this.v$.form?.oauth2AutoLogin?.$dirty)
         newSettings[CLIENT_SETTING.WEBUI_OAUTH2_AUTO_LOGIN] = {
           value: this.form.oauth2AutoLogin ? 'true' : 'false',
           allowUnauthorized: true,
         }
 
-      if (this.$v.form?.seriesGroups?.$dirty)
+      if (this.v$.form?.seriesGroups?.$dirty)
         newSettings[CLIENT_SETTING.WEBUI_SERIES_GROUPS] = {
           value: JSON.stringify(this.form.seriesGroups === 'alpha' ? SERIES_GROUP_ALPHA : SERIES_GROUP_JAPANESE),
           allowUnauthorized: false,

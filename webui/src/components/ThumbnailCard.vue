@@ -3,34 +3,32 @@
     <v-img
       :src="imageUrl"
       aspect-ratio="0.7071"
-      contain/>
+    />
     <v-card-text style="height: 5rem">
       <div>{{ fileSize }}</div>
       <div v-if="dimension">{{ $t('common.dimension', dimension) }}</div>
       <div v-if="mediaType">{{ mediaType }}</div>
     </v-card-text>
     <v-card-actions>
-      <v-tooltip top>
-        <template v-slot:activator="{ on, attrs }">
+      <v-tooltip location="top">
+        <template v-slot:activator="{ props }">
           <v-icon
-            class="v-btn--icon v-size--default px-2"
+            class="px-2"
             :color="fileTooBig ? 'error' : ''"
-            v-bind="attrs"
-            v-on="on">
+            v-bind="props">
             {{ statusIcon }}
           </v-icon>
         </template>
         <span>{{ statusTooltip }}</span>
       </v-tooltip>
 
-      <v-tooltip v-if="!fileTooBig" top>
-        <template v-slot:activator="{ on, attrs }">
+      <v-tooltip v-if="!fileTooBig" location="top">
+        <template v-slot:activator="{ props }">
           <v-btn
             icon
             :color="selected ? 'success' : ''"
             @click="onClickSelect"
-            v-bind="attrs"
-            v-on="on">
+            v-bind="props">
             <v-icon>mdi-check</v-icon>
           </v-btn>
         </template>
@@ -39,14 +37,13 @@
           }}</span>
       </v-tooltip>
 
-      <v-tooltip v-if="deletable" top>
-        <template v-slot:activator="{ on, attrs }">
+      <v-tooltip v-if="deletable" location="top">
+        <template v-slot:activator="{ props }">
           <v-btn
             icon
             :color="toBeDeleted ? 'error' : ''"
             @click="onClickDelete"
-            v-bind="attrs"
-            v-on="on">
+            v-bind="props">
             <v-icon>mdi-trash-can-outline</v-icon>
           </v-btn>
         </template>
@@ -59,7 +56,7 @@
 </template>
 
 <script lang="ts">
-import Vue, {PropType} from 'vue'
+import {defineComponent, PropType} from 'vue'
 import {SeriesThumbnailDto} from '@/types/komga-series'
 import {
   bookThumbnailUrlByThumbnailId,
@@ -72,7 +69,7 @@ import {ReadListThumbnailDto} from '@/types/komga-readlists'
 import {Dimension} from '@/types/image'
 import {getFileSize} from '@/functions/file'
 
-export default Vue.extend({
+export default defineComponent({
   name: 'ThumbnailCard',
   props: {
     item: {

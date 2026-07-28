@@ -12,7 +12,7 @@ import {ReadListDto} from '@/types/komga-readlists'
 import {R2Progression} from '@/types/readium'
 import {BookSearch} from '@/types/komga-search'
 
-const qs = require('qs')
+import qs from 'qs'
 
 const API_BOOKS = '/api/v1/books'
 

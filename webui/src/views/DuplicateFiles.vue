@@ -1,19 +1,15 @@
 <template>
   <v-container fluid class="pa-6">
-    <v-data-table
+    <v-data-table-server
       :headers="headers"
       :items="books"
-      :options.sync="options"
-      :server-items-length="totalBooks"
+      v-model:options="options"
+      :items-length="totalBooks"
       :loading="loading"
-      sort-by="fileHash"
       multi-sort
-      show-group-by
-      group-by="fileHash"
+      :group-by="options.groupBy"
       class="elevation-1"
-      :footer-props="{
-        itemsPerPageOptions: [20, 50, 100]
-      }"
+      :items-per-page-options="[20, 50, 100]"
     >
       <template v-slot:item.url="{ item }">
         <router-link
@@ -25,7 +21,7 @@
       <template v-slot:item.deleted="{ item }">
         <v-chip
           v-if="item.deleted"
-          label small color="error">
+          label size="small" color="error">
           {{ $t('common.unavailable') }}
         </v-chip>
       </template>
@@ -43,22 +39,23 @@
       <template v-slot:footer.prepend>
         <v-btn icon @click="loadBooks"><v-icon>mdi-refresh</v-icon></v-btn>
       </template>
-    </v-data-table>
+    </v-data-table-server>
   </v-container>
 </template>
 
 <script lang="ts">
-import Vue from 'vue'
+import {defineComponent} from 'vue'
 import {BookDto} from '@/types/komga-books'
+import {createServerTableOptions, toPageRequest} from '@/functions/data-table'
 
-export default Vue.extend({
+export default defineComponent({
   name: 'DuplicateFiles',
   data: function () {
     return {
       books: [] as BookDto[],
       totalBooks: 0,
       loading: true,
-      options: {} as any,
+      options: createServerTableOptions(20, [{key: 'fileHash', order: 'asc'}], [{key: 'fileHash', order: 'asc'}]),
     }
   },
   watch: {
@@ -72,11 +69,11 @@ export default Vue.extend({
   computed: {
     headers(): object[] {
       return [
-        {text: this.$i18n.t('duplicates.file_hash').toString(), value: 'fileHash'},
-        {text: this.$i18n.t('duplicates.url').toString(), value: 'url', groupable: false},
-        {text: this.$i18n.t('duplicates.size').toString(), value: 'size', groupable: false},
-        {text: '', value: 'deleted', groupable: false, sortable: false},
-        {text: this.$i18n.t('menu.delete').toString(), value: 'id', groupable: false},
+        {title: this.$t('duplicates.file_hash').toString(), key: 'fileHash'},
+        {title: this.$t('duplicates.url').toString(), key: 'url'},
+        {title: this.$t('duplicates.size').toString(), key: 'size'},
+        {title: '', key: 'deleted', sortable: false},
+        {title: this.$t('menu.delete').toString(), key: 'id'},
       ]
     },
   },
@@ -84,17 +81,7 @@ export default Vue.extend({
     async loadBooks() {
       this.loading = true
 
-      const {sortBy, sortDesc, page, itemsPerPage} = this.options
-
-      const pageRequest = {
-        page: page - 1,
-        size: itemsPerPage,
-        sort: [],
-      } as PageRequest
-
-      for (let i = 0; i < sortBy.length; i++) {
-        pageRequest.sort!!.push(`${sortBy[i]},${sortDesc[i] ? 'desc' : 'asc'}`)
-      }
+      const pageRequest = toPageRequest(this.options)
 
       const booksPage = await this.$komgaBooks.getDuplicateBooks(pageRequest)
       this.totalBooks = booksPage.totalElements

@@ -42,17 +42,17 @@
     <!--  Error  -->
     <td>
       <template v-if="error">
-        <v-tooltip bottom>
-          <template v-slot:activator="{ on }">
-            <v-icon color="error" v-on="on">mdi-alert-circle</v-icon>
+        <v-tooltip location="bottom">
+          <template v-slot:activator="{ props }">
+            <v-icon color="error" v-bind="props">mdi-alert-circle</v-icon>
           </template>
           {{ error }}
         </v-tooltip>
       </template>
       <template v-else-if="duplicate">
-        <v-tooltip bottom>
-          <template v-slot:activator="{ on }">
-            <v-icon color="warning" v-on="on">mdi-alert-circle</v-icon>
+        <v-tooltip location="bottom">
+          <template v-slot:activator="{ props }">
+            <v-icon color="warning" v-bind="props">mdi-alert-circle</v-icon>
           </template>
           {{ $t('readlist_import.row.duplicate_book') }}
         </v-tooltip>
@@ -62,7 +62,7 @@
 </template>
 
 <script lang="ts">
-import Vue, {PropType} from 'vue'
+import {defineComponent, PropType} from 'vue'
 import {SeriesDto} from '@/types/komga-series'
 import {BookDto} from '@/types/komga-books'
 import SeriesPickerDialog from '@/components/dialogs/SeriesPickerDialog.vue'
@@ -74,7 +74,7 @@ import {
 import BookPickerDialog from '@/components/dialogs/BookPickerDialog.vue'
 import {BookSearch, SearchConditionSeriesId, SearchOperatorIs} from '@/types/komga-search'
 
-export default Vue.extend({
+export default defineComponent({
   name: 'ReadListMatchRow',
   components: {
     BookPickerDialog,

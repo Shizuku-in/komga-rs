@@ -1,4 +1,5 @@
 import {PageLoader} from '@/types/pageLoader'
+import {describe, expect, test} from 'vitest'
 
 describe('PageLoader', () => {
   const pageRequest = {} as PageRequest

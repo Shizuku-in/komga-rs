@@ -191,8 +191,14 @@ async fn embedded_webui_does_not_mask_backend_or_missing_static_routes() {
 }
 
 fn entry_script(index: &str) -> &str {
-    let marker = "src=\"js/";
-    let start = index.find(marker).expect("generated index has an entry script") + "src=\"".len();
+    let marker = index
+        .find("src=\"./js/")
+        .or_else(|| index.find("src=\"js/"))
+        .expect("generated index has an entry script");
+    let start = marker + "src=\"".len();
     let tail = &index[start..];
-    &tail[..tail.find('"').expect("entry script attribute is terminated")]
+    tail.trim_start_matches("./")
+        .split_once('"')
+        .expect("entry script attribute is terminated")
+        .0
 }

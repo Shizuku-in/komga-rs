@@ -1,24 +1,25 @@
-import Vue from 'vue'
-import VueI18n, {LocaleMessages} from 'vue-i18n'
+import {createI18n} from 'vue-i18n'
 
-Vue.use(VueI18n)
-
-function loadLocaleMessages(): LocaleMessages {
-  const locales = require.context('./locales', true, /[A-Za-z0-9-_,\s]+\.json$/i)
-  const messages: LocaleMessages = {}
-  locales.keys().forEach(key => {
-    const matched = key.match(/([A-Za-z0-9-_]+)\./i)
+function loadLocaleMessages(): Record<string, object> {
+  const locales = import.meta.glob('./locales/*.json', {
+    eager: true,
+    import: 'default',
+  })
+  const messages: Record<string, object> = {}
+  Object.entries(locales).forEach(([path, value]) => {
+    const matched = path.match(/\/([A-Za-z0-9-_]+)\.json$/i)
     if (matched && matched.length > 1) {
       const locale = matched[1]
-      messages[locale] = locales(key)
+      messages[locale] = value as object
     }
   })
   return messages
 }
 
-export default new VueI18n({
-  locale: process.env.VUE_APP_I18N_LOCALE || 'en',
-  fallbackLocale: process.env.VUE_APP_I18N_FALLBACK_LOCALE || 'en',
+const i18n = createI18n({
+  legacy: true,
+  locale: import.meta.env.VITE_I18N_LOCALE || 'en',
+  fallbackLocale: import.meta.env.VITE_I18N_FALLBACK_LOCALE || 'en',
   messages: loadLocaleMessages(),
   pluralizationRules: {
     /**
@@ -51,3 +52,22 @@ export default new VueI18n({
     },
   },
 })
+
+// Framework-independent modules historically consumed the Vue 2 i18n
+// instance directly. Expose the same small surface over vue-i18n's composer.
+const composer = i18n.global as any
+const legacyI18n = i18n as typeof i18n & {
+  locale: string
+  t: (...args: any[]) => string
+  tc: (key: string, choice: number, named?: Record<string, unknown>) => string
+}
+legacyI18n.t = (...args: any[]) => composer.t(...args)
+legacyI18n.tc = (key, choice, named) => composer.t(key, choice, named)
+Object.defineProperty(legacyI18n, 'locale', {
+  get: () => composer.locale,
+  set: value => {
+    composer.locale = value
+  },
+})
+
+export default legacyI18n

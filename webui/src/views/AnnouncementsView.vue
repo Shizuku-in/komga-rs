@@ -7,13 +7,12 @@
             <v-badge
               dot
               inline
-              left
-              :value="item._komga.read ? 0 : 1"
+              location="top start"
+              :model-value="!item._komga.read"
               color="info"
             >
               <a :href="item.url" target="_blank" class="text-h3 font-weight-medium link-underline">{{ item.title }}</a>
-              <v-icon
-                x-small
+              <v-icon size="x-small"
                 color="grey"
                 class="ps-1"
               >
@@ -21,14 +20,14 @@
               </v-icon>
             </v-badge>
           </div>
-          <div class="mt-2 subtitle-1">
+          <div class="mt-2 text-subtitle-1">
             {{ new Intl.DateTimeFormat($i18n.locale, {dateStyle: 'long'}).format(item.date_modified) }}
           </div>
         </v-col>
         <v-col cols="auto">
-          <v-tooltip :left="!$vuetify.rtl" :right="$vuetify.rtl">
-            <template v-slot:activator="{ on }">
-              <v-btn icon elevation="5" color="success" v-on="on" :disabled="item._komga.read"
+          <v-tooltip :location="$vuetify.rtl ? 'right' : 'left'">
+            <template v-slot:activator="{ props }">
+              <v-btn icon elevation="5" color="success" v-bind="props" :disabled="item._komga.read"
                      @click="markRead(item.id)">
                 <v-icon>mdi-check</v-icon>
               </v-btn>
@@ -46,17 +45,16 @@
       <v-divider class="my-8" v-if="index != $store.state.announcements.items.length - 1"/>
     </div>
 
-    <v-tooltip :left="!$vuetify.rtl" :right="$vuetify.rtl">
-      <template v-slot:activator="{ on }">
+    <v-tooltip :location="$vuetify.rtl ? 'right' : 'left'">
+      <template v-slot:activator="{ props }">
         <v-fab-transition>
           <v-btn v-if="$store.getters.getUnreadAnnouncementsCount()"
                  color="success"
-                 fab
-                 bottom
-                 right
-                 fixed
+                 icon
+                 position="fixed"
+                 location="bottom right"
                  elevation="10"
-                 v-on="on"
+                 v-bind="props"
                  @click="markAllRead"
           >
             <v-icon>mdi-check-all</v-icon>
@@ -69,10 +67,10 @@
 </template>
 
 <script lang="ts">
-import Vue from 'vue'
+import {defineComponent} from 'vue'
 import {ItemDto} from '@/types/json-feed'
 
-export default Vue.extend({
+export default defineComponent({
   name: 'AnnouncementsView',
   mounted() {
     this.loadData()

@@ -1,7 +1,8 @@
 <template>
   <v-hover :disabled="disableHover">
-    <template v-slot:default="{ hover }">
+    <template #default="{isHovering, props}">
       <v-card
+        v-bind="props"
         :width="width"
         @click="onClick"
         :class="noLink ? 'no-link' : ''"
@@ -12,7 +13,7 @@
           :src="thumbnailUrl"
           :lazy-src="thumbnailError ? coverBase64 : undefined"
           aspect-ratio="0.7071"
-          :contain="!isStretch"
+          :cover="isStretch"
           :position="isStretch ? 'top' : undefined"
           :class="shouldBlurPoster ? 'blur' : undefined"
           @error="thumbnailError = true"
@@ -23,7 +24,7 @@
 
           <!-- unread count for series -->
           <span v-else-if="unreadCount"
-                class="white--text pa-1 px-2 text-subtitle-2"
+                class="text-white pa-1 px-2 text-subtitle-2"
                 :style="{background: 'orange', position: 'absolute', right: 0}"
           >
             {{ unreadCount }}
@@ -32,10 +33,10 @@
           <!-- Thumbnail overlay -->
           <v-fade-transition>
             <v-overlay
-              v-if="hover || selected || preselect || actionMenuState"
+              v-if="isHovering || selected || preselect || actionMenuState"
               absolute
-              :opacity="hover || actionMenuState ? 0.3 : 0"
-              :class="`${hover || actionMenuState ? 'item-border-darken' : selected ? 'item-border' : 'item-border-transparent'} overlay-full`"
+              :opacity="isHovering || actionMenuState ? 0.3 : 0"
+              :class="`${isHovering || actionMenuState ? 'item-border-darken' : selected ? 'item-border' : 'item-border-transparent'} overlay-full`"
             >
               <!-- Circle icon for selection (top left) -->
               <v-icon v-if="onSelected"
@@ -44,19 +45,19 @@
                       @click.stop="selectItem"
               >
                 {{
-                  selected || (preselect && hover) ? 'mdi-checkbox-marked-circle' : 'mdi-checkbox-blank-circle-outline'
+                  selected || (preselect && isHovering) ? 'mdi-checkbox-marked-circle' : 'mdi-checkbox-blank-circle-outline'
                 }}
               </v-icon>
 
               <!-- FAB reading (center) -->
               <v-btn
                 v-if="showFab"
-                fab
-                x-large
+                icon
+                size="x-large"
                 color="accent"
                 style="position: absolute; top: 50%; left: 50%; margin-left: -36px; margin-top: -36px"
                 :to="fabTo"
-                @click.native="$event.stopImmediatePropagation()"
+                @click="$event.stopImmediatePropagation()"
               >
                 <v-icon>mdi-book-open-page-variant</v-icon>
               </v-btn>
@@ -76,34 +77,34 @@
               >
                 <one-shot-actions-menu v-if="computedItem.type() === ItemTypes.BOOK && item.oneshot"
                                        :book="item"
-                                       :menu.sync="actionMenuState"
+                                       v-model:menu="actionMenuState"
                 />
                 <book-actions-menu v-if="computedItem.type() === ItemTypes.BOOK && !item.oneshot"
                                    :book="item"
-                                   :menu.sync="actionMenuState"
+                                   v-model:menu="actionMenuState"
                 />
                 <one-shot-actions-menu v-if="computedItem.type() === ItemTypes.SERIES && item.oneshot"
                                        :series="item"
-                                       :menu.sync="actionMenuState"
+                                       v-model:menu="actionMenuState"
                 />
                 <series-actions-menu v-if="computedItem.type() === ItemTypes.SERIES && !item.oneshot"
                                      :series="item"
-                                     :menu.sync="actionMenuState"
+                                     v-model:menu="actionMenuState"
                 />
                 <collection-actions-menu v-if="computedItem.type() === ItemTypes.COLLECTION"
                                          :collection="item"
-                                         :menu.sync="actionMenuState"
+                                         v-model:menu="actionMenuState"
                 />
                 <read-list-actions-menu v-if="computedItem.type() === ItemTypes.READLIST"
                                         :read-list="item"
-                                        :menu.sync="actionMenuState"
+                                        v-model:menu="actionMenuState"
                 />
               </div>
             </v-overlay>
           </v-fade-transition>
           <v-progress-linear
             v-if="isInProgress"
-            :value="readProgressPercentage"
+            :model-value="readProgressPercentage"
             color="orange"
             height="6"
             style="position: absolute; bottom: 0"
@@ -113,9 +114,9 @@
         <!--      Description-->
         <template v-if="!thumbnailOnly">
           <router-link v-if="!Array.isArray(title)" :to="title.to" class="link-underline"
-                       @click.native="$event.stopImmediatePropagation()">
+                       @click="$event.stopImmediatePropagation()">
             <v-card-subtitle
-              v-line-clamp="2"
+              class="item-card__title-clamp"
               v-bind="subtitleProps"
               :title="title.title"
             >{{ title.title }}
@@ -129,7 +130,7 @@
                 v-for="(t, i) in title"
                 :key="i"
                 :to="t.to"
-                @click.native="$event.stopImmediatePropagation()"
+                @click="$event.stopImmediatePropagation()"
                 class="link-underline text-truncate"
                 :title="t.title"
                 style="display: block"
@@ -153,8 +154,8 @@ import SeriesActionsMenu from '@/components/menus/SeriesActionsMenu.vue'
 import {getReadProgress, getReadProgressPercentage} from '@/functions/book-progress'
 import {ReadStatus} from '@/types/enum-books'
 import {createItem, Item, ItemContext, ItemTitle, ItemTypes} from '@/types/items'
-import Vue from 'vue'
-import {RawLocation} from 'vue-router'
+import {defineComponent} from 'vue'
+import type {RouteLocationRaw} from 'vue-router'
 import ReadListActionsMenu from '@/components/menus/ReadListActionsMenu.vue'
 import {BookDto} from '@/types/komga-books'
 import {SeriesDto} from '@/types/komga-series'
@@ -179,7 +180,7 @@ import {ReadListDto} from '@/types/komga-readlists'
 import OneShotActionsMenu from '@/components/menus/OneshotActionsMenu.vue'
 import {CLIENT_SETTING} from '@/types/komga-clientsettings'
 
-export default Vue.extend({
+export default defineComponent({
   name: 'ItemCard',
   components: {OneShotActionsMenu, BookActionsMenu, SeriesActionsMenu, CollectionActionsMenu, ReadListActionsMenu},
   props: {
@@ -261,7 +262,7 @@ export default Vue.extend({
     this.$eventHub.$on(THUMBNAILCOLLECTION_ADDED, this.thumbnailCollectionChanged)
     this.$eventHub.$on(THUMBNAILCOLLECTION_DELETED, this.thumbnailCollectionChanged)
   },
-  beforeDestroy() {
+  beforeUnmount() {
     this.$eventHub.$off(THUMBNAILBOOK_ADDED, this.thumbnailBookChanged)
     this.$eventHub.$off(THUMBNAILBOOK_DELETED, this.thumbnailBookChanged)
 
@@ -341,10 +342,10 @@ export default Vue.extend({
     showFab(): boolean {
       return !this.disableFab && this.bookReady && !this.selected && !this.preselect && this.canReadPages
     },
-    to(): RawLocation {
+    to(): RouteLocationRaw {
       return this.computedItem.to()
     },
-    fabTo(): RawLocation {
+    fabTo(): RouteLocationRaw {
       return this.computedItem.fabTo()
     },
   },
@@ -396,7 +397,14 @@ export default Vue.extend({
 </script>
 
 <style>
-.blur > .v-image__image {
+.item-card__title-clamp {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.blur > .v-img__img {
   filter: blur(5px);
 }
 
@@ -405,7 +413,7 @@ export default Vue.extend({
 }
 
 .item-border {
-  border: 3px solid var(--v-secondary-base);
+  border: 3px solid rgb(var(--v-theme-secondary));
 }
 
 .item-border-transparent {
@@ -413,7 +421,7 @@ export default Vue.extend({
 }
 
 .item-border-darken {
-  border: 3px solid var(--v-secondary-darken2);
+  border: 3px solid color-mix(in srgb, rgb(var(--v-theme-secondary)) 70%, black);
 }
 
 .overlay-full .v-overlay__content {

@@ -1,5 +1,6 @@
 import {TocEntry} from '@/types/epub'
 import {flattenToc} from '@/functions/toc'
+import {describe, expect, test} from 'vitest'
 
 describe('Multiple levels', () => {
   const initial = [

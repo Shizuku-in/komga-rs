@@ -4,7 +4,7 @@
   >
     <v-card>
       <v-card-title>{{ $t('dialog.add_api_key.dialog_title') }}</v-card-title>
-      <v-btn icon absolute top right @click="dialogClose">
+      <v-btn icon position="absolute" location="top right" @click="dialogClose">
         <v-icon>mdi-close</v-icon>
       </v-btn>
 
@@ -20,14 +20,14 @@
                             :label="$t('dialog.add_api_key.field_comment')"
                             :hint="$t('dialog.add_api_key.field_comment_hint')"
                             :error-messages="getErrors('comment')"
-                            @blur="$v.form.comment.$touch()"
+                            @blur="v$.form.comment.$touch()"
               />
             </v-col>
           </v-row>
 
           <v-row v-if="apiKey">
             <v-col>
-              <v-alert type="info" class="body-2">{{ $t('dialog.add_api_key.info_copy') }}</v-alert>
+              <v-alert type="info" class="text-body-2">{{ $t('dialog.add_api_key.info_copy') }}</v-alert>
             </v-col>
           </v-row>
 
@@ -36,11 +36,10 @@
               <v-icon color="success">mdi-check</v-icon>
               {{ apiKey.key }}
 
-              <v-tooltip top v-model="copied" v-if="isClipboardApiAvailable">
-                <template v-slot:activator="on">
-                  <v-btn v-on="on"
-                         icon
-                         x-small
+              <v-tooltip location="top" v-model="copied" v-if="isClipboardApiAvailable">
+                <template v-slot:activator="{ props }">
+                  <v-btn v-bind="props"
+                         icon size="x-small"
                          class="align-content-end"
                          @click="copyApiKeyToClipboard"
                   >
@@ -58,7 +57,7 @@
 
       <v-card-actions>
         <v-spacer/>
-        <v-btn text @click="dialogClose">{{ $t('common.close') }}</v-btn>
+        <v-btn variant="text" @click="dialogClose">{{ $t('common.close') }}</v-btn>
         <v-btn color="primary" @click="generateApiKey" :disabled="!!apiKey">{{ $t('dialog.add_api_key.button_confirm') }}</v-btn>
       </v-card-actions>
     </v-card>
@@ -67,8 +66,9 @@
 
 <script lang="ts">
 import {UserRoles} from '@/types/enum-users'
-import Vue from 'vue'
-import {required} from 'vuelidate/lib/validators'
+import {defineComponent} from 'vue'
+import useVuelidate from '@vuelidate/core'
+import {required} from '@vuelidate/validators'
 import {ERROR} from '@/types/events'
 import {ApiKeyDto, ApiKeyRequestDto} from '@/types/komga-users'
 
@@ -76,8 +76,9 @@ function validComment(value: string) {
   return !this.alreadyUsedComment.includes(value)
 }
 
-export default Vue.extend({
+export default defineComponent({
   name: 'ApiKeyAddDialog',
+  setup: () => ({v$: useVuelidate()}),
   data: function () {
     return {
       UserRoles,
@@ -91,10 +92,10 @@ export default Vue.extend({
     }
   },
   props: {
-    value: Boolean,
+    modelValue: Boolean,
   },
   watch: {
-    value(val) {
+    modelValue(val) {
       this.modal = val
       if (val) {
         this.clear()
@@ -119,15 +120,15 @@ export default Vue.extend({
       this.apiKey = undefined
       this.alreadyUsedComment = []
       this.form.comment = ''
-      this.$v.$reset()
+      this.v$.$reset?.()
     },
     dialogClose() {
-      this.$emit('input', false)
+      this.$emit('update:modelValue', false)
     },
     getErrors(fieldName: string): string[] {
       const errors = [] as string[]
 
-      const field = this.$v.form!![fieldName] as any
+      const field = this.v$.form!![fieldName] as any
       if (field && field.$invalid && field.$dirty) {
         if (!field.validComment) errors.push(this.$t('error_codes.ERR_1034').toString())
         if (!field.required) errors.push(this.$t('common.required').toString())
@@ -135,9 +136,9 @@ export default Vue.extend({
       return errors
     },
     validateInput(): ApiKeyRequestDto {
-      this.$v.$touch()
+      this.v$.$touch()
 
-      if (!this.$v.$invalid) {
+      if (!this.v$.$invalid) {
         return {
           comment: this.form.comment,
         }

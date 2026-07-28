@@ -11,9 +11,9 @@
                 :show-arrows="false"
                 :continuous="false"
                 :reverse="flipDirection"
-                :vertical="vertical"
+                :direction="vertical ? 'vertical' : 'horizontal'"
                 hide-delimiters
-                touchless
+                :touch="false"
                 height="100%"
     >
       <!--  Carousel: pages  -->
@@ -76,14 +76,14 @@
 </template>
 
 <script lang="ts">
-import Vue from 'vue'
+import {defineComponent} from 'vue'
 import {ReadingDirection} from '@/types/enum-books'
 import {PagedReaderLayout, ScaleType} from '@/types/enum-reader'
 import {shortcutsLTR, shortcutsRTL, shortcutsVertical} from '@/functions/shortcuts/paged-reader'
 import {PageDtoWithUrl} from '@/types/komga-books'
 import {buildSpreads} from '@/functions/book-spreads'
 
-export default Vue.extend({
+export default defineComponent({
   name: 'PagedReader',
   data: function () {
     return {
@@ -157,7 +157,7 @@ export default Vue.extend({
   created() {
     window.addEventListener('keydown', this.keyPressed)
   },
-  destroyed() {
+  unmounted() {
     window.removeEventListener('keydown', this.keyPressed)
   },
   computed: {

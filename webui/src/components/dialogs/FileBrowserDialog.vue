@@ -5,7 +5,7 @@
   >
     <v-card>
 
-      <v-card-title>{{ dialogTitle }}</v-card-title>
+      <v-card-title>{{ dialogTitle || $t('dialog.file_browser.dialog_title_default') }}</v-card-title>
 
       <v-card-text style="height: 450px">
         <v-text-field
@@ -13,19 +13,19 @@
           readonly
         />
 
-        <v-list elevation="3" dense>
+        <v-list elevation="3" density="compact">
 
           <template v-if="directoryListing.hasOwnProperty('parent')">
             <v-list-item
               @click.prevent="selectParent(directoryListing.parent)"
             >
-              <v-list-item-icon>
+              <template #prepend>
                 <v-icon>mdi-arrow-left</v-icon>
-              </v-list-item-icon>
+              </template>
 
-              <v-list-item-content>
+              <div>
                 <v-list-item-title>{{ $t('dialog.file_browser.parent_directory') }}</v-list-item-title>
-              </v-list-item-content>
+              </div>
             </v-list-item>
             <v-divider/>
           </template>
@@ -34,15 +34,15 @@
             <v-list-item
               @click.prevent="select(d)"
             >
-              <v-list-item-icon>
+              <template #prepend>
                 <v-icon>{{ d.type === 'directory' ? 'mdi-folder' : 'mdi-file' }}</v-icon>
-              </v-list-item-icon>
+              </template>
 
-              <v-list-item-content>
+              <div>
                 <v-list-item-title>
                   {{ d.name }}
                 </v-list-item-title>
-              </v-list-item-content>
+              </div>
             </v-list-item>
 
             <v-divider v-if="index !== directoryListing.directories.length-1"/>
@@ -52,15 +52,15 @@
             <v-list-item
               @click.prevent="select(d)"
             >
-              <v-list-item-icon>
+              <template #prepend>
                 <v-icon>{{ d.type === 'directory' ? 'mdi-folder' : 'mdi-file' }}</v-icon>
-              </v-list-item-icon>
+              </template>
 
-              <v-list-item-content>
+              <div>
                 <v-list-item-title>
                   {{ d.name }}
                 </v-list-item-title>
-              </v-list-item-content>
+              </div>
             </v-list-item>
 
             <v-divider v-if="index !== directoryListing.files.length-1"/>
@@ -70,11 +70,11 @@
 
       <v-card-actions>
         <v-spacer/>
-        <v-btn text @click="dialogCancel">{{ $t('dialog.file_browser.button_cancel') }}</v-btn>
+        <v-btn variant="text" @click="dialogCancel">{{ $t('dialog.file_browser.button_cancel') }}</v-btn>
         <v-btn color="primary"
                @click="dialogConfirm"
                :disabled="!selectedPath"
-        >{{ confirmText }}
+        >{{ confirmText || $t('dialog.file_browser.button_confirm_default') }}
         </v-btn>
       </v-card-actions>
     </v-card>
@@ -82,10 +82,10 @@
 </template>
 
 <script lang="ts">
-import Vue from 'vue'
+import {defineComponent} from 'vue'
 import {ERROR} from '@/types/events'
 
-export default Vue.extend({
+export default defineComponent({
   name: 'FileBrowserDialog',
   data: () => {
     return {
@@ -95,7 +95,7 @@ export default Vue.extend({
     }
   },
   watch: {
-    value(val) {
+    modelValue(val) {
       if (val) this.dialogInit()
       this.modalFileBrowser = val
     },
@@ -104,7 +104,7 @@ export default Vue.extend({
     },
   },
   props: {
-    value: Boolean,
+    modelValue: Boolean,
     path: {
       type: String,
       required: false,
@@ -113,18 +113,8 @@ export default Vue.extend({
       type: Boolean,
       default: false,
     },
-    dialogTitle: {
-      type: String,
-      default: function (): string {
-        return this.$t('dialog.file_browser.dialog_title_default').toString()
-      },
-    },
-    confirmText: {
-      type: String,
-      default: function (): string {
-        return this.$t('dialog.file_browser.button_confirm_default').toString()
-      },
-    },
+    dialogTitle: String,
+    confirmText: String,
   },
   methods: {
     dialogInit() {
@@ -136,10 +126,10 @@ export default Vue.extend({
       }
     },
     dialogCancel() {
-      this.$emit('input', false)
+      this.$emit('update:modelValue', false)
     },
     dialogConfirm() {
-      this.$emit('input', false)
+      this.$emit('update:modelValue', false)
       this.$emit('update:path', this.selectedPath)
       this.$emit('confirm')
     },

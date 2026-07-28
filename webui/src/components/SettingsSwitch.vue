@@ -7,9 +7,8 @@
       <span>{{ status }}</span>
     </v-col>
     <v-col cols="3" align-self="center" class="pa-0">
-      <v-switch v-model="input" dense
-                @input="updateInput"
-                @change="updateInput"
+      <v-switch :model-value="modelValue" density="compact"
+                @update:model-value="$emit('update:modelValue', $event)"
                 class="float-right"
                 :disabled="disabled"
       >
@@ -19,15 +18,15 @@
 </template>
 
 <script lang="ts">
-import Vue from 'vue'
+import {defineComponent} from 'vue'
 
-export default Vue.extend({
+export default defineComponent({
   name: 'SettingsSwitch',
   props: {
     label: {
       type: String,
     },
-    value: {
+    modelValue: {
       type: Boolean,
     },
     status: {
@@ -36,24 +35,6 @@ export default Vue.extend({
     disabled: {
       type: Boolean,
       default: false,
-    },
-  },
-  data () {
-    return {
-      input: '',
-    }
-  },
-  watch: {
-    value: {
-      handler (after) {
-        this.input = after
-      },
-      immediate: true,
-    },
-  },
-  methods: {
-    updateInput () {
-      this.$emit('input', this.input)
     },
   },
 })

@@ -1,5 +1,4 @@
-import Vue from 'vue'
-import Vuex from 'vuex'
+import {createStore} from 'vuex'
 import {BookDto} from '@/types/komga-books'
 import {Oneshot, SeriesDto} from '@/types/komga-series'
 import createPersistedState from 'vuex-persistedstate'
@@ -9,13 +8,11 @@ import {ReadListDto} from '@/types/komga-readlists'
 import {ItemDto, JsonFeedDto} from '@/types/json-feed'
 import {isEmpty} from 'lodash'
 
-Vue.use(Vuex)
-
 const persistedState = createPersistedState({
   paths: ['persistedState'],
 })
 
-export default new Vuex.Store({
+export default createStore({
   state: {
     // collections
     addToCollectionSeriesIds: [] as string[],

@@ -9,9 +9,9 @@
 </template>
 
 <script lang="ts">
-import Vue from 'vue'
+import {defineComponent} from 'vue'
 
-export default Vue.extend({
+export default defineComponent({
   name: 'StartupView',
   computed: {
     logoWidth(): number {
@@ -44,9 +44,10 @@ export default Vue.extend({
       await this.$store.dispatch('getLibraries')
       await this.$store.dispatch('getClientSettingsGlobal')
       await this.$store.dispatch('getClientSettingsUser')
-      this.$router.back()
+      const redirect = this.$route.query.redirect
+      await this.$router.replace(typeof redirect === 'string' ? redirect : {name: 'home'})
     } catch (e) {
-      this.$router.push({name: 'login', query: {redirect: this.$route.query.redirect}})
+      await this.$router.replace({name: 'login', query: {redirect: this.$route.query.redirect}})
     }
   },
 })

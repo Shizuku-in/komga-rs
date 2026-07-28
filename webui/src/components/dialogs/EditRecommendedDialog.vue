@@ -5,7 +5,7 @@
   >
     <v-card>
       <v-card-title>{{ $t('dialog.edit_recommended.dialog_title') }}</v-card-title>
-      <v-btn icon absolute top right @click="dialogClose">
+      <v-btn icon position="absolute" location="top right" @click="dialogClose">
         <v-icon>mdi-close</v-icon>
       </v-btn>
 
@@ -13,27 +13,32 @@
         <v-list>
           <draggable
             v-model="localItems"
+            item-key="section"
             v-bind="dragOptions"
             handle=".handle"
           >
-            <v-list-item v-for="(l, index) in localItems" :key="index">
-              <v-list-item-icon>
-                <v-icon class="handle">mdi-drag-horizontal-variant</v-icon>
-              </v-list-item-icon>
-              <v-list-item-content>
-                <v-list-item-title class="handle">{{ $t(`dashboard.${l.section.toLowerCase()}`) }}</v-list-item-title>
-              </v-list-item-content>
-              <v-list-item-action>
-                <v-switch v-model="enabled[l.section]"/>
-              </v-list-item-action>
-            </v-list-item>
+            <template #item="{ element: l }">
+              <v-list-item>
+                <template #prepend>
+                  <v-icon class="handle">mdi-drag-horizontal-variant</v-icon>
+                </template>
+                <div>
+                  <v-list-item-title class="handle">{{ $t(`dashboard.${l.section.toLowerCase()}`) }}</v-list-item-title>
+                </div>
+                <template #append>
+                  <v-list-item-action>
+                    <v-switch v-model="enabled[l.section]"/>
+                  </v-list-item-action>
+                </template>
+              </v-list-item>
+            </template>
           </draggable>
         </v-list>
       </v-card-text>
 
       <v-card-actions>
         <v-spacer/>
-        <v-btn v-if="$vuetify.breakpoint.smAndUp" text @click="dialogClose">{{ $t('common.cancel') }}</v-btn>
+        <v-btn v-if="$vuetify.breakpoint.smAndUp" variant="text" @click="dialogClose">{{ $t('common.cancel') }}</v-btn>
         <v-btn color="error" @click="resetToDefault">{{
             $t('dialog.edit_recommended.button_reset')
           }}
@@ -50,7 +55,7 @@
 <script lang="ts">
 import {UserRoles} from '@/types/enum-users'
 import draggable from 'vuedraggable'
-import Vue, {PropType} from 'vue'
+import {defineComponent, PropType} from 'vue'
 import {
   ClientSettingsRecommendedView,
   ClientSettingsRecommendedViewSection,
@@ -58,7 +63,7 @@ import {
 } from '@/types/komga-clientsettings'
 
 
-export default Vue.extend({
+export default defineComponent({
   name: 'EditRecommendedDialog',
   components: {draggable},
   data: function () {
@@ -70,14 +75,14 @@ export default Vue.extend({
     }
   },
   props: {
-    value: Boolean,
+    modelValue: Boolean,
     viewConfig: {
       type: Object as PropType<ClientSettingsRecommendedView>,
       required: true,
     },
   },
   watch: {
-    value(val) {
+    modelValue(val) {
       this.modal = val
       if (val) {
         this.reset(this.viewConfig)
@@ -105,7 +110,7 @@ export default Vue.extend({
         .forEach(it => this.localItems.push(it))
     },
     dialogClose() {
-      this.$emit('input', false)
+      this.$emit('update:modelValue', false)
     },
     resetToDefault() {
       this.$emit('reset-defaults')

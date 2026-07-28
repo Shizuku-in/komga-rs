@@ -13,43 +13,46 @@
           <v-toolbar-title>{{ dialogTitle }}</v-toolbar-title>
           <v-spacer/>
           <v-toolbar-items>
-            <v-btn text color="primary" @click="dialogConfirm">{{ $t('dialog.edit_books.button_confirm') }}</v-btn>
+            <v-btn variant="text" color="primary" @click="dialogConfirm">{{ $t('dialog.edit_books.button_confirm') }}</v-btn>
           </v-toolbar-items>
         </v-toolbar>
 
-        <v-card-title class="hidden-xs-only">
+        <v-card-title class="hidden-xs">
           <v-icon class="mx-4">mdi-pencil</v-icon>
           {{ dialogTitle }}
         </v-card-title>
 
-        <v-tabs :vertical="$vuetify.breakpoint.smAndUp" v-model="tab">
+        <div :class="{'d-flex': $vuetify.breakpoint.smAndUp}">
+          <v-tabs :direction="$vuetify.breakpoint.smAndUp ? 'vertical' : 'horizontal'" v-model="tab">
           <v-tab class="justify-start">
-            <v-icon left class="hidden-xs-only">mdi-format-align-center</v-icon>
+            <v-icon start class="hidden-xs">mdi-format-align-center</v-icon>
             {{ $t('dialog.edit_books.tab_general') }}
           </v-tab>
           <v-tab class="justify-start">
-            <v-icon left class="hidden-xs-only">mdi-account-multiple</v-icon>
+            <v-icon start class="hidden-xs">mdi-account-multiple</v-icon>
             {{ $t('dialog.edit_books.tab_authors') }}
           </v-tab>
           <v-tab class="justify-start">
-            <v-icon left class="hidden-xs-only">mdi-tag-multiple</v-icon>
+            <v-icon start class="hidden-xs">mdi-tag-multiple</v-icon>
             {{ $t('dialog.edit_books.tab_tags') }}
           </v-tab>
           <v-tab class="justify-start" v-if="single">
-            <v-icon left class="hidden-xs-only">mdi-link</v-icon>
+            <v-icon start class="hidden-xs">mdi-link</v-icon>
             {{ $t('dialog.edit_books.tab_links') }}
           </v-tab>
           <v-tab class="justify-start" v-if="single">
-            <v-icon left class="hidden-xs-only">mdi-image</v-icon>
+            <v-icon start class="hidden-xs">mdi-image</v-icon>
             {{ $t('dialog.edit_books.tab_poster') }}
           </v-tab>
           <v-tab class="justify-start">
-            <v-icon left class="hidden-xs-only">mdi-account-multiple</v-icon>
+            <v-icon start class="hidden-xs">mdi-account-multiple</v-icon>
             {{ $t('dialog.edit_series.tab_sharing') }}
           </v-tab>
+          </v-tabs>
 
+          <v-window v-model="tab" class="flex-grow-1 tabbed-dialog-content">
           <!--  Tab: General  -->
-          <v-tab-item>
+          <v-window-item>
             <v-card flat>
               <v-container fluid>
 
@@ -57,13 +60,10 @@
                 <v-row v-if="single">
                   <v-col cols="12">
                     <v-text-field v-model="form.book.title"
-                                  :label="$t('dialog.edit_books.field_title')"
-                                  filled
-                                  dense
+                                  :label="$t('dialog.edit_books.field_title')" variant="filled" density="compact"
                                   :error-messages="requiredBookErrors('title')"
-                                  @input="$v.form.book.title.$touch()"
-                                  @blur="$v.form.book.title.$touch()"
-                                  @change="form.book.titleLock = true"
+                                  @update:model-value="v$.form.book.title.$touch(); form.book.titleLock = true"
+                                  @blur="v$.form.book.title.$touch()"
                     >
                       <template v-slot:prepend>
                         <v-icon :color="form.book.titleLock ? 'secondary' : ''"
@@ -80,13 +80,10 @@
                 <v-row v-if="single">
                   <v-col cols="12">
                     <v-text-field v-model="form.series.titleSort"
-                                  :label="$t('dialog.edit_series.field_sort_title')"
-                                  filled
-                                  dense
+                                  :label="$t('dialog.edit_series.field_sort_title')" variant="filled" density="compact"
                                   :error-messages="requiredSeriesErrors('titleSort')"
-                                  @input="$v.form.series.titleSort.$touch()"
-                                  @blur="$v.form.series.titleSort.$touch()"
-                                  @change="form.series.titleSortLock = true"
+                                  @update:model-value="v$.form.series.titleSort.$touch(); form.series.titleSortLock = true"
+                                  @blur="v$.form.series.titleSort.$touch()"
                     >
                       <template v-slot:prepend>
                         <v-icon :color="form.series.titleSortLock ? 'secondary' : ''"
@@ -103,11 +100,8 @@
                 <v-row v-if="single">
                   <v-col cols="12">
                     <v-textarea v-model="form.book.summary"
-                                :label="$t('dialog.edit_books.field_summary')"
-                                filled
-                                dense
-                                @input="$v.form.book.summary.$touch()"
-                                @change="form.book.summaryLock = true"
+                                :label="$t('dialog.edit_books.field_summary')" variant="filled" density="compact"
+                                @update:model-value="v$.form.book.summary.$touch(); form.book.summaryLock = true"
                     >
                       <template v-slot:prepend>
                         <v-icon :color="form.book.summaryLock ? 'secondary' : ''"
@@ -126,11 +120,9 @@
                     <v-select v-model="form.series.readingDirection"
                               :items="readingDirections"
                               :label="$t('dialog.edit_series.field_reading_direction')"
-                              clearable
-                              filled
+                              clearable variant="filled"
                               :placeholder="!single && mixed.readingDirection ? $t('dialog.edit_series.mixed') : ''"
-                              @input="$v.form.series.readingDirection.$touch()"
-                              @change="form.series.readingDirectionLock = true"
+                              @update:model-value="v$.form.series.readingDirection.$touch(); form.series.readingDirectionLock = true"
                     >
                       <template v-slot:prepend>
                         <v-icon :color="form.series.readingDirectionLock ? 'secondary' : ''"
@@ -145,14 +137,11 @@
                   <!--  Language  -->
                   <v-col cols="6">
                     <v-text-field v-model="form.series.language"
-                                  :label="$t('dialog.edit_series.field_language')"
-                                  filled
-                                  dense
+                                  :label="$t('dialog.edit_series.field_language')" variant="filled" density="compact"
                                   :placeholder="!single && mixed.language ? $t('dialog.edit_series.mixed') : ''"
                                   :error-messages="languageErrors"
                                   :hint="$t('dialog.edit_series.field_language_hint')"
-                                  @input="$v.form.series.language.$touch()"
-                                  @change="form.series.languageLock = true"
+                                  @update:model-value="v$.form.series.language.$touch(); form.series.languageLock = true"
                     >
                       <template v-slot:prepend>
                         <v-icon :color="form.series.languageLock ? 'secondary' : ''"
@@ -169,12 +158,9 @@
                   <!--  Publisher  -->
                   <v-col cols="6">
                     <v-text-field v-model="form.series.publisher"
-                                  :label="$t('dialog.edit_series.field_publisher')"
-                                  filled
-                                  dense
+                                  :label="$t('dialog.edit_series.field_publisher')" variant="filled" density="compact"
                                   :placeholder="!single && mixed.publisher ? $t('dialog.edit_series.mixed') : ''"
-                                  @input="$v.form.series.publisher.$touch()"
-                                  @change="form.series.publisherLock = true"
+                                  @update:model-value="v$.form.series.publisher.$touch(); form.series.publisherLock = true"
                     >
                       <template v-slot:prepend>
                         <v-icon :color="form.series.publisherLock ? 'secondary' : ''"
@@ -190,15 +176,12 @@
                   <v-col cols="6">
                     <v-text-field v-model="form.series.ageRating"
                                   :label="$t('dialog.edit_series.field_age_rating')"
-                                  clearable
-                                  filled
-                                  dense
+                                  clearable variant="filled" density="compact"
                                   type="number"
                                   :placeholder="!single && mixed.ageRating ? $t('dialog.edit_series.mixed') : ''"
                                   :error-messages="ageRatingErrors"
-                                  @input="$v.form.series.ageRating.$touch()"
-                                  @blur="$v.form.series.ageRating.$touch()"
-                                  @change="form.series.ageRatingLock = true"
+                                  @update:model-value="v$.form.series.ageRating.$touch(); form.series.ageRatingLock = true"
+                                  @blur="v$.form.series.ageRating.$touch()"
                     >
                       <template v-slot:prepend>
                         <v-icon :color="form.series.ageRatingLock ? 'secondary' : ''"
@@ -217,22 +200,18 @@
                     <v-menu
                       v-model="menuDate"
                       :close-on-content-click="false"
-                      transition="scale-transition"
-                      offset-y
+                      transition="scale-transition" location="bottom"
                       min-width="auto"
                     >
-                      <template v-slot:activator="{on, attrs}">
+                      <template v-slot:activator="{ props }">
                         <v-text-field v-model="form.book.releaseDate"
-                                      :label="$t('dialog.edit_books.field_release_date')"
-                                      filled
-                                      dense
+                                      :label="$t('dialog.edit_books.field_release_date')" variant="filled" density="compact"
                                       placeholder="YYYY-MM-DD"
                                       clearable
                                       :error-messages="releaseDateErrors"
-                                      @blur="$v.form.book.releaseDate.$touch()"
-                                      @change="form.book.releaseDateLock = true"
-                                      v-bind="attrs"
-                                      v-on="on"
+                                      @blur="v$.form.book.releaseDate.$touch()"
+                                      @update:model-value="form.book.releaseDateLock = true"
+                                      v-bind="props"
                         >
                           <template v-slot:prepend>
                             <v-icon :color="form.book.releaseDateLock ? 'secondary' : ''"
@@ -243,28 +222,25 @@
                           </template>
                         </v-text-field>
                       </template>
-                      <v-date-picker v-model="form.book.releaseDate"
-                                     :show-current="true"
-                                     :show-adjacent-months="true"
-                                     :locale="$i18n.locale"
-                                     :first-day-of-week="$store.getters.getLocaleFirstDay()"
-                                     @input="menuDate = false"
-                                     @change="form.book.releaseDateLock = true"
-                      />
+                      <v-locale-provider :locale="$i18n.locale">
+                        <v-date-picker v-model="form.book.releaseDate"
+                                       :show-adjacent-months="true"
+                                       :first-day-of-week="$store.getters.getLocaleFirstDay()"
+                                       @update:model-value="menuDate = false; form.book.releaseDateLock = true"
+                        />
+                      </v-locale-provider>
                     </v-menu>
                   </v-col>
 
                   <!--  ISBN  -->
                   <v-col cols="6">
                     <v-text-field v-model.trim="form.book.isbn"
-                                  :label="$t('dialog.edit_books.field_isbn')"
-                                  filled
-                                  dense
+                                  :label="$t('dialog.edit_books.field_isbn')" variant="filled" density="compact"
                                   placeholder="978-2-20-504375-4"
                                   clearable
                                   :error-messages="isbnErrors"
-                                  @blur="$v.form.book.isbn.$touch()"
-                                  @change="form.book.isbnLock = true"
+                                  @blur="v$.form.book.isbn.$touch()"
+                                  @update:model-value="form.book.isbnLock = true"
                     >
                       <template v-slot:prepend>
                         <v-icon :color="form.book.isbnLock ? 'secondary' : ''"
@@ -279,16 +255,14 @@
 
               </v-container>
             </v-card>
-          </v-tab-item>
+          </v-window-item>
 
           <!--  Tab: Authors  -->
-          <v-tab-item>
+          <v-window-item>
             <v-card flat>
               <v-container fluid>
                 <v-alert v-if="!single"
-                         type="warning"
-                         outlined
-                         dense
+                         type="warning" variant="outlined" density="compact"
                 >{{ $t('dialog.edit_books.authors_notice_multiple_edit') }}
                 </v-alert>
                 <v-row v-for="(role, i) in authorRoles"
@@ -298,16 +272,13 @@
                     <span class="text-body-2">{{ $_.capitalize(role.name) }}</span>
                     <v-combobox v-model="form.book.authors[role.value]"
                                 :items="authorSearchResultsFull"
-                                :search-input.sync="authorSearch[i]"
+                                v-model:search="authorSearch[i]"
                                 @keydown.esc="authorSearch[i] = null"
-                                @input="$v.form.book.authors.$touch()"
-                                @change="form.book.authorsLock = true"
+                                @update:model-value="v$.form.book.authors.$touch(); form.book.authorsLock = true"
                                 hide-selected
                                 chips
-                                deletable-chips
-                                multiple
-                                filled
-                                dense
+                                closable-chips
+                                multiple variant="filled" density="compact"
                     >
                       <template v-slot:prepend>
                         <v-icon :color="form.book.authorsLock ? 'secondary' : ''"
@@ -328,9 +299,9 @@
                     >
                       <v-text-field
                         label="Add custom role"
-                        append-outer-icon="mdi-plus"
+                        append-icon="mdi-plus"
                         v-model.trim="customRole"
-                        @click:append-outer="addRole"
+                        @click:append="addRole"
                         :rules="customRoleRules"
                       ></v-text-field>
                     </v-form>
@@ -338,16 +309,14 @@
                 </v-row>
               </v-container>
             </v-card>
-          </v-tab-item>
+          </v-window-item>
 
           <!--  Tab: Tags  -->
-          <v-tab-item>
+          <v-window-item>
             <v-card flat>
               <v-container fluid>
                 <v-alert v-if="!single"
-                         type="warning"
-                         outlined
-                         dense
+                         type="warning" variant="outlined" density="compact"
                 >{{ $t('dialog.edit_books.tags_notice_multiple_edit') }}
                 </v-alert>
 
@@ -357,14 +326,11 @@
                     <span class="text-body-2">{{ $t('dialog.edit_series.field_genres') }}</span>
                     <v-combobox v-model="form.series.genres"
                                 :items="genresAvailable"
-                                @input="$v.form.series.genres.$touch()"
-                                @change="form.series.genresLock = true"
+                                @update:model-value="v$.form.series.genres.$touch(); form.series.genresLock = true"
                                 hide-selected
                                 chips
-                                deletable-chips
-                                multiple
-                                filled
-                                dense
+                                closable-chips
+                                multiple variant="filled" density="compact"
                     >
                       <template v-slot:prepend>
                         <v-icon :color="form.series.genresLock ? 'secondary' : ''"
@@ -383,14 +349,11 @@
                     <span class="text-body-2">{{ $t('dialog.edit_books.field_tags') }}</span>
                     <v-combobox v-model="form.book.tags"
                                 :items="tagsAvailable"
-                                @input="$v.form.book.tags.$touch()"
-                                @change="form.book.tagsLock = true"
+                                @update:model-value="v$.form.book.tags.$touch(); form.book.tagsLock = true"
                                 hide-selected
                                 chips
-                                deletable-chips
-                                multiple
-                                filled
-                                dense
+                                closable-chips
+                                multiple variant="filled" density="compact"
                     >
                       <template v-slot:prepend>
                         <v-icon :color="form.book.tagsLock ? 'secondary' : ''"
@@ -404,10 +367,10 @@
                 </v-row>
               </v-container>
             </v-card>
-          </v-tab-item>
+          </v-window-item>
 
           <!--  Tab: Links  -->
-          <v-tab-item v-if="single">
+          <v-window-item v-if="single">
             <v-card flat min-height="100">
               <v-container fluid>
                 <!-- Links -->
@@ -421,13 +384,10 @@
                   >
                     <v-col cols="4" class="py-0">
                       <v-text-field v-model="form.book.links[i].label"
-                                    :label="$t('dialog.edit_books.field_link_label')"
-                                    filled
-                                    dense
+                                    :label="$t('dialog.edit_books.field_link_label')" variant="filled" density="compact"
                                     :rules="[linksLabelRules]"
-                                    @input="$v.form.book.links.$touch()"
-                                    @blur="$v.form.book.links.$touch()"
-                                    @change="form.book.linksLock = true"
+                                    @update:model-value="v$.form.book.links.$touch(); form.book.linksLock = true"
+                                    @blur="v$.form.book.links.$touch()"
                       >
                         <template v-slot:prepend>
                           <v-icon :color="form.book.linksLock ? 'secondary' : ''"
@@ -441,15 +401,12 @@
 
                     <v-col cols="8" class="py-0">
                       <v-text-field v-model="form.book.links[i].url"
-                                    :label="$t('dialog.edit_books.field_link_url')"
-                                    filled
-                                    dense
+                                    :label="$t('dialog.edit_books.field_link_url')" variant="filled" density="compact"
                                     :rules="[linksUrlRules]"
-                                    @input="$v.form.book.links.$touch()"
-                                    @blur="$v.form.book.links.$touch()"
-                                    @change="form.book.linksLock = true"
+                                    @update:model-value="v$.form.book.links.$touch(); form.book.linksLock = true"
+                                    @blur="v$.form.book.links.$touch()"
                       >
-                        <template v-slot:append-outer>
+                        <template v-slot:append>
                           <v-icon @click="form.book.links.splice(i, 1)">mdi-delete</v-icon>
                         </template>
                       </v-text-field>
@@ -462,10 +419,8 @@
                   <v-col cols="auto">
                     <v-btn
                       elevation="2"
-                      fab
-                      small
-                      bottom
-                      right
+                      icon
+                      size="small"
                       color="primary"
                       @click="form.book.links.push({label:'', url:''})"
                     >
@@ -475,10 +430,10 @@
                 </v-row>
               </v-container>
             </v-card>
-          </v-tab-item>
+          </v-window-item>
 
           <!--  Tab: Thumbnails  -->
-          <v-tab-item v-if="single">
+          <v-window-item v-if="single">
             <v-card flat>
               <v-container fluid>
                 <!-- Upload -->
@@ -507,16 +462,14 @@
 
               </v-container>
             </v-card>
-          </v-tab-item>
+          </v-window-item>
 
           <!--  Tab: Sharing  -->
-          <v-tab-item>
+          <v-window-item>
             <v-card flat>
               <v-container fluid>
                 <v-alert v-if="!single"
-                         type="warning"
-                         outlined
-                         dense
+                         type="warning" variant="outlined" density="compact"
                 >{{ $t('dialog.edit_books.tags_notice_multiple_edit') }}
                 </v-alert>
 
@@ -526,14 +479,11 @@
                     <span class="text-body-2">{{ $t('dialog.edit_series.field_labels') }}</span>
                     <v-combobox v-model="form.series.sharingLabels"
                                 :items="sharingLabelsAvailable"
-                                @input="$v.form.series.sharingLabels.$touch()"
-                                @change="form.series.sharingLabelsLock = true"
+                                @update:model-value="v$.form.series.sharingLabels.$touch(); form.series.sharingLabelsLock = true"
                                 hide-selected
                                 chips
-                                deletable-chips
-                                multiple
-                                filled
-                                dense
+                                closable-chips
+                                multiple variant="filled" density="compact"
                     >
                       <template v-slot:prepend>
                         <v-icon :color="form.series.sharingLabelsLock ? 'secondary' : ''"
@@ -547,12 +497,13 @@
                 </v-row>
               </v-container>
             </v-card>
-          </v-tab-item>
-        </v-tabs>
+          </v-window-item>
+          </v-window>
+        </div>
 
-        <v-card-actions class="hidden-xs-only">
+        <v-card-actions class="hidden-xs">
           <v-spacer/>
-          <v-btn text @click="dialogCancel">{{ $t('dialog.edit_books.button_cancel') }}</v-btn>
+          <v-btn variant="text" @click="dialogCancel">{{ $t('dialog.edit_books.button_cancel') }}</v-btn>
           <v-btn color="primary" @click="dialogConfirm">{{ $t('dialog.edit_books.button_confirm') }}</v-btn>
         </v-card-actions>
       </v-card>
@@ -561,8 +512,9 @@
 </template>
 
 <script lang="ts">
-import Vue from 'vue'
-import {helpers, minValue, requiredIf} from 'vuelidate/lib/validators'
+import {defineComponent} from 'vue'
+import useVuelidate from '@vuelidate/core'
+import {helpers, minValue, requiredIf} from '@vuelidate/validators'
 import {ReadingDirection} from '@/types/enum-books'
 import {Oneshot, SeriesDto} from '@/types/komga-series'
 import {ERROR, ErrorEvent} from '@/types/events'
@@ -575,14 +527,15 @@ import {debounce} from 'lodash'
 import {authorRoles} from '@/types/author-roles'
 import {groupAuthorsByRole} from '@/functions/authors'
 
-const tags = require('language-tags')
+import tags from 'language-tags'
 
 const validLanguage = (value: string) => !helpers.req(value) || tags.check(value)
 const validDate = (value: string) => !helpers.req(value) || isMatch(value, 'yyyy-MM-dd')
 const validIsbn = (value: string) => !helpers.req(value) || new IsbnVerify(value).isIsbn13({check_digit: true})
 
-export default Vue.extend({
+export default defineComponent({
   name: 'EditOneshotDialog',
+  setup: () => ({v$: useVuelidate()}),
   components: {ThumbnailCard, DropZone},
   data: () => {
     return {
@@ -647,14 +600,14 @@ export default Vue.extend({
     }
   },
   props: {
-    value: Boolean,
+    modelValue: Boolean,
     oneshots: {
       type: [Object as () => Oneshot, Array as () => Oneshot[]],
       required: true,
     },
   },
   watch: {
-    value(val) {
+    modelValue(val) {
       this.modal = val
     },
     modal(val) {
@@ -751,13 +704,13 @@ export default Vue.extend({
     },
     ageRatingErrors(): string[] {
       const errors = [] as string[]
-      if (!this.$v.form?.series?.ageRating?.$dirty) return errors
-      !this.$v?.form?.series?.ageRating?.minValue && errors.push(this.$t('dialog.edit_series.field_age_rating_error').toString())
+      if (!this.v$.form?.series?.ageRating?.$dirty) return errors
+      !this.v$?.form?.series?.ageRating?.minValue && errors.push(this.$t('dialog.edit_series.field_age_rating_error').toString())
       return errors
     },
     languageErrors(): string[] {
-      if (!this.$v.form?.series?.language?.$dirty) return []
-      if (!this.$v?.form?.series?.language?.validLanguage) return tags(this.form.series.language).errors().map((x: any) => x.message)
+      if (!this.v$.form?.series?.language?.$dirty) return []
+      if (!this.v$?.form?.series?.language?.validLanguage) return tags(this.form.series.language).errors().map((x: any) => x.message)
       return []
     },
     dialogTitle(): string {
@@ -767,14 +720,14 @@ export default Vue.extend({
     },
     releaseDateErrors(): string[] {
       const errors = [] as string[]
-      if (!this.$v.form?.book?.releaseDate?.$dirty) return errors
-      !this.$v?.form?.book?.releaseDate?.validDate && errors.push(this.$t('dialog.edit_books.field_release_date_error').toString())
+      if (!this.v$.form?.book?.releaseDate?.$dirty) return errors
+      !this.v$?.form?.book?.releaseDate?.validDate && errors.push(this.$t('dialog.edit_books.field_release_date_error').toString())
       return errors
     },
     isbnErrors(): string[] {
       const errors = [] as string[]
-      if (!this.$v.form?.book?.isbn?.$dirty) return errors
-      !this.$v?.form?.book?.isbn?.validIsbn && errors.push(this.$t('dialog.edit_books.field_isbn_error').toString())
+      if (!this.v$.form?.book?.isbn?.$dirty) return errors
+      !this.v$?.form?.book?.isbn?.validIsbn && errors.push(this.$t('dialog.edit_books.field_isbn_error').toString())
       return errors
     },
     customRoleRules(): any[] {
@@ -798,8 +751,9 @@ export default Vue.extend({
       if (url.protocol === 'http:' || url.protocol === 'https:') return true
       return this.$t('dialog.edit_books.field_link_url_error_protocol').toString()
     },
-    addRole() {
-      if ((this.$refs.customRoleForm as any).validate()) {
+    async addRole() {
+      const {valid} = await (this.$refs.customRoleForm as any).validate()
+      if (valid) {
         this.customRoles.push(this.customRole.toLowerCase());
         (this.$refs.customRoleForm as any).reset()
       }
@@ -815,14 +769,14 @@ export default Vue.extend({
     },
     requiredBookErrors(fieldName: string): string[] {
       const errors = [] as string[]
-      const formField = this.$v.form.book!![fieldName] as any
+      const formField = this.v$.form.book!![fieldName] as any
       if (!formField.$dirty) return errors
       !formField.required && errors.push(this.$t('common.required').toString())
       return errors
     },
     requiredSeriesErrors(fieldName: string): string[] {
       const errors = [] as string[]
-      const formField = this.$v.form.series!![fieldName] as any
+      const formField = this.v$.form.series!![fieldName] as any
       if (!formField.$dirty) return errors
       !formField.required && errors.push(this.$t('common.required').toString())
       return errors
@@ -832,7 +786,7 @@ export default Vue.extend({
       (this.$refs.customRoleForm as any)?.reset();
       (this.$refs.linksForm as any)?.resetValidation()
       this.customRoles = []
-      this.$v.$reset()
+      this.v$.$reset?.()
       if (Array.isArray(oneshots) && oneshots.length === 0) return
       else if (this.$_.isEmpty(oneshots)) return
       if (Array.isArray(oneshots) && oneshots.length > 0) {
@@ -900,18 +854,21 @@ export default Vue.extend({
       }
     },
     dialogCancel() {
-      this.$emit('input', false)
+      this.$emit('update:modelValue', false)
       this.dialogReset(this.oneshots)
     },
     async dialogConfirm() {
       if (await this.editOneShots()) {
-        this.$emit('input', false)
+        this.$emit('update:modelValue', false)
       }
     },
-    validateForm(): any {
-      if (!this.$v.$invalid
-        && (!this.single || !this.$refs.linksForm || (this.$refs.linksForm as any).validate())
-      ) {
+    async validateForm(): Promise<any> {
+      if (this.v$.$invalid) return null
+      if (this.single && this.$refs.linksForm) {
+        const {valid} = await (this.$refs.linksForm as any).validate()
+        if (!valid) return null
+      }
+      {
         const metadataSeries = {
           readingDirectionLock: this.form.series.readingDirectionLock,
           ageRatingLock: this.form.series.ageRatingLock,
@@ -925,7 +882,7 @@ export default Vue.extend({
           tagsLock: this.form.book.tagsLock,
         }
 
-        if (this.$v.form?.book?.authors?.$dirty) {
+        if (this.v$.form?.book?.authors?.$dirty) {
           this.$_.merge(metadataBook, {
             authors: this.$_.keys(this.form.book.authors).flatMap((role: string) =>
               this.$_.get(this.form.book.authors, role).map((name: string) => ({name: name, role: role})),
@@ -933,31 +890,31 @@ export default Vue.extend({
           })
         }
 
-        if (this.$v.form?.book?.tags?.$dirty) {
+        if (this.v$.form?.book?.tags?.$dirty) {
           this.$_.merge(metadataBook, {tags: this.form.book.tags})
         }
 
-        if (this.$v.form?.series?.readingDirection?.$dirty) {
+        if (this.v$.form?.series?.readingDirection?.$dirty) {
           this.$_.merge(metadataSeries, {readingDirection: this.form.series.readingDirection ? this.form.series.readingDirection : null})
         }
 
-        if (this.$v.form?.series?.ageRating?.$dirty) {
+        if (this.v$.form?.series?.ageRating?.$dirty) {
           this.$_.merge(metadataSeries, {ageRating: this.form.series.ageRating})
         }
 
-        if (this.$v.form?.series?.publisher?.$dirty) {
+        if (this.v$.form?.series?.publisher?.$dirty) {
           this.$_.merge(metadataSeries, {publisher: this.form.series.publisher})
         }
 
-        if (this.$v.form?.series?.genres?.$dirty) {
+        if (this.v$.form?.series?.genres?.$dirty) {
           this.$_.merge(metadataSeries, {genres: this.form.series.genres})
         }
 
-        if (this.$v.form?.series?.language?.$dirty) {
+        if (this.v$.form?.series?.language?.$dirty) {
           this.$_.merge(metadataSeries, {language: this.form.series.language})
         }
 
-        if (this.$v.form?.series?.sharingLabels?.$dirty) {
+        if (this.v$.form?.series?.sharingLabels?.$dirty) {
           this.$_.merge(metadataSeries, {sharingLabels: this.form.series.sharingLabels})
         }
 
@@ -976,29 +933,29 @@ export default Vue.extend({
             linksLock: this.form.book.linksLock,
           })
 
-          if (this.$v.form?.series?.titleSort?.$dirty) {
+          if (this.v$.form?.series?.titleSort?.$dirty) {
             this.$_.merge(metadataSeries, {titleSort: this.form.series.titleSort})
           }
 
-          if (this.$v.form?.book?.title?.$dirty) {
+          if (this.v$.form?.book?.title?.$dirty) {
             this.$_.merge(metadataBook, {title: this.form.book.title})
             this.$_.merge(metadataSeries, {title: this.form.book.title})
           }
 
-          if (this.$v.form?.book?.summary?.$dirty) {
+          if (this.v$.form?.book?.summary?.$dirty) {
             this.$_.merge(metadataBook, {summary: this.form.book.summary})
             this.$_.merge(metadataSeries, {summary: this.form.book.summary})
           }
 
-          if (this.$v.form?.book?.releaseDate?.$dirty) {
+          if (this.v$.form?.book?.releaseDate?.$dirty) {
             this.$_.merge(metadataBook, {releaseDate: this.form.book.releaseDate ? this.form.book.releaseDate : null})
           }
 
-          if (this.$v.form?.book?.isbn?.$dirty) {
+          if (this.v$.form?.book?.isbn?.$dirty) {
             this.$_.merge(metadataBook, {isbn: this.form.book.isbn})
           }
 
-          if (this.$v.form?.book?.links?.$dirty || this.form.book.links.length != (this.books as BookDto).metadata.links?.length) {
+          if (this.v$.form?.book?.links?.$dirty || this.form.book.links.length != (this.books as BookDto).metadata.links?.length) {
             this.$_.merge(metadataBook, {links: this.form.book.links})
           }
         }
@@ -1038,7 +995,7 @@ export default Vue.extend({
         this.poster.deleteQueue.forEach(toDelete => this.$komgaBooks.deleteThumbnail(toDelete.bookId, toDelete.id))
       }
 
-      const metadata = this.validateForm()
+      const metadata = await this.validateForm()
       if (metadata) {
         const toUpdate = (this.single ? [this.oneshots] : this.oneshots) as Oneshot[]
         for (const o of toUpdate) {
@@ -1124,5 +1081,5 @@ export default Vue.extend({
 </script>
 
 <style lang="sass" scoped>
-@import 'src/styles/tabbed-dialog'
+@use '../../styles/tabbed-dialog'
 </style>

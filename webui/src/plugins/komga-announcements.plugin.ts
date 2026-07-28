@@ -1,17 +1,17 @@
 import {AxiosInstance} from 'axios'
-import _Vue from 'vue'
+import type {App} from 'vue'
 import KomgaAnnouncementsService from '@/services/komga-announcements.service'
 
 export default {
   install(
-    Vue: typeof _Vue,
+    Vue: App,
     {http}: { http: AxiosInstance }) {
-    Vue.prototype.$komgaAnnouncements = new KomgaAnnouncementsService(http)
+    Vue.config.globalProperties.$komgaAnnouncements = new KomgaAnnouncementsService(http)
   },
 }
 
-declare module 'vue/types/vue' {
-  interface Vue {
+declare module '@vue/runtime-core' {
+  interface ComponentCustomProperties {
     $komgaAnnouncements: KomgaAnnouncementsService;
   }
 }

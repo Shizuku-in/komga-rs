@@ -1,10 +1,10 @@
 import urls from '@/functions/urls'
 import axios, {AxiosInstance, AxiosRequestConfig} from 'axios'
-import _Vue from 'vue'
+import type {App} from 'vue'
 import {parseISO} from 'date-fns'
 
 export default {
-  install(Vue: typeof _Vue) {
+  install(Vue: App) {
     const client = axios.create({
       baseURL: urls.origin,
       withCredentials: true,
@@ -14,7 +14,7 @@ export default {
       handleDates(originalResponse.data)
       return originalResponse
     })
-    Vue.prototype.$http = client
+    Vue.config.globalProperties.$http = client
   },
 }
 
@@ -35,8 +35,8 @@ export function handleDates(body: any) {
   }
 }
 
-declare module 'vue/types/vue' {
-  interface Vue {
+declare module '@vue/runtime-core' {
+  interface ComponentCustomProperties {
     $http: AxiosInstance;
   }
 }

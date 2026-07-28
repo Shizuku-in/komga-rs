@@ -1,6 +1,6 @@
 <template>
   <v-container fluid class="pa-6">
-    <v-alert type="warning" dismissible text class="body-2">
+    <v-alert type="warning" closable variant="tonal" class="text-body-2">
       <div>{{ $t('duplicate_pages.info') }}</div>
     </v-alert>
 
@@ -30,8 +30,7 @@
           cols="auto"
         >
           <v-btn
-            rounded
-            small
+            rounded size="small"
             :color="sortActive.key === sortOption.key ? 'primary' : ''"
             @click="setSort(sortOption.key)"
           >
@@ -127,7 +126,7 @@
           />
         </v-card-text>
         <v-card-actions>
-          <v-btn @click="dialogMatches = false" text>{{ $t('common.close') }}</v-btn>
+          <v-btn @click="dialogMatches = false" variant="text">{{ $t('common.close') }}</v-btn>
         </v-card-actions>
       </v-card>
     </v-dialog>
@@ -144,7 +143,7 @@
 </template>
 
 <script lang="ts">
-import Vue from 'vue'
+import {defineComponent} from 'vue'
 import {PageHashDto, PageHashUnknownDto} from '@/types/komga-pagehashes'
 import {pageHashUnknownThumbnailUrl} from '@/functions/urls'
 import PageHashMatchesTable from '@/components/PageHashMatchesTable.vue'
@@ -154,7 +153,7 @@ import {PageHashAction} from '@/types/enum-pagehashes'
 import EmptyState from '@/components/EmptyState.vue'
 import ConfirmationDialog from '@/components/dialogs/ConfirmationDialog.vue'
 
-export default Vue.extend({
+export default defineComponent({
   name: 'DuplicatePagesUnknown',
   components: {ConfirmationDialog, EmptyState, PageHashUnknownCard, PageHashMatchesTable, PageSizeSelect},
   data: function () {

@@ -1,11 +1,11 @@
 <template>
-  <v-expansion-panels accordion flat tile hover>
+  <v-expansion-panels variant="accordion">
     <v-expansion-panel
       v-for="(f, key) in filtersOptions"
       :key="key"
       :disabled="(f.values && f.values.length === 0) && !f.search"
     >
-      <v-expansion-panel-header class="text-uppercase ps-1">
+      <v-expansion-panel-title class="text-uppercase ps-1">
         <v-icon
           color="secondary"
           style="max-width: 24px"
@@ -21,34 +21,34 @@
         >{{ groupActive(key) ? 'mdi-checkbox-marked' : '' }}
         </v-icon>
         {{ f.name }}
-      </v-expansion-panel-header>
-      <v-expansion-panel-content class="no-padding">
+      </v-expansion-panel-title>
+      <v-expansion-panel-text class="no-padding">
         <search-box-base
           v-if="f.search"
           :search-function="f.search"
           @selected="click(key, $event)"
         >
           <template v-slot:item="data">
-            <v-list-item-content class="text-body-2">{{ data.item }}</v-list-item-content>
+            <div class="text-body-2">{{ data.item }}</div>
           </template>
         </search-box-base>
 
         <div style="position: absolute; right: 0; z-index: 1">
           <v-btn-toggle v-if="f.anyAllSelector || groupAllOfActive(key)" mandatory class="semi-transparent"
-                        :value="filtersActiveMode[key]?.allOf">
-            <v-tooltip bottom>
-              <template v-slot:activator="{ on }">
-                <v-btn small icon :value="false" v-on="on" @click.stop="clickFilterMode(key, false)">
-                  <v-icon small>mdi-filter-outline</v-icon>
+                        :model-value="filtersActiveMode[key]?.allOf">
+            <v-tooltip location="bottom">
+              <template v-slot:activator="{ props }">
+                <v-btn size="small" icon :value="false" v-bind="props" @click.stop="clickFilterMode(key, false)">
+                  <v-icon size="small">mdi-filter-outline</v-icon>
                 </v-btn>
               </template>
               <span>{{ $t('common.any_of') }}</span>
             </v-tooltip>
 
-            <v-tooltip bottom>
-              <template v-slot:activator="{ on }">
-                <v-btn small icon :value="true" v-on="on" @click.stop="clickFilterMode(key, true)">
-                  <v-icon small>mdi-filter-multiple-outline</v-icon>
+            <v-tooltip location="bottom">
+              <template v-slot:activator="{ props }">
+                <v-btn size="small" icon :value="true" v-bind="props" @click.stop="clickFilterMode(key, true)">
+                  <v-icon size="small">mdi-filter-multiple-outline</v-icon>
                 </v-btn>
               </template>
               <span>{{ $t('common.all_of') }}</span>
@@ -57,17 +57,16 @@
         </div>
 
         <v-list
-          v-if="f.search || f.values"
-          dense
+          v-if="f.search || f.values" density="compact"
         >
           <!--    Dynamic content from search      -->
           <v-list-item v-for="(v, i) in searchFiltersActive(key)"
                        :key="i"
                        @click.stop="click(key, v)"
           >
-            <v-list-item-icon>
+            <template #prepend>
               <v-icon color="secondary">mdi-checkbox-marked</v-icon>
-            </v-list-item-icon>
+            </template>
             <v-list-item-title>{{ v }}</v-list-item-title>
           </v-list-item>
 
@@ -76,7 +75,7 @@
                        :key="JSON.stringify(v.value)"
                        @click.stop="click(key, v.value, v.nValue)"
           >
-            <v-list-item-icon>
+            <template #prepend>
               <v-icon v-if="key in filtersActive && includes(filtersActive[key], v.nValue)" color="secondary">
                 mdi-minus-box
               </v-icon>
@@ -86,21 +85,21 @@
               <v-icon v-else>
                 mdi-checkbox-blank-outline
               </v-icon>
-            </v-list-item-icon>
+            </template>
             <v-list-item-title>{{ v.name }}</v-list-item-title>
           </v-list-item>
         </v-list>
-      </v-expansion-panel-content>
+      </v-expansion-panel-text>
     </v-expansion-panel>
   </v-expansion-panels>
 </template>
 
 <script lang="ts">
-import Vue, {PropType} from 'vue'
+import {defineComponent, PropType} from 'vue'
 import SearchBoxBase from '@/components/SearchBoxBase.vue'
 import {FiltersActive, FiltersActiveMode, FiltersOptions} from '@/types/filter'
 
-export default Vue.extend({
+export default defineComponent({
   name: 'FilterPanels',
   components: {SearchBoxBase},
   props: {
@@ -176,7 +175,7 @@ export default Vue.extend({
 </script>
 
 <style>
-.no-padding .v-expansion-panel-content__wrap {
+.no-padding .v-expansion-panel-text__wrapper {
   padding: 0;
 }
 

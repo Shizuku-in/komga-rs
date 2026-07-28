@@ -1,7 +1,7 @@
 <template>
   <v-dialog v-model="modalAddUser"
             :fullscreen="this.$vuetify.breakpoint.xsOnly"
-            :hide-overlay="this.$vuetify.breakpoint.xsOnly"
+            :scrim="this.$vuetify.breakpoint.xsOnly ? false : undefined"
             max-width="450"
   >
     <v-card>
@@ -12,11 +12,11 @@
         <v-toolbar-title>{{ dialogTitle }}</v-toolbar-title>
         <v-spacer/>
         <v-toolbar-items>
-          <v-btn text color="primary" @click="dialogConfirm">{{ confirmText }}</v-btn>
+          <v-btn variant="text" color="primary" @click="dialogConfirm">{{ confirmText }}</v-btn>
         </v-toolbar-items>
       </v-toolbar>
 
-      <v-card-title class="hidden-xs-only">{{ dialogTitle }}</v-card-title>
+      <v-card-title class="hidden-xs">{{ dialogTitle }}</v-card-title>
 
       <v-card-text>
 
@@ -28,7 +28,7 @@
                               autofocus
                               :label="$t('dialog.add_user.field_email')"
                               :error-messages="getErrors('email')"
-                              @blur="$v.form.email.$touch()"
+                              @blur="v$.form.email.$touch()"
                 />
               </v-col>
             </v-row>
@@ -42,8 +42,8 @@
                               :append-icon="showPassword ? 'mdi-eye' : 'mdi-eye-off'"
                               @click:append="showPassword = !showPassword"
                               :error-messages="getErrors('password')"
-                              @input="$v.form.password.$touch()"
-                              @blur="$v.form.password.$touch()"
+                              @update:model-value="v$.form.password.$touch()"
+                              @blur="v$.form.password.$touch()"
                 />
               </v-col>
             </v-row>
@@ -64,9 +64,9 @@
 
       </v-card-text>
 
-      <v-card-actions class="hidden-xs-only">
+      <v-card-actions class="hidden-xs">
         <v-spacer/>
-        <v-btn text @click="dialogCancel">{{ $t('dialog.add_user.button_cancel') }}</v-btn>
+        <v-btn variant="text" @click="dialogCancel">{{ $t('dialog.add_user.button_cancel') }}</v-btn>
         <v-btn color="primary" @click="dialogConfirm">{{ confirmText }}</v-btn>
       </v-card-actions>
     </v-card>
@@ -75,18 +75,20 @@
 
 <script lang="ts">
 import {UserRoles} from '@/types/enum-users'
-import Vue from 'vue'
-import {email, required} from 'vuelidate/lib/validators'
+import {defineComponent} from 'vue'
+import useVuelidate from '@vuelidate/core'
+import {email, required} from '@vuelidate/validators'
 import {ERROR} from '@/types/events'
 
-export default Vue.extend({
+export default defineComponent({
   name: 'UserAddDialog',
+  setup: () => ({v$: useVuelidate()}),
   data: function () {
     return {
       modalAddUser: true,
       showPassword: false,
-      dialogTitle: this.$i18n.t('dialog.add_user.dialog_title').toString(),
-      confirmText: this.$i18n.t('dialog.add_user.button_confirm').toString(),
+      dialogTitle: this.$t('dialog.add_user.dialog_title').toString(),
+      confirmText: this.$t('dialog.add_user.button_confirm').toString(),
       form: {
         email: '',
         password: '',
@@ -117,7 +119,7 @@ export default Vue.extend({
     getErrors(fieldName: string): string[] {
       const errors = [] as string[]
 
-      const field = this.$v.form!![fieldName] as any
+      const field = this.v$.form!![fieldName] as any
       if (field && field.$invalid && field.$dirty) {
         if (!field.required) errors.push(this.$t('common.required').toString())
         if (!field.email) errors.push(this.$t('dialog.add_user.field_email_error').toString())
@@ -131,9 +133,9 @@ export default Vue.extend({
       this.addUser()
     },
     validateUser() {
-      this.$v.$touch()
+      this.v$.$touch()
 
-      if (!this.$v.$invalid) {
+      if (!this.v$.$invalid) {
         return {
           email: this.form.email,
           password: this.form.password,

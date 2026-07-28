@@ -1,7 +1,7 @@
 <template>
   <v-dialog v-model="modal"
             :fullscreen="this.$vuetify.breakpoint.xsOnly"
-            :hide-overlay="this.$vuetify.breakpoint.xsOnly"
+            :scrim="this.$vuetify.breakpoint.xsOnly ? false : undefined"
             max-width="700"
             scrollable
   >
@@ -14,36 +14,39 @@
           <v-toolbar-title>{{ dialogTitle }}</v-toolbar-title>
           <v-spacer/>
           <v-toolbar-items>
-            <v-btn text color="primary" @click="nextTab" v-if="showNext">
+            <v-btn variant="text" color="primary" @click="nextTab" v-if="showNext">
               {{ $t('dialog.edit_library.button_next') }}
             </v-btn>
-            <v-btn text color="primary" @click="dialogConfirm" v-else>{{ confirmText }}</v-btn>
+            <v-btn variant="text" color="primary" @click="dialogConfirm" v-else>{{ confirmText }}</v-btn>
           </v-toolbar-items>
         </v-toolbar>
 
-        <v-card-title class="hidden-xs-only">{{ dialogTitle }}</v-card-title>
+        <v-card-title class="hidden-xs">{{ dialogTitle }}</v-card-title>
 
         <v-card-text class="pa-0">
-          <v-tabs :vertical="$vuetify.breakpoint.smAndUp" v-model="tab">
+          <div :class="{'d-flex': $vuetify.breakpoint.smAndUp}">
+            <v-tabs :direction="$vuetify.breakpoint.smAndUp ? 'vertical' : 'horizontal'" v-model="tab">
             <v-tab class="justify-start">
-              <v-icon left class="hidden-xs-only">mdi-bookshelf</v-icon>
+              <v-icon start class="hidden-xs">mdi-bookshelf</v-icon>
               {{ $t('dialog.edit_library.tab_general') }}
             </v-tab>
             <v-tab class="justify-start">
-              <v-icon left class="hidden-xs-only">mdi-magnify-scan</v-icon>
+              <v-icon start class="hidden-xs">mdi-magnify-scan</v-icon>
               {{ $t('dialog.edit_library.label_scanner') }}
             </v-tab>
             <v-tab class="justify-start">
-              <v-icon left class="hidden-xs-only">mdi-tune</v-icon>
+              <v-icon start class="hidden-xs">mdi-tune</v-icon>
               {{ $t('dialog.edit_library.tab_options') }}
             </v-tab>
             <v-tab class="justify-start">
-              <v-icon left class="hidden-xs-only">mdi-book-information-variant</v-icon>
+              <v-icon start class="hidden-xs">mdi-book-information-variant</v-icon>
               {{ $t('dialog.edit_library.tab_metadata') }}
             </v-tab>
+            </v-tabs>
 
+            <v-window v-model="tab" class="flex-grow-1 tabbed-dialog-content">
             <!--  Tab: General  -->
-            <v-tab-item>
+            <v-window-item>
               <v-card flat :min-height="$vuetify.breakpoint.xs ? $vuetify.breakpoint.height * .8 : undefined">
                 <v-container fluid>
 
@@ -53,8 +56,8 @@
                                     autofocus
                                     :label="$t('dialog.edit_library.field_name')"
                                     :error-messages="getErrors('name')"
-                                    @input="$v.form.name.$touch()"
-                                    @blur="$v.form.name.$touch()"
+                                    @update:model-value="v$.form.name.$touch()"
+                                    @blur="v$.form.name.$touch()"
                       />
                     </v-col>
                   </v-row>
@@ -63,7 +66,7 @@
                     <v-col cols="8" align-self="center">
                       <file-browser-dialog
                         v-model="modalFileBrowser"
-                        :path.sync="form.path"
+                        v-model:path="form.path"
                         :confirm-text="$t('dialog.edit_library.file_browser_dialog_button_confirm')"
                         :dialog-title="$t('dialog.edit_library.file_browser_dialog_title')"
                       />
@@ -71,8 +74,8 @@
                       <v-text-field v-model="form.path"
                                     :label="$t('dialog.edit_library.field_root_folder')"
                                     :error-messages="getErrors('path')"
-                                    @input="$v.form.path.$touch()"
-                                    @blur="$v.form.path.$touch()"
+                                    @update:model-value="v$.form.path.$touch()"
+                                    @blur="v$.form.path.$touch()"
                       />
                     </v-col>
                     <v-col cols="4" align-self="center">
@@ -81,10 +84,10 @@
                   </v-row>
                 </v-container>
               </v-card>
-            </v-tab-item>
+            </v-window-item>
 
             <!--  Tab: Scanner  -->
-            <v-tab-item>
+            <v-window-item>
               <v-card flat :min-height="$vuetify.breakpoint.xs ? $vuetify.breakpoint.height * .8 : undefined">
                 <v-container fluid>
                   <v-row>
@@ -103,9 +106,9 @@
                         class="mx-4"
                       >
                         <template v-slot:append>
-                          <v-tooltip bottom>
-                            <template v-slot:activator="{ on }">
-                              <v-icon v-on="on" color="info">mdi-help-circle-outline</v-icon>
+                          <v-tooltip location="bottom">
+                            <template v-slot:activator="{ props }">
+                              <v-icon v-bind="props" color="info">mdi-help-circle-outline</v-icon>
                             </template>
                             {{ $t('dialog.edit_library.tooltip_scanner_force_modified_time') }}
                           </v-tooltip>
@@ -133,10 +136,10 @@
                                     :error-messages="getErrors('oneshotsDirectory')"
                                     class="mx-4 mt-4"
                       >
-                        <template v-slot:append-outer>
-                          <v-tooltip bottom>
-                            <template v-slot:activator="{ on }">
-                              <v-icon v-on="on" color="info">mdi-help-circle-outline</v-icon>
+                        <template v-slot:append>
+                          <v-tooltip location="bottom">
+                            <template v-slot:activator="{ props }">
+                              <v-icon v-bind="props" color="info">mdi-help-circle-outline</v-icon>
                             </template>
                             {{ $t('dialog.edit_library.tooltip_oneshotsdirectory') }}
                           </v-tooltip>
@@ -144,19 +147,18 @@
                       </v-text-field>
 
                       <div class="mx-4">
-                        <span class="text-subtitle-1 text--primary">{{
+                        <span class="text-subtitle-1 text-high-emphasis">{{
                             $t('dialog.edit_library.label_scan_types')
                           }}</span>
                         <v-chip-group
                           multiple
                           v-model="form.scanTypes"
-                          active-class="primary"
+                          selected-class="bg-primary"
                         >
                           <v-chip v-for="type in fileTypes"
                                   :key="type.value"
                                   :value="type.value"
-                                  filter
-                                  outlined
+                                  filter variant="outlined"
                           >{{ type.text }}
                           </v-chip>
                         </v-chip-group>
@@ -165,8 +167,9 @@
                       <v-combobox v-model="form.scanDirectoryExclusions"
                                   clearable
                                   multiple
-                                  small-chips
-                                  deletable-chips
+                                  chips
+                                  closable-chips
+                                  density="compact"
                                   :label="$t('dialog.edit_library.label_scan_directory_exclusions')"
                                   class="mx-4"
                       />
@@ -174,15 +177,15 @@
                   </v-row>
                 </v-container>
               </v-card>
-            </v-tab-item>
+            </v-window-item>
 
             <!--  Tab: Options  -->
-            <v-tab-item>
+            <v-window-item>
               <v-card flat :min-height="$vuetify.breakpoint.xs ? $vuetify.breakpoint.height * .8 : undefined">
                 <v-container fluid>
                   <v-row>
                     <v-col cols="auto">
-                      <span class="text-subtitle-1 text--primary">{{ $t('dialog.edit_library.label_analysis') }}</span>
+                      <span class="text-subtitle-1 text-high-emphasis">{{ $t('dialog.edit_library.label_analysis') }}</span>
                       <v-checkbox
                         v-model="form.hashFiles"
                         :label="$t('dialog.edit_library.field_analysis_hash_files')"
@@ -190,9 +193,9 @@
                         class="mx-4 align-center"
                       >
                         <template v-slot:append>
-                          <v-tooltip bottom>
-                            <template v-slot:activator="{ on }">
-                              <v-icon v-on="on" color="warning">mdi-alert-circle-outline</v-icon>
+                          <v-tooltip location="bottom">
+                            <template v-slot:activator="{ props }">
+                              <v-icon v-bind="props" color="warning">mdi-alert-circle-outline</v-icon>
                             </template>
                             {{ $t('dialog.edit_library.tooltip_use_resources') }}
                           </v-tooltip>
@@ -206,9 +209,9 @@
                         class="mx-4"
                       >
                         <template v-slot:append>
-                          <v-tooltip bottom>
-                            <template v-slot:activator="{ on }">
-                              <v-icon v-on="on" color="warning">mdi-alert-circle-outline</v-icon>
+                          <v-tooltip location="bottom">
+                            <template v-slot:activator="{ props }">
+                              <v-icon v-bind="props" color="warning">mdi-alert-circle-outline</v-icon>
                             </template>
                             {{ $t('dialog.edit_library.tooltip_use_resources') }}
                           </v-tooltip>
@@ -222,9 +225,9 @@
                         class="mx-4"
                       >
                         <template v-slot:append>
-                          <v-tooltip bottom>
-                            <template v-slot:activator="{ on }">
-                              <v-icon v-on="on" color="warning">mdi-alert-circle-outline</v-icon>
+                          <v-tooltip location="bottom">
+                            <template v-slot:activator="{ props }">
+                              <v-icon v-bind="props" color="warning">mdi-alert-circle-outline</v-icon>
                             </template>
                             {{ $t('dialog.edit_library.tooltip_use_resources') }}
                           </v-tooltip>
@@ -238,9 +241,9 @@
                         class="mx-4"
                       >
                         <template v-slot:append>
-                          <v-tooltip bottom>
-                            <template v-slot:activator="{ on }">
-                              <v-icon v-on="on" color="warning">mdi-alert-circle-outline</v-icon>
+                          <v-tooltip location="bottom">
+                            <template v-slot:activator="{ props }">
+                              <v-icon v-bind="props" color="warning">mdi-alert-circle-outline</v-icon>
                             </template>
                             {{ $t('dialog.edit_library.tooltip_use_resources') }}
                           </v-tooltip>
@@ -257,7 +260,7 @@
                         :label="$t('dialog.edit_library.label_file_management')"
                       >
                         <template v-slot:label>
-                        <span class="text-subtitle-1 text--primary">{{
+                        <span class="text-subtitle-1 text-high-emphasis">{{
                             $t('dialog.edit_library.label_file_management')
                           }}</span>
                         </template>
@@ -280,13 +283,12 @@
                   </v-row>
                   <v-row>
                     <v-col>
-                      <span class="text-subtitle-1 text--primary">{{
+                      <span class="text-subtitle-1 text-high-emphasis">{{
                           $t('dialog.edit_library.label_series_cover')
                         }}</span>
                       <v-select :items="seriesCover"
                                 v-model="form.seriesCover"
-                                :label="$t('dialog.edit_library.field_series_cover')"
-                                solo
+                                :label="$t('dialog.edit_library.field_series_cover')" variant="solo"
                                 flat
                       />
                     </v-col>
@@ -294,10 +296,10 @@
 
                 </v-container>
               </v-card>
-            </v-tab-item>
+            </v-window-item>
 
             <!--  Tab: Metadata  -->
-            <v-tab-item>
+            <v-window-item>
               <v-card flat :min-height="$vuetify.breakpoint.xs ? $vuetify.breakpoint.height * .8 : undefined">
                 <v-container fluid>
                   <v-row>
@@ -308,7 +310,7 @@
                         hide-details
                       >
                         <template v-slot:label>
-                        <span class="text-subtitle-1 text--primary">{{
+                        <span class="text-subtitle-1 text-high-emphasis">{{
                             $t('dialog.edit_library.label_import_comicinfo')
                           }}</span>
                         </template>
@@ -353,7 +355,7 @@
                         hide-details
                       >
                         <template v-slot:label>
-                        <span class="text-subtitle-1 text--primary">{{
+                        <span class="text-subtitle-1 text-high-emphasis">{{
                             $t('dialog.edit_library.label_import_epub')
                           }}</span>
                         </template>
@@ -374,7 +376,7 @@
                   </v-row>
                   <v-row>
                     <v-col>
-                      <span class="text-subtitle-1 text--primary">{{
+                      <span class="text-subtitle-1 text-high-emphasis">{{
                           $t('dialog.edit_library.label_import_mylar')
                         }}</span>
                       <v-checkbox
@@ -387,7 +389,7 @@
                   </v-row>
                   <v-row>
                     <v-col>
-                      <span class="text-subtitle-1 text--primary">{{
+                      <span class="text-subtitle-1 text-high-emphasis">{{
                           $t('dialog.edit_library.label_import_local')
                         }}</span>
                       <v-checkbox
@@ -400,7 +402,7 @@
                   </v-row>
                   <v-row>
                     <v-col>
-                      <span class="text-subtitle-1 text--primary">{{
+                      <span class="text-subtitle-1 text-high-emphasis">{{
                           $t('dialog.edit_library.label_import_barcode_isbn')
                         }}</span>
                       <v-checkbox
@@ -410,9 +412,9 @@
                         class="mx-4"
                       >
                         <template v-slot:append>
-                          <v-tooltip bottom>
-                            <template v-slot:activator="{ on }">
-                              <v-icon v-on="on" color="warning">mdi-alert-circle-outline</v-icon>
+                          <v-tooltip location="bottom">
+                            <template v-slot:activator="{ props }">
+                              <v-icon v-bind="props" color="warning">mdi-alert-circle-outline</v-icon>
                             </template>
                             {{ $t('dialog.edit_library.tooltip_use_resources') }}
                           </v-tooltip>
@@ -423,14 +425,15 @@
 
                 </v-container>
               </v-card>
-            </v-tab-item>
+            </v-window-item>
 
-          </v-tabs>
+            </v-window>
+          </div>
         </v-card-text>
 
-        <v-card-actions class="hidden-xs-only">
+        <v-card-actions class="hidden-xs">
           <v-spacer/>
-          <v-btn text @click="dialogClose">{{ $t('dialog.edit_library.button_cancel') }}</v-btn>
+          <v-btn variant="text" @click="dialogClose">{{ $t('dialog.edit_library.button_cancel') }}</v-btn>
           <v-btn color="primary" @click="nextTab" v-if="showNext">
             {{ $t('dialog.edit_library.button_next') }}
           </v-btn>
@@ -443,14 +446,16 @@
 
 <script lang="ts">
 import FileBrowserDialog from '@/components/dialogs/FileBrowserDialog.vue'
-import Vue from 'vue'
-import {required} from 'vuelidate/lib/validators'
+import {defineComponent} from 'vue'
+import useVuelidate from '@vuelidate/core'
+import {required} from '@vuelidate/validators'
 import {ERROR} from '@/types/events'
 import {ScanIntervalDto, SeriesCoverDto} from '@/types/enum-libraries'
 import {LibraryDto} from '@/types/komga-libraries'
 
-export default Vue.extend({
+export default defineComponent({
   name: 'LibraryEditDialog',
+  setup: () => ({v$: useVuelidate()}),
   components: {FileBrowserDialog},
   data: () => {
     return {
@@ -569,14 +574,14 @@ export default Vue.extend({
     },
   },
   props: {
-    value: Boolean,
+    modelValue: Boolean,
     library: {
       type: Object as () => LibraryDto,
       required: false,
     },
   },
   watch: {
-    value(val) {
+    modelValue(val) {
       this.modal = val
     },
     modal(val) {
@@ -592,13 +597,13 @@ export default Vue.extend({
   },
   methods: {
     nextTab() {
-      this.$v.$touch()
-      if (!this.$v.$invalid) this.tab += 1
+      this.v$.$touch()
+      if (!this.v$.$invalid) this.tab += 1
     },
     getErrors(fieldName: string) {
       const errors = []
 
-      const field = this.$v.form!![fieldName] as any
+      const field = this.v$.form!![fieldName] as any
       if (field && field.$invalid && field.$dirty) {
         const properName = this.validationFieldNames.has(fieldName)
           ? this.validationFieldNames.get(fieldName) : fieldName.charAt(0).toUpperCase() + fieldName.substring(1)
@@ -607,7 +612,7 @@ export default Vue.extend({
       return errors
     },
     dialogClose() {
-      this.$emit('input', false)
+      this.$emit('update:modelValue', false)
       this.tab = 0
     },
     dialogConfirm() {
@@ -644,12 +649,12 @@ export default Vue.extend({
       this.form.hashKoreader = library ? library.hashKoreader : false
       this.form.analyzeDimensions = library ? library.analyzeDimensions : true
       this.form.oneshotsDirectory = library ? library.oneshotsDirectory : ''
-      this.$v.$reset()
+      this.v$.$reset?.()
     },
     validateLibrary() {
-      this.$v.$touch()
+      this.v$.$touch()
 
-      if (!this.$v.$invalid) {
+      if (!this.v$.$invalid) {
         return {
           name: this.form.name,
           root: this.form.path,

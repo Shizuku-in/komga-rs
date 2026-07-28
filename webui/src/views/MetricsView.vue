@@ -25,7 +25,7 @@
             {{ $t('common.all_libraries') }}
           </v-card-title>
           <v-card-text>
-            <v-simple-table>
+            <v-table>
               <tbody>
               <tr v-if="booksFileSize">
                 <td>{{ $t('common.disk_space') }}</td>
@@ -52,7 +52,7 @@
                 <td> {{ sidecars.measurements[0].value }}</td>
               </tr>
               </tbody>
-            </v-simple-table>
+            </v-table>
           </v-card-text>
         </v-card>
       </v-col>
@@ -98,11 +98,11 @@
 </template>
 
 <script lang="ts">
-import Vue from 'vue'
+import {defineComponent} from 'vue'
 import {MetricDto} from '@/types/komga-metrics'
 import {getFileSize} from '@/functions/file'
 
-export default Vue.extend({
+export default defineComponent({
   name: 'MetricsView',
   data: () => ({
     getFileSize,

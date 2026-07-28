@@ -6,23 +6,26 @@
   >
     <form novalidate>
       <v-card>
-        <v-card-title class="hidden-xs-only">
+        <v-card-title class="hidden-xs">
           <v-icon class="mx-4">mdi-pencil</v-icon>
           {{ $t('dialog.edit_collection.dialog_title') }}
         </v-card-title>
 
-        <v-tabs :vertical="$vuetify.breakpoint.smAndUp" v-model="tab">
+        <div :class="{'d-flex': $vuetify.breakpoint.smAndUp}">
+          <v-tabs :direction="$vuetify.breakpoint.smAndUp ? 'vertical' : 'horizontal'" v-model="tab">
           <v-tab class="justify-start">
-            <v-icon left class="hidden-xs-only">mdi-format-align-center</v-icon>
+            <v-icon start class="hidden-xs">mdi-format-align-center</v-icon>
             {{ $t('dialog.edit_collection.tab_general') }}
           </v-tab>
           <v-tab class="justify-start">
-            <v-icon left class="hidden-xs-only">mdi-image</v-icon>
+            <v-icon start class="hidden-xs">mdi-image</v-icon>
             {{ $t('dialog.edit_collection.tab_poster') }}
           </v-tab>
+          </v-tabs>
 
+          <v-window v-model="tab" class="flex-grow-1 tabbed-dialog-content">
           <!--  Tab: General  -->
-          <v-tab-item>
+          <v-window-item>
             <v-card flat>
               <v-container fluid>
                 <v-row>
@@ -47,10 +50,10 @@
 
               </v-container>
             </v-card>
-          </v-tab-item>
+          </v-window-item>
 
           <!--  Tab: Thumbnails  -->
-          <v-tab-item>
+          <v-window-item>
             <v-card flat>
               <v-container fluid>
                 <!-- Upload -->
@@ -79,12 +82,13 @@
 
               </v-container>
             </v-card>
-          </v-tab-item>
-        </v-tabs>
+          </v-window-item>
+          </v-window>
+        </div>
 
         <v-card-actions>
           <v-spacer/>
-          <v-btn text @click="dialogCancel">{{ $t('dialog.edit_collection.button_cancel') }}</v-btn>
+          <v-btn variant="text" @click="dialogCancel">{{ $t('dialog.edit_collection.button_cancel') }}</v-btn>
           <v-btn color="primary"
                  @click="dialogConfirm"
                  :disabled="getErrorsName !== ''"
@@ -98,12 +102,12 @@
 
 <script lang="ts">
 import {UserRoles} from '@/types/enum-users'
-import Vue from 'vue'
+import {defineComponent} from 'vue'
 import {ERROR, ErrorEvent} from '@/types/events'
 import ThumbnailCard from '@/components/ThumbnailCard.vue'
 import DropZone from '@/components/DropZone.vue'
 
-export default Vue.extend({
+export default defineComponent({
   name: 'CollectionEditDialog',
   components: {ThumbnailCard, DropZone},
   data: () => {
@@ -125,7 +129,7 @@ export default Vue.extend({
     }
   },
   props: {
-    value: Boolean,
+    modelValue: Boolean,
     collection: {
       type: Object as () => CollectionDto,
       required: true,
@@ -171,11 +175,11 @@ export default Vue.extend({
       this.poster.collectionThumbnails = []
     },
     dialogCancel() {
-      this.$emit('input', false)
+      this.$emit('update:modelValue', false)
     },
     dialogConfirm() {
       this.editCollection()
-      this.$emit('input', false)
+      this.$emit('update:modelValue', false)
     },
     async editCollection() {
       try {

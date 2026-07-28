@@ -7,16 +7,16 @@
       :loading="loading"
       :items="results"
       :hide-no-data="!showResults"
-      clearable
-      solo
+      clearable variant="solo"
       hide-details
       no-filter
       return-object
       prepend-inner-icon="mdi-magnify"
       append-icon=""
-      item-text="id"
+      item-title="id"
+      item-value="id"
       auto-select-first
-      :search-input.sync="search"
+      v-model:search="search"
       :menu-props="{maxHeight: $vuetify.breakpoint.height * .9, minWidth: $vuetify.breakpoint.mdAndUp ? $vuetify.breakpoint.width * .4 : $vuetify.breakpoint.width * .8}"
       @keydown.esc="clear"
       @blur="clear"
@@ -25,90 +25,89 @@
       <template v-slot:selection>
       </template>
 
-      <template v-slot:item="data">
-        <template v-if="typeof data.item !== 'object'">
-          <v-list-item-content>{{ data.item }}</v-list-item-content>
-        </template>
+      <template #item="{props, item}">
+        <v-list-item v-bind="props">
+          <template v-if="item.raw.type === 'search'">
+            <div>{{ $t('searchbox.search_all') }}</div>
+          </template>
 
-        <template v-if="data.item.type === 'search'">
-          <v-list-item-content>{{ $t('searchbox.search_all') }}</v-list-item-content>
-        </template>
-
-        <template v-if="data.item.type === 'series'">
-          <v-img :src="seriesThumbnailUrl(data.item.id)"
+          <template v-if="item.raw.type === 'series'">
+            <div class="d-flex align-center">
+              <v-img :src="seriesThumbnailUrl(item.raw.id)"
                  height="50"
                  max-width="35"
                  class="my-1 mx-3"
-                 contain
           >
-                <span v-if="data.item.booksUnreadCount !== 0"
-                      class="white--text pa-0 px-1 text-caption"
+                <span v-if="item.raw.booksUnreadCount !== 0"
+                      class="text-white pa-0 px-1 text-caption"
                       :style="{background: 'orange', position: 'absolute', right: 0}"
                 >
-                  {{ data.item.booksUnreadCount }}
+                  {{ item.raw.booksUnreadCount }}
                 </span>
-          </v-img>
-          <v-list-item-content>
-            <v-list-item-title>{{ data.item.metadata.title }}</v-list-item-title>
-            <v-list-item-subtitle>{{
-                $t('searchbox.in_library', {library: getLibraryName(data.item)})
-              }}
-            </v-list-item-subtitle>
-            <v-list-item-subtitle v-if="data.item.booksMetadata.releaseDate">{{
-                new Intl.DateTimeFormat($i18n.locale, {
-                  year: 'numeric',
-                  timeZone: 'UTC'
-                }).format(new Date(data.item.booksMetadata.releaseDate))
-              }}
-            </v-list-item-subtitle>
-          </v-list-item-content>
-        </template>
+              </v-img>
+              <div>
+                <v-list-item-title>{{ item.raw.metadata.title }}</v-list-item-title>
+                <v-list-item-subtitle>{{
+                    $t('searchbox.in_library', {library: getLibraryName(item.raw)})
+                  }}
+                </v-list-item-subtitle>
+                <v-list-item-subtitle v-if="item.raw.booksMetadata.releaseDate">{{
+                    new Intl.DateTimeFormat($i18n.locale, {
+                      year: 'numeric',
+                      timeZone: 'UTC'
+                    }).format(new Date(item.raw.booksMetadata.releaseDate))
+                  }}
+                </v-list-item-subtitle>
+              </div>
+            </div>
+          </template>
 
-        <template v-if="data.item.type === 'book'">
-          <v-img :src="bookThumbnailUrl(data.item.id)"
+          <template v-if="item.raw.type === 'book'">
+            <div class="d-flex align-center">
+              <v-img :src="bookThumbnailUrl(item.raw.id)"
                  height="50"
                  max-width="35"
                  class="my-1 mx-3"
-                 contain
           >
-            <div class="unread" v-if="isUnread(data.item)"/>
-          </v-img>
+                <div class="unread" v-if="isUnread(item.raw)"/>
+              </v-img>
 
-          <v-list-item-content>
-            <v-list-item-title>{{ data.item.metadata.title }}</v-list-item-title>
-            <v-list-item-subtitle v-if="!data.item.oneshot">{{ data.item.seriesTitle }} - {{
-                data.item.metadata.number
-              }}
-            </v-list-item-subtitle>
-            <v-list-item-subtitle>{{
-                $t('searchbox.in_library', {library: getLibraryName(data.item)})
-              }}
-            </v-list-item-subtitle>
-          </v-list-item-content>
-        </template>
+              <div>
+                <v-list-item-title>{{ item.raw.metadata.title }}</v-list-item-title>
+                <v-list-item-subtitle v-if="!item.raw.oneshot">{{ item.raw.seriesTitle }} - {{
+                    item.raw.metadata.number
+                  }}
+                </v-list-item-subtitle>
+                <v-list-item-subtitle>{{
+                    $t('searchbox.in_library', {library: getLibraryName(item.raw)})
+                  }}
+                </v-list-item-subtitle>
+              </div>
+            </div>
+          </template>
 
-        <template v-if="data.item.type === 'collection'">
-          <v-img :src="collectionThumbnailUrl(data.item.id)"
+          <template v-if="item.raw.type === 'collection'">
+            <div class="d-flex align-center">
+              <v-img :src="collectionThumbnailUrl(item.raw.id)"
                  height="50"
                  max-width="35"
                  class="my-1 mx-3"
-          />
-          <v-list-item-content>
-            <v-list-item-title>{{ data.item.name }}</v-list-item-title>
-          </v-list-item-content>
-        </template>
+              />
+              <v-list-item-title>{{ item.raw.name }}</v-list-item-title>
+            </div>
+          </template>
 
-        <template v-if="data.item.type === 'readlist'">
-          <v-img :src="readListThumbnailUrl(data.item.id)"
+          <template v-if="item.raw.type === 'readlist'">
+            <div class="d-flex align-center">
+              <v-img :src="readListThumbnailUrl(item.raw.id)"
                  height="50"
                  max-width="35"
                  class="my-1 mx-3"
-          />
-          <v-list-item-content>
-            <v-list-item-title>{{ data.item.name }}</v-list-item-title>
-          </v-list-item-content>
-        </template>
-
+              />
+              <v-list-item-title>{{ item.raw.name }}</v-list-item-title>
+            </div>
+          </template>
+        </v-list-item>
       </template>
     </v-autocomplete>
   </div>
@@ -117,7 +116,7 @@
 <script lang="ts">
 import {bookThumbnailUrl, collectionThumbnailUrl, readListThumbnailUrl, seriesThumbnailUrl} from '@/functions/urls'
 import {debounce} from 'lodash'
-import Vue from 'vue'
+import {defineComponent} from 'vue'
 import {BookDto} from '@/types/komga-books'
 import {SeriesDto} from '@/types/komga-series'
 import {getReadProgress} from '@/functions/book-progress'
@@ -130,7 +129,7 @@ import {
   SeriesSearch,
 } from '@/types/komga-search'
 
-export default Vue.extend({
+export default defineComponent({
   name: 'SearchBox',
   data: function () {
     return {
@@ -180,21 +179,21 @@ export default Vue.extend({
     results(): object[] {
       const results = []
       if (this.search) {
-        results.push({type: 'search'})
+        results.push({type: 'search', id: '__search__'})
         if (this.series.length > 0) {
-          results.push({header: this.$tc('common.series', 2).toString().toUpperCase()})
+          results.push({type: 'subheader', id: this.$tc('common.series', 2).toString().toUpperCase()})
           results.push(...this.series.map(o => ({...o, type: 'series'})))
         }
         if (this.books.length > 0) {
-          results.push({header: this.$t('common.books').toString().toUpperCase()})
+          results.push({type: 'subheader', id: this.$t('common.books').toString().toUpperCase()})
           results.push(...this.books.map(o => ({...o, type: 'book'})))
         }
         if (this.collections.length > 0) {
-          results.push({header: this.$t('common.collections').toString().toUpperCase()})
+          results.push({type: 'subheader', id: this.$t('common.collections').toString().toUpperCase()})
           results.push(...this.collections.map(o => ({...o, type: 'collection'})))
         }
         if (this.readLists.length > 0) {
-          results.push({header: this.$t('common.readlists').toString().toUpperCase()})
+          results.push({type: 'subheader', id: this.$t('common.readlists').toString().toUpperCase()})
           results.push(...this.readLists.map(o => ({...o, type: 'readlist'})))
         }
       }

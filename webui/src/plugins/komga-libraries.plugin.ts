@@ -1,6 +1,6 @@
 import KomgaLibrariesService from '@/services/komga-libraries.service'
 import {AxiosInstance} from 'axios'
-import _Vue from 'vue'
+import type {App} from 'vue'
 import {Module} from 'vuex/types'
 import {LibraryDto} from '@/types/komga-libraries'
 
@@ -50,17 +50,17 @@ const vuexModule: Module<any, any> = {
 
 export default {
   install(
-    Vue: typeof _Vue,
+    Vue: App,
     {store, http}: { store: any, http: AxiosInstance }) {
     service = new KomgaLibrariesService(http)
-    Vue.prototype.$komgaLibraries = service
+    Vue.config.globalProperties.$komgaLibraries = service
 
     store.registerModule('komgaLibraries', vuexModule)
   },
 }
 
-declare module 'vue/types/vue' {
-  interface Vue {
+declare module '@vue/runtime-core' {
+  interface ComponentCustomProperties {
     $komgaLibraries: KomgaLibrariesService;
   }
 }

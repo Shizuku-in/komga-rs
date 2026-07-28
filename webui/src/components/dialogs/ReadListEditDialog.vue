@@ -6,23 +6,26 @@
   >
     <form novalidate>
       <v-card>
-        <v-card-title class="hidden-xs-only">
+        <v-card-title class="hidden-xs">
           <v-icon class="mx-4">mdi-pencil</v-icon>
           {{ $t('dialog.edit_readlist.dialog_title') }}
         </v-card-title>
 
-        <v-tabs :vertical="$vuetify.breakpoint.smAndUp" v-model="tab">
+        <div :class="{'d-flex': $vuetify.breakpoint.smAndUp}">
+          <v-tabs :direction="$vuetify.breakpoint.smAndUp ? 'vertical' : 'horizontal'" v-model="tab">
           <v-tab class="justify-start">
-            <v-icon left class="hidden-xs-only">mdi-format-align-center</v-icon>
+            <v-icon start class="hidden-xs">mdi-format-align-center</v-icon>
             {{ $t('dialog.edit_readlist.tab_general') }}
           </v-tab>
           <v-tab class="justify-start">
-            <v-icon left class="hidden-xs-only">mdi-image</v-icon>
+            <v-icon start class="hidden-xs">mdi-image</v-icon>
             {{ $t('dialog.edit_readlist.tab_poster') }}
           </v-tab>
+          </v-tabs>
 
+          <v-window v-model="tab" class="flex-grow-1 tabbed-dialog-content">
           <!--  Tab: General  -->
-          <v-tab-item>
+          <v-window-item>
             <v-card flat>
               <v-container fluid>
                 <!--  Name  -->
@@ -30,8 +33,7 @@
                   <v-col>
                     <v-text-field v-model="form.name"
                                   :label="$t('dialog.edit_readlist.field_name')"
-                                  :error-messages="getErrorsName"
-                                  filled
+                                  :error-messages="getErrorsName" variant="filled"
                     />
                   </v-col>
                 </v-row>
@@ -40,8 +42,7 @@
                 <v-row>
                   <v-col>
                     <v-textarea v-model="form.summary"
-                                :label="$t('dialog.edit_readlist.field_summary')"
-                                filled
+                                :label="$t('dialog.edit_readlist.field_summary')" variant="filled"
                     />
                   </v-col>
                 </v-row>
@@ -59,10 +60,10 @@
 
               </v-container>
             </v-card>
-          </v-tab-item>
+          </v-window-item>
 
           <!--  Tab: Thumbnails  -->
-          <v-tab-item>
+          <v-window-item>
             <v-card flat>
               <v-container fluid>
                 <!-- Upload -->
@@ -91,13 +92,14 @@
 
               </v-container>
             </v-card>
-          </v-tab-item>
+          </v-window-item>
 
-        </v-tabs>
+          </v-window>
+        </div>
 
         <v-card-actions>
           <v-spacer/>
-          <v-btn text @click="dialogCancel">{{ $t('dialog.edit_readlist.button_cancel') }}</v-btn>
+          <v-btn variant="text" @click="dialogCancel">{{ $t('dialog.edit_readlist.button_cancel') }}</v-btn>
           <v-btn color="primary"
                  @click="dialogConfirm"
                  :disabled="getErrorsName !== ''"
@@ -111,13 +113,13 @@
 
 <script lang="ts">
 import {UserRoles} from '@/types/enum-users'
-import Vue from 'vue'
+import {defineComponent} from 'vue'
 import {ERROR, ErrorEvent} from '@/types/events'
 import DropZone from '@/components/DropZone.vue'
 import ThumbnailCard from '@/components/ThumbnailCard.vue'
 import {ReadListDto, ReadListThumbnailDto, ReadListUpdateDto} from '@/types/komga-readlists'
 
-export default Vue.extend({
+export default defineComponent({
   name: 'ReadListEditDialog',
   components: {ThumbnailCard, DropZone},
   data: () => {
@@ -140,7 +142,7 @@ export default Vue.extend({
     }
   },
   props: {
-    value: Boolean,
+    modelValue: Boolean,
     readList: {
       type: Object as () => ReadListDto,
       required: true,
@@ -187,11 +189,11 @@ export default Vue.extend({
       this.poster.readListThumbnails = []
     },
     dialogCancel() {
-      this.$emit('input', false)
+      this.$emit('update:modelValue', false)
     },
     dialogConfirm() {
       this.edit()
-      this.$emit('input', false)
+      this.$emit('update:modelValue', false)
     },
     async edit() {
       try {

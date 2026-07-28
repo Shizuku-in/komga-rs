@@ -4,14 +4,14 @@
       <v-col cols="auto">
         <v-checkbox
           v-model="form.posterStretch"
-          @change="$v.form.posterStretch.$touch()"
+          @update:model-value="v$.form.posterStretch.$touch()"
           :label="$t('ui_settings.label_poster_stretch')"
           hide-details
         />
 
         <v-checkbox
           v-model="form.posterBlurUnread"
-          @change="$v.form.posterBlurUnread.$touch()"
+          @update:model-value="v$.form.posterBlurUnread.$touch()"
           :label="$t('ui_settings.label_poster_blur_unread')"
           hide-details
         />
@@ -36,11 +36,13 @@
 </template>
 
 <script lang="ts">
-import Vue from 'vue'
+import {defineComponent} from 'vue'
+import useVuelidate from '@vuelidate/core'
 import {CLIENT_SETTING, ClientSettingUserUpdateDto} from '@/types/komga-clientsettings'
 
-export default Vue.extend({
+export default defineComponent({
   name: 'UIUserSettings',
+  setup: () => ({v$: useVuelidate()}),
   data: () => ({
     form: {
       posterStretch: false,
@@ -58,10 +60,10 @@ export default Vue.extend({
   },
   computed: {
     saveDisabled(): boolean {
-      return this.$v.form.$invalid || !this.$v.form.$anyDirty
+      return this.v$.form?.$invalid || !this.v$.form?.$anyDirty
     },
     discardDisabled(): boolean {
-      return !this.$v.form.$anyDirty
+      return !this.v$.form?.$anyDirty
     },
   },
   methods: {
@@ -69,16 +71,16 @@ export default Vue.extend({
       await this.$store.dispatch('getClientSettingsUser')
       this.form.posterStretch = this.$store.state.komgaSettings.clientSettingsUser[CLIENT_SETTING.WEBUI_POSTER_STRETCH]?.value === 'true'
       this.form.posterBlurUnread = this.$store.state.komgaSettings.clientSettingsUser[CLIENT_SETTING.WEBUI_POSTER_BLUR_UNREAD]?.value === 'true'
-      this.$v.form.$reset()
+      this.v$.form?.$reset?.()
     },
     async saveSettings() {
       let newSettings = {} as Record<string, ClientSettingUserUpdateDto>
 
-      if (this.$v.form?.posterStretch?.$dirty)
+      if (this.v$.form?.posterStretch?.$dirty)
         newSettings[CLIENT_SETTING.WEBUI_POSTER_STRETCH] = {
           value: this.form.posterStretch ? 'true' : 'false',
         }
-      if (this.$v.form?.posterBlurUnread?.$dirty)
+      if (this.v$.form?.posterBlurUnread?.$dirty)
         newSettings[CLIENT_SETTING.WEBUI_POSTER_BLUR_UNREAD] = {
           value: this.form.posterBlurUnread ? 'true' : 'false',
         }

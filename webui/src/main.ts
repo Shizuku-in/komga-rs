@@ -1,13 +1,8 @@
 import _, {LoDashStatic} from 'lodash'
-import Vue from 'vue'
-// @ts-ignore
-import * as lineClamp from 'vue-line-clamp'
-import Vuelidate from 'vuelidate'
-// @ts-ignore
-import Chartkick from 'vue-chartkick'
-// @ts-ignore
-import Chart from 'chart.js'
-import {sync} from 'vuex-router-sync'
+import {createApp} from 'vue'
+import Chartkick from 'chartkick'
+import VueChartkick from 'vue-chartkick'
+import 'chartkick/chart.js'
 import App from './App.vue'
 import actuator from './plugins/actuator.plugin'
 import httpPlugin from './plugins/http.plugin'
@@ -35,13 +30,11 @@ import komgaSettings from './plugins/komga-settings.plugin'
 import komgaFonts from './plugins/komga-fonts.plugin'
 import vuetify from './plugins/vuetify'
 import logger from './plugins/logger.plugin'
-import './public-path'
+import {createVuetifyCompat} from './plugins/vuetify-compat'
+import EventHub from './services/event-hub'
 import router from './router'
 import store from './store'
 import i18n from './i18n'
-
-Vue.prototype.$_ = _
-Vue.prototype.$eventHub = new Vue()
 
 Chartkick.options = {
   colors: [
@@ -53,52 +46,63 @@ Chartkick.options = {
   ],
 }
 
-Vue.use(Vuelidate)
-Vue.use(lineClamp)
-Vue.use(Chartkick.use(Chart))
+const app = createApp(App)
+const globals = app.config.globalProperties as any
 
-Vue.use(httpPlugin)
-Vue.use(logger)
-Vue.use(komgaSettings, {store: store, http: Vue.prototype.$http})
-Vue.use(komgaFileSystem, {http: Vue.prototype.$http})
-Vue.use(komgaSeries, {http: Vue.prototype.$http})
-Vue.use(komgaCollections, {http: Vue.prototype.$http})
-Vue.use(komgaReadLists, {http: Vue.prototype.$http})
-Vue.use(komgaBooks, {http: Vue.prototype.$http})
-Vue.use(komgaReferential, {http: Vue.prototype.$http})
-Vue.use(komgaClaim, {http: Vue.prototype.$http})
-Vue.use(komgaTransientBooks, {http: Vue.prototype.$http})
-Vue.use(komgaUsers, {store: store, http: Vue.prototype.$http})
-Vue.use(komgaLibraries, {store: store, http: Vue.prototype.$http})
-Vue.use(komgaSse, {eventHub: Vue.prototype.$eventHub, store: store})
-Vue.use(actuator, {http: Vue.prototype.$http})
-Vue.use(komgaTasks, {http: Vue.prototype.$http})
-Vue.use(komgaSyncPoints, {http: Vue.prototype.$http})
-Vue.use(komgaOauth2, {http: Vue.prototype.$http})
-Vue.use(komgaLogin, {http: Vue.prototype.$http})
-Vue.use(komgaPageHashes, {http: Vue.prototype.$http})
-Vue.use(komgaMetrics, {http: Vue.prototype.$http})
-Vue.use(komgaHistory, {http: Vue.prototype.$http})
-Vue.use(komgaAnnouncements, {http: Vue.prototype.$http})
-Vue.use(komgaReleases, {http: Vue.prototype.$http})
-Vue.use(komgaFonts, {http: Vue.prototype.$http})
+globals.$_ = _
+globals.$eventHub = new EventHub()
 
-Vue.config.productionTip = false
+app.use(VueChartkick)
+app.use(httpPlugin)
+app.use(logger)
+app.use(komgaSettings, {store, http: globals.$http})
+app.use(komgaFileSystem, {http: globals.$http})
+app.use(komgaSeries, {http: globals.$http})
+app.use(komgaCollections, {http: globals.$http})
+app.use(komgaReadLists, {http: globals.$http})
+app.use(komgaBooks, {http: globals.$http})
+app.use(komgaReferential, {http: globals.$http})
+app.use(komgaClaim, {http: globals.$http})
+app.use(komgaTransientBooks, {http: globals.$http})
+app.use(komgaUsers, {store, http: globals.$http})
+app.use(komgaLibraries, {store, http: globals.$http})
+app.use(komgaSse, {eventHub: globals.$eventHub, store})
+app.use(actuator, {http: globals.$http})
+app.use(komgaTasks, {http: globals.$http})
+app.use(komgaSyncPoints, {http: globals.$http})
+app.use(komgaOauth2, {http: globals.$http})
+app.use(komgaLogin, {http: globals.$http})
+app.use(komgaPageHashes, {http: globals.$http})
+app.use(komgaMetrics, {http: globals.$http})
+app.use(komgaHistory, {http: globals.$http})
+app.use(komgaAnnouncements, {http: globals.$http})
+app.use(komgaReleases, {http: globals.$http})
+app.use(komgaFonts, {http: globals.$http})
+app.use(router)
+app.use(store)
+app.use(i18n)
+app.use(vuetify)
 
-sync(store, router)
+// vue-i18n 11 folds the Vue 2 `$tc` helper into `$t`. Keep the existing
+// templates readable while preserving their choice-based pluralization.
+globals.$tc = (key: string, choice: number, named?: Record<string, unknown>) =>
+  (i18n.global.t as any)(key, choice, named)
 
-new Vue({
-  router,
-  store,
-  vuetify,
-  i18n,
-  render: h => h(App),
-}).$mount('#app')
+const vuetifyCompat = createVuetifyCompat(vuetify)
+globals.$vuetify = vuetifyCompat
+app.mixin({
+  computed: {
+    $vuetify: () => vuetifyCompat,
+  },
+})
 
-declare module 'vue/types/vue' {
-  interface Vue {
+app.mount('#app')
+
+declare module '@vue/runtime-core' {
+  interface ComponentCustomProperties {
     $_: LoDashStatic;
-    $eventHub: Vue;
+    $eventHub: EventHub;
+    $tc: (key: string, choice: number, named?: Record<string, unknown>) => string;
   }
 }
 

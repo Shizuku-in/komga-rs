@@ -18,8 +18,8 @@
                               :append-icon="showPassword1 ? 'mdi-eye' : 'mdi-eye-off'"
                               @click:append="showPassword1 = !showPassword1"
                               :error-messages="getErrors('newPassword')"
-                              @input="$v.form.newPassword.$touch()"
-                              @blur="$v.form.newPassword.$touch()"
+                              @update:model-value="v$.form.newPassword.$touch()"
+                              @blur="v$.form.newPassword.$touch()"
                 />
               </v-col>
             </v-row>
@@ -33,8 +33,8 @@
                               :append-icon="showPassword2 ? 'mdi-eye' : 'mdi-eye-off'"
                               @click:append="showPassword2 = !showPassword2"
                               :error-messages="getErrors('repeatPassword')"
-                              @input="$v.form.repeatPassword.$touch()"
-                              @blur="$v.form.repeatPassword.$touch()"
+                              @update:model-value="v$.form.repeatPassword.$touch()"
+                              @blur="v$.form.repeatPassword.$touch()"
                               @keydown.enter="dialogConfirm"
                 />
               </v-col>
@@ -45,7 +45,7 @@
 
       <v-card-actions>
         <v-spacer/>
-        <v-btn text @click="dialogCancel">{{ $t('dialog.password_change.button_cancel') }}</v-btn>
+        <v-btn variant="text" @click="dialogCancel">{{ $t('dialog.password_change.button_cancel') }}</v-btn>
         <v-btn color="primary"
                @click="dialogConfirm"
         >{{ $t('dialog.password_change.button_confirm') }}
@@ -56,13 +56,15 @@
 </template>
 
 <script lang="ts">
-import Vue from 'vue'
-import {required, sameAs} from 'vuelidate/lib/validators'
+import {defineComponent} from 'vue'
+import useVuelidate from '@vuelidate/core'
+import {required, sameAs} from '@vuelidate/validators'
 import {ERROR} from '@/types/events'
 import { PasswordUpdateDto } from '@/types/komga-users'
 
-export default Vue.extend({
+export default defineComponent({
   name: 'PasswordChangeDialog',
+  setup: () => ({v$: useVuelidate()}),
   data: () => {
     return {
       modal: false,
@@ -79,14 +81,14 @@ export default Vue.extend({
     }
   },
   props: {
-    value: Boolean,
+    modelValue: Boolean,
     user: {
       type: Object,
       required: true,
     },
   },
   watch: {
-    value(val) {
+    modelValue(val) {
       this.modal = val
     },
     modal(val) {
@@ -102,7 +104,7 @@ export default Vue.extend({
   methods: {
     getErrors(fieldName: string): string[] {
       const errors = [] as string[]
-      const field = this.$v.form!![fieldName] as any
+      const field = this.v$.form!![fieldName] as any
       if (field && field.$invalid && field.$dirty) {
         if (fieldName === 'newPassword') {
           if (!field.required) errors.push(this.$t('dialog.password_change.field_new_password_error').toString())
@@ -118,18 +120,18 @@ export default Vue.extend({
       this.form.repeatPassword = ''
       this.showPassword1 = false
       this.showPassword2 = false
-      this.$v.$reset()
+      this.v$.$reset?.()
     },
     dialogCancel() {
-      this.$emit('input', false)
+      this.$emit('update:modelValue', false)
       this.formReset()
     },
     dialogConfirm() {
-      this.$v.$touch()
+      this.v$.$touch()
 
-      if (!this.$v.$invalid) {
+      if (!this.v$.$invalid) {
         this.updatePassword()
-        this.$emit('input', false)
+        this.$emit('update:modelValue', false)
         this.formReset()
       }
     },

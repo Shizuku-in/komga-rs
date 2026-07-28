@@ -1,10 +1,10 @@
 <template>
   <div v-if="!$_.isEmpty(book)">
     <toolbar-sticky>
-      <v-tooltip bottom :disabled="!isAdmin">
-        <template v-slot:activator="{ on }">
+      <v-tooltip location="bottom" :disabled="!isAdmin">
+        <template v-slot:activator="{ props }">
           <v-btn icon
-                 v-on="on"
+                 v-bind="props"
                  :to="parentLocation"
           >
             <rtl-icon icon="mdi-arrow-left" rtl="mdi-arrow-right"/>
@@ -28,9 +28,7 @@
       <!--   Context notification for navigation   -->
       <v-alert
         v-if="contextReadList && $vuetify.breakpoint.mdAndUp"
-        type="info"
-        text
-        dense
+        type="info" variant="tonal" density="compact"
         border="right"
         class="mb-0"
       >{{ $t('browse_book.navigation_within_readlist', {name: contextName}) }}
@@ -46,21 +44,18 @@
       </v-btn>
 
       <!--   List of all books in context (series/readlist) for navigation   -->
-      <v-menu bottom
-              offset-y
+      <v-menu location="bottom"
               :max-height="$vuetify.breakpoint.height * .7"
               :max-width="250"
       >
-        <template v-slot:activator="{ on }">
-          <v-btn icon v-on="on">
+        <template v-slot:activator="{ props }">
+          <v-btn icon v-bind="props">
             <v-icon>mdi-menu</v-icon>
           </v-btn>
         </template>
 
-        <v-list
-          flat
-        >
-          <v-list-item-group color="primary">
+        <v-list variant="flat">
+          <template>
             <v-list-item
               v-for="(book, i) in siblings"
               :key="i"
@@ -74,7 +69,7 @@
                 <template v-else>{{ book.metadata.number }} - {{ book.metadata.title }}</template>
               </v-list-item-title>
             </v-list-item>
-          </v-list-item-group>
+          </template>
         </v-list>
       </v-menu>
 
@@ -93,9 +88,7 @@
       <v-row>
         <v-alert
           v-if="contextReadList && $vuetify.breakpoint.smAndDown"
-          type="info"
-          text
-          dense
+          type="info" variant="tonal" density="compact"
           border="right"
           class="mb-0"
         >{{ $t('browse_book.navigation_within_readlist', {name: contextName}) }}
@@ -135,7 +128,7 @@
                 >{{ book.seriesTitle }}
                 </router-link>
                 <router-link
-                  class="caption link-underline"
+                  class="text-caption link-underline"
                   :class="$vuetify.breakpoint.smAndUp ? 'mx-1' : ''"
                   :style="$vuetify.breakpoint.xsOnly ? 'display: block' : ''"
                   :to="{name:'browse-libraries', params: {libraryId: book.libraryId }}"
@@ -170,9 +163,9 @@
               <v-col class="py-1 pe-0"
                      cols="auto"
                      v-if="book.media.status === MediaStatus.OUTDATED">
-                <v-tooltip bottom :disabled="!isAdmin">
-                  <template v-slot:activator="{ on }">
-                    <v-chip label small color="warning" v-on="on">
+                <v-tooltip location="bottom" :disabled="!isAdmin">
+                  <template v-slot:activator="{ props }">
+                    <v-chip label size="small" color="warning" v-bind="props">
                       {{ $t('common.outdated') }}
                     </v-chip>
                   </template>
@@ -181,7 +174,7 @@
               </v-col>
 
               <v-col class="py-1 pe-0" cols="auto" v-if="unavailable">
-                <v-chip label small color="error">
+                <v-chip label size="small" color="error">
                   {{ $t('common.unavailable') }}
                 </v-chip>
               </v-col>
@@ -191,34 +184,32 @@
             <template v-if="$vuetify.breakpoint.smAndUp">
               <v-row class="align-center">
                 <v-col cols="auto">
-                  <v-btn color="accent"
-                         small
+                  <v-btn color="accent" size="small"
                          :title="$t('browse_book.read_book')"
                          :to="{name: readRouteName, params: { bookId: bookId}, query: { context: context.origin, contextId: context.id}}"
                          :disabled="!canRead"
                   >
-                    <v-icon left small>mdi-book-open-page-variant</v-icon>
+                    <v-icon start size="small">mdi-book-open-page-variant</v-icon>
                     {{ $t('common.read') }}
                   </v-btn>
                 </v-col>
 
                 <v-col cols="auto">
-                  <v-btn small
+                  <v-btn size="small"
                          :title="$t('browse_book.read_incognito')"
                          :to="{name: readRouteName, params: { bookId: bookId}, query: { context: context.origin, contextId: context.id, incognito: true}}"
                          :disabled="!canRead"
                   >
-                    <v-icon left small>mdi-incognito</v-icon>
+                    <v-icon start size="small">mdi-incognito</v-icon>
                     {{ $t('common.read') }}
                   </v-btn>
                 </v-col>
 
                 <v-col cols="auto">
-                  <v-btn :title="$t('browse_book.download_file')"
-                         small
+                  <v-btn :title="$t('browse_book.download_file')" size="small"
                          :disabled="!canDownload"
                          :href="fileUrl">
-                    <v-icon left small>mdi-file-download</v-icon>
+                    <v-icon start size="small">mdi-file-download</v-icon>
                     {{ $t('common.download') }}
                   </v-btn>
                 </v-col>
@@ -237,34 +228,32 @@
       <template v-if="$vuetify.breakpoint.xsOnly">
         <v-row class="align-center">
           <v-col cols="auto">
-            <v-btn color="accent"
-                   small
+            <v-btn color="accent" size="small"
                    :title="$t('browse_book.read_book')"
                    :to="{name: readRouteName, params: { bookId: bookId}, query: { context: context.origin, contextId: context.id}}"
                    :disabled="!canRead"
             >
-              <v-icon left small>mdi-book-open-page-variant</v-icon>
+              <v-icon start size="small">mdi-book-open-page-variant</v-icon>
               {{ $t('common.read') }}
             </v-btn>
           </v-col>
 
           <v-col cols="auto">
-            <v-btn small
+            <v-btn size="small"
                    :title="$t('browse_book.read_incognito')"
                    :to="{name: readRouteName, params: { bookId: bookId}, query: { context: context.origin, contextId: context.id, incognito: true}}"
                    :disabled="!canRead"
             >
-              <v-icon left small>mdi-incognito</v-icon>
+              <v-icon start size="small">mdi-incognito</v-icon>
               {{ $t('common.read') }}
             </v-btn>
           </v-col>
 
           <v-col cols="auto">
-            <v-btn :title="$t('browse_book.download_file')"
-                   small
+            <v-btn :title="$t('browse_book.download_file')" size="small"
                    :disabled="!canDownload"
                    :href="fileUrl">
-              <v-icon left small>mdi-file-download</v-icon>
+              <v-icon start size="small">mdi-file-download</v-icon>
               {{ $t('common.download') }}
             </v-btn>
           </v-col>
@@ -287,13 +276,13 @@
         <v-col cols="8" sm="9" md="10" xl="11" class="py-1">
           <vue-horizontal>
             <template v-slot:btn-prev>
-              <v-btn icon small>
+              <v-btn icon size="small">
                 <v-icon>mdi-chevron-left</v-icon>
               </v-btn>
             </template>
 
             <template v-slot:btn-next>
-              <v-btn icon small>
+              <v-btn icon size="small">
                 <v-icon>mdi-chevron-right</v-icon>
               </v-btn>
             </template>
@@ -302,9 +291,7 @@
                     class="me-2"
                     :title="name"
                     :to="{name:'browse-series', params: {seriesId: book.seriesId }, query: {[role]: [name]}}"
-                    label
-                    small
-                    outlined
+                    label size="small" variant="outlined"
                     link
             >{{ name }}
             </v-chip>
@@ -313,17 +300,17 @@
       </v-row>
 
       <v-row v-if="book.metadata.tags.length > 0" class="align-center text-caption">
-        <v-col cols="4" sm="3" md="2" xl="1" class="py-1 text-uppercase">{{ $i18n.t('common.tags') }}</v-col>
+        <v-col cols="4" sm="3" md="2" xl="1" class="py-1 text-uppercase">{{ $t('common.tags') }}</v-col>
         <v-col cols="8" sm="9" md="10" xl="11" class="py-1 text-capitalize">
           <vue-horizontal>
             <template v-slot:btn-prev>
-              <v-btn icon small>
+              <v-btn icon size="small">
                 <v-icon>mdi-chevron-left</v-icon>
               </v-btn>
             </template>
 
             <template v-slot:btn-next>
-              <v-btn icon small>
+              <v-btn icon size="small">
                 <v-icon>mdi-chevron-right</v-icon>
               </v-btn>
             </template>
@@ -332,9 +319,7 @@
                     class="me-2"
                     :title="t"
                     :to="{name:'browse-series', params: {seriesId: book.seriesId}, query: {tag: [new SearchConditionTag(new SearchOperatorIs(t))]}}"
-                    label
-                    small
-                    outlined
+                    label size="small" variant="outlined"
                     link
             >{{ t }}
             </v-chip>
@@ -346,9 +331,9 @@
         <v-col>
           <read-lists-expansion-panels :read-lists="readLists">
             <template v-slot:prepend="props">
-              <v-tooltip bottom>
-                <template v-slot:activator="{ on }">
-                  <v-btn icon class="me-2" v-on="on" @click="removeFromReadList(props.readlist.id)">
+              <v-tooltip location="bottom">
+                <template v-slot:activator="{ props: activatorProps }">
+                  <v-btn icon class="me-2" v-bind="activatorProps" @click="removeFromReadList(props.readlist.id)">
                     <v-icon>mdi-book-remove</v-icon>
                   </v-btn>
                 </template>
@@ -368,15 +353,12 @@
             rel="noreferrer"
             target="_blank"
             class="me-2"
-            label
-            small
-            outlined
+            label size="small" variant="outlined"
             link
             :key="i"
           >
             {{ link.label }}
-            <v-icon
-              x-small
+            <v-icon size="x-small"
               color="grey"
               class="ps-1"
             >
@@ -393,7 +375,7 @@
 
       <v-row v-if="book.media.comment" class="align-center text-caption">
         <v-col class="py-1 text-uppercase" cols="4" sm="3" md="2" xl="1">{{ $t('browse_book.comment') }}</v-col>
-        <v-col class="py-1 error--text font-weight-bold" cols="8" sm="9" md="10" xl="11">{{ mediaComment }}</v-col>
+        <v-col class="py-1 text-error font-weight-bold" cols="8" sm="9" md="10" xl="11">{{ mediaComment }}</v-col>
       </v-row>
 
       <v-row class="align-center text-caption">
@@ -458,21 +440,21 @@ import {
   READPROGRESS_CHANGED,
   READPROGRESS_DELETED,
 } from '@/types/events'
-import Vue from 'vue'
+import {defineComponent} from 'vue'
 import ReadListsExpansionPanels from '@/components/ReadListsExpansionPanels.vue'
 import {BookDto, BookFormat} from '@/types/komga-books'
 import {Context, ContextOrigin} from '@/types/context'
 import ReadMore from '@/components/ReadMore.vue'
-import VueHorizontal from 'vue-horizontal'
+import VueHorizontal from '@/components/VueHorizontal.vue'
 import {authorRoles} from '@/types/author-roles'
 import {convertErrorCodes} from '@/functions/error-codes'
 import RtlIcon from '@/components/RtlIcon.vue'
 import {BookSseDto, LibrarySseDto, ReadListSseDto, ReadProgressSseDto} from '@/types/komga-sse'
-import {RawLocation} from 'vue-router/types/router'
+import type {RouteLocationRaw} from 'vue-router'
 import {ReadListDto} from '@/types/komga-readlists'
 import {BookSearch, SearchConditionSeriesId, SearchConditionTag, SearchOperatorIs} from '@/types/komga-search'
 
-export default Vue.extend({
+export default defineComponent({
   name: 'BrowseBook',
   components: {ReadMore, ToolbarSticky, ItemCard, BookActionsMenu, ReadListsExpansionPanels, VueHorizontal, RtlIcon},
   data: () => {
@@ -501,7 +483,7 @@ export default Vue.extend({
     this.$eventHub.$on(READLIST_CHANGED, this.readListChanged)
     this.$eventHub.$on(READLIST_DELETED, this.readListChanged)
   },
-  beforeDestroy() {
+  beforeUnmount() {
     this.$eventHub.$off(BOOK_CHANGED, this.bookChanged)
     this.$eventHub.$off(BOOK_DELETED, this.bookDeleted)
     this.$eventHub.$off(READPROGRESS_CHANGED, this.readProgressChanged)
@@ -588,7 +570,7 @@ export default Vue.extend({
     mediaComment(): string {
       return convertErrorCodes(this.book.media.comment)
     },
-    parentLocation(): RawLocation {
+    parentLocation(): RouteLocationRaw {
       if (this.contextReadList)
         return {name: 'browse-readlist', params: {readListId: this.context.id}}
       else

@@ -14,11 +14,11 @@
 </template>
 
 <script lang="ts">
-import Vue from 'vue'
+import {defineComponent} from 'vue'
 import ServerSettings from '@/views/ServerSettings.vue'
 import ServerManagement from '@/views/ServerManagement.vue'
 
-export default Vue.extend({
+export default defineComponent({
   name: 'SettingsServer',
   components: {ServerManagement, ServerSettings},
 })

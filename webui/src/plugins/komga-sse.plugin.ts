@@ -1,5 +1,6 @@
-import _Vue from 'vue'
+import type {App} from 'vue'
 import KomgaSseService from '@/services/komga-sse.service'
+import EventHub from '@/services/event-hub'
 import {Module} from 'vuex'
 
 const vuexModule: Module<any, any> = {
@@ -17,17 +18,17 @@ const vuexModule: Module<any, any> = {
 
 export default {
   install(
-    Vue: typeof _Vue,
-    {eventHub, store}: { eventHub: _Vue, store: any },
+    Vue: App,
+    {eventHub, store}: { eventHub: EventHub, store: any },
   ) {
     store.registerModule('komgaSse', vuexModule)
 
-    Vue.prototype.$komgaSse = new KomgaSseService(eventHub, store)
+    Vue.config.globalProperties.$komgaSse = new KomgaSseService(eventHub, store)
   },
 }
 
-declare module 'vue/types/vue' {
-  interface Vue {
+declare module '@vue/runtime-core' {
+  interface ComponentCustomProperties {
     $komgaSse: KomgaSseService;
   }
 }

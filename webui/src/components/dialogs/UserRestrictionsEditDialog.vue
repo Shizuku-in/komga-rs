@@ -14,23 +14,25 @@
           </v-toolbar-title>
           <v-spacer/>
           <v-toolbar-items>
-            <v-btn text
+            <v-btn variant="text"
                    color="primary"
                    :disabled="!form"
                    @click="dialogConfirm">{{ $t('common.save_changes') }}</v-btn>
           </v-toolbar-items>
         </v-toolbar>
 
-        <v-card-title class="hidden-xs-only">
+        <v-card-title class="hidden-xs">
           {{ $t('dialog.edit_user_restrictions.edit_restrictions_for', {name: user.email}) }}
         </v-card-title>
 
         <v-tabs v-model="tab" grow>
           <v-tab>{{ $t('dialog.edit_user_restrictions.tab_shared_libraries') }}</v-tab>
           <v-tab>{{ $t('dialog.edit_user_restrictions.tab_content_restrictions') }}</v-tab>
+        </v-tabs>
 
+        <v-window v-model="tab" class="tabbed-dialog-content">
           <!--  Tab: Shared Libraries  -->
-          <v-tab-item>
+          <v-window-item>
             <v-card flat>
               <v-container fluid class="pa-6">
                 <v-row>
@@ -58,18 +60,17 @@
                 </v-row>
               </v-container>
             </v-card>
-          </v-tab-item>
+          </v-window-item>
 
           <!--  Tab: Content Restrictions  -->
-          <v-tab-item>
+          <v-window-item>
             <v-card flat>
               <v-container fluid class="pa-6">
                 <v-row align="center">
                   <v-col>
                     <v-select v-model="ageRestriction"
                               :label="$t('dialog.edit_user_restrictions.label_age_restriction')"
-                              :items="ageRestrictionsAvailable"
-                              filled
+                              :items="ageRestrictionsAvailable" variant="filled"
                     >
                     </v-select>
                   </v-col>
@@ -78,9 +79,7 @@
                     <v-text-field v-model="age"
                                   :disabled="ageRestriction === NONE"
                                   :label="$t('common.age')"
-                                  :rules="[ageRules]"
-                                  filled
-                                  dense
+                                  :rules="[ageRules]" variant="filled" density="compact"
                                   type="number"
                     />
                   </v-col>
@@ -93,10 +92,8 @@
                                 :items="sharingLabelsAvailable"
                                 hide-selected
                                 chips
-                                deletable-chips
-                                multiple
-                                filled
-                                dense
+                                closable-chips
+                                multiple variant="filled" density="compact"
                     >
                     </v-combobox>
                   </v-col>
@@ -109,23 +106,21 @@
                                 :items="sharingLabelsAvailable"
                                 hide-selected
                                 chips
-                                deletable-chips
-                                multiple
-                                filled
-                                dense
+                                closable-chips
+                                multiple variant="filled" density="compact"
                     >
                     </v-combobox>
                   </v-col>
                 </v-row>
               </v-container>
             </v-card>
-          </v-tab-item>
+          </v-window-item>
 
-        </v-tabs>
+        </v-window>
 
-        <v-card-actions class="hidden-xs-only">
+        <v-card-actions class="hidden-xs">
           <v-spacer/>
-          <v-btn text @click="dialogCancel">{{ $t('common.cancel') }}</v-btn>
+          <v-btn variant="text" @click="dialogCancel">{{ $t('common.cancel') }}</v-btn>
           <v-btn color="primary"
                  @click="dialogConfirm"
                  :disabled="!form"
@@ -138,7 +133,7 @@
 </template>
 
 <script lang="ts">
-import Vue from 'vue'
+import {defineComponent} from 'vue'
 import {ERROR} from '@/types/events'
 import {LibraryDto} from '@/types/komga-libraries'
 import {UserDto, UserUpdateDto} from '@/types/komga-users'
@@ -146,7 +141,7 @@ import {AllowExclude} from '@/types/enum-users'
 
 const NONE = 'NONE'
 
-export default Vue.extend({
+export default defineComponent({
   name: 'UserRestrictionsEditDialog',
   data: () => {
     return {
@@ -164,14 +159,14 @@ export default Vue.extend({
     }
   },
   props: {
-    value: Boolean,
+    modelValue: Boolean,
     user: {
       type: Object,
       required: true,
     },
   },
   watch: {
-    value(val) {
+    modelValue(val) {
       this.modal = val
     },
     modal(val) {
@@ -221,17 +216,19 @@ export default Vue.extend({
       this.age = user.ageRestriction?.age || 0
     },
     dialogCancel() {
-      this.$emit('input', false)
+      this.$emit('update:modelValue', false)
       this.dialogReset(this.user)
     },
-    dialogConfirm() {
-      this.editUser()
-      this.$emit('input', false)
-      this.dialogReset(this.user)
+    async dialogConfirm() {
+      if (await this.editUser()) {
+        this.$emit('update:modelValue', false)
+        this.dialogReset(this.user)
+      }
     },
-    async editUser() {
+    async editUser(): Promise<boolean> {
       try {
-        if(!(this.$refs.form as any).validate()) return
+        const {valid} = await (this.$refs.form as any).validate()
+        if (!valid) return false
         const patch = {
           sharedLibraries: {
             all: this.allLibraries,
@@ -251,8 +248,10 @@ export default Vue.extend({
         }
 
         await this.$store.dispatch('updateUser', {userId: this.user.id, patch: patch})
+        return true
       } catch (e) {
         this.$eventHub.$emit(ERROR, {message: e.message} as ErrorEvent)
+        return false
       }
     },
   },

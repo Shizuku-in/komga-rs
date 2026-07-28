@@ -31,10 +31,10 @@
 </template>
 
 <script lang="ts">
-import Vue from 'vue'
+import {defineComponent} from 'vue'
 import RtlIcon from '@/components/RtlIcon.vue'
 
-export default Vue.extend({
+export default defineComponent({
   name: 'HorizontalScroller',
   components: {RtlIcon},
   data: function () {

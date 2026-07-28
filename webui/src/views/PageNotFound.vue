@@ -12,9 +12,9 @@
 
 <script lang="ts">
 import EmptyState from '@/components/EmptyState.vue'
-import Vue from 'vue'
+import {defineComponent} from 'vue'
 
-export default Vue.extend({
+export default defineComponent({
   name: 'PageNotFound',
   components: { EmptyState },
 })

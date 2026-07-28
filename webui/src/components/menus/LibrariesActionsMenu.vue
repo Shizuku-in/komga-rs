@@ -1,12 +1,12 @@
 <template>
   <div>
-    <v-menu offset-y>
-      <template v-slot:activator="{ on }">
-        <v-btn icon v-on="on" @click.prevent="">
+    <v-menu location="bottom">
+      <template v-slot:activator="{ props }">
+        <v-btn icon v-bind="props" @click.prevent="">
           <v-icon>mdi-dots-vertical</v-icon>
         </v-btn>
       </template>
-      <v-list dense>
+      <v-list density="compact">
         <v-list-item @click="reorder">
           <v-list-item-title>{{ $t('common.reorder') }}</v-list-item-title>
         </v-list-item>
@@ -32,10 +32,10 @@
   </div>
 </template>
 <script lang="ts">
-import Vue from 'vue'
+import {defineComponent} from 'vue'
 import ConfirmationDialog from '@/components/dialogs/ConfirmationDialog.vue'
 
-export default Vue.extend({
+export default defineComponent({
   name: 'LibrariesActionsMenu',
   components: {ConfirmationDialog},
   data: () => {

@@ -1,18 +1,13 @@
 <template>
-  <v-data-table
+  <v-data-table-server
     :headers="headers"
     :items="items"
-    :options.sync="options"
-    :server-items-length="totalItems"
+    v-model:options="options"
+    :items-length="totalItems"
     :loading="loading"
-    sort-by="dateTime"
-    :sort-desc="true"
     multi-sort
-    show-group-by
     class="elevation-1"
-    :footer-props="{
-        itemsPerPageOptions: [20, 50, 100]
-      }"
+    :items-per-page-options="[20, 50, 100]"
   >
     <template v-slot:item.success="{ item }">
       <v-icon v-if="item.success" color="success">mdi-check-circle</v-icon>
@@ -27,22 +22,23 @@
         }).format(item.dateTime)
       }}
     </template>
-  </v-data-table>
+  </v-data-table-server>
 </template>
 
 <script lang="ts">
-import Vue from 'vue'
+import {defineComponent} from 'vue'
 import {ERROR} from '@/types/events'
 import {AuthenticationActivityDto} from '@/types/komga-users'
+import {createServerTableOptions, toPageRequest} from '@/functions/data-table'
 
-export default Vue.extend({
+export default defineComponent({
   name: 'AuthenticationActivityTable',
   data: function () {
     return {
       items: [] as AuthenticationActivityDto[],
       totalItems: 0,
       loading: true,
-      options: {} as any,
+      options: createServerTableOptions(20, [{key: 'dateTime', order: 'desc'}]),
     }
   },
   props: {
@@ -62,15 +58,15 @@ export default Vue.extend({
   computed: {
     headers(): object[] {
       const headers = []
-      if (!this.forMe) headers.push({text: this.$t('authentication_activity.email').toString(), value: 'email'})
+      if (!this.forMe) headers.push({title: this.$t('authentication_activity.email').toString(), key: 'email'})
       headers.push(
-        {text: this.$t('authentication_activity.ip').toString(), value: 'ip'},
-        {text: this.$t('authentication_activity.user_agent').toString(), value: 'userAgent'},
-        {text: this.$t('authentication_activity.success').toString(), value: 'success'},
-        {text: this.$t('authentication_activity.source').toString(), value: 'source'},
-        {text: this.$t('authentication_activity.api_key').toString(), value: 'apiKeyComment'},
-        {text: this.$t('authentication_activity.error').toString(), value: 'error'},
-        {text: this.$t('authentication_activity.datetime').toString(), value: 'dateTime', groupable: false},
+        {title: this.$t('authentication_activity.ip').toString(), key: 'ip'},
+        {title: this.$t('authentication_activity.user_agent').toString(), key: 'userAgent'},
+        {title: this.$t('authentication_activity.success').toString(), key: 'success'},
+        {title: this.$t('authentication_activity.source').toString(), key: 'source'},
+        {title: this.$t('authentication_activity.api_key').toString(), key: 'apiKeyComment'},
+        {title: this.$t('authentication_activity.error').toString(), key: 'error'},
+        {title: this.$t('authentication_activity.datetime').toString(), key: 'dateTime'},
       )
       return headers
     },
@@ -79,17 +75,7 @@ export default Vue.extend({
     async loadData() {
       this.loading = true
 
-      const {sortBy, sortDesc, page, itemsPerPage} = this.options
-
-      const pageRequest = {
-        page: page - 1,
-        size: itemsPerPage,
-        sort: [],
-      } as PageRequest
-
-      for (let i = 0; i < sortBy.length; i++) {
-        pageRequest.sort!!.push(`${sortBy[i]},${sortDesc[i] ? 'desc' : 'asc'}`)
-      }
+      const pageRequest = toPageRequest(this.options)
 
       let itemsPage
       try {

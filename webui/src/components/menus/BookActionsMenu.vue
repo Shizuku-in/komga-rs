@@ -1,12 +1,12 @@
 <template>
   <div>
-    <v-menu offset-y v-model="menuState">
-      <template v-slot:activator="{ on }">
-        <v-btn icon v-on="on" @click.prevent="">
+    <v-menu location="bottom" v-model="menuState">
+      <template v-slot:activator="{ props }">
+        <v-btn icon v-bind="props" @click.prevent="">
           <v-icon>mdi-dots-vertical</v-icon>
         </v-btn>
       </template>
-      <v-list dense>
+      <v-list density="compact">
         <v-list-item @click="analyze" v-if="isAdmin">
           <v-list-item-title>{{ $t('menu.analyze') }}</v-list-item-title>
         </v-list-item>
@@ -32,10 +32,10 @@
 <script lang="ts">
 import {getReadProgress} from '@/functions/book-progress'
 import {ReadStatus} from '@/types/enum-books'
-import Vue from 'vue'
+import {defineComponent} from 'vue'
 import {BookDto, ReadProgressUpdateDto} from '@/types/komga-books'
 
-export default Vue.extend({
+export default defineComponent({
   name: 'BookActionsMenu',
   data: () => {
     return {

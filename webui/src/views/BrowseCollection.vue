@@ -19,18 +19,18 @@
       <v-spacer/>
 
       <v-btn icon @click="startEditElements" v-if="isAdmin">
-        <v-tooltip bottom>
-          <template v-slot:activator="{ on }">
-            <v-icon v-on="on">mdi-playlist-edit</v-icon>
+        <v-tooltip location="bottom">
+          <template v-slot:activator="{ props }">
+            <v-icon v-bind="props">mdi-playlist-edit</v-icon>
           </template>
           <span>{{ $t('browse_collection.edit_elements') }}</span>
         </v-tooltip>
       </v-btn>
 
       <v-btn icon @click="editCollection" v-if="isAdmin">
-        <v-tooltip bottom>
-          <template v-slot:activator="{ on }">
-            <v-icon v-on="on">mdi-pencil</v-icon>
+        <v-tooltip location="bottom">
+          <template v-slot:activator="{ props }">
+            <v-icon v-bind="props">mdi-pencil</v-icon>
           </template>
           <span>{{ $t('browse_collection.edit_collection') }}</span>
         </v-tooltip>
@@ -81,14 +81,14 @@
       <template v-slot:default>
         <filter-list
           :filters-options="filterOptionsList"
-          :filters-active.sync="filters"
+          v-model:filters-active="filters"
         />
       </template>
 
       <template v-slot:filter>
         <filter-panels
           :filters-options="filterOptionsPanel"
-          :filters-active.sync="filters"
+          v-model:filters-active="filters"
         />
       </template>
     </filter-drawer>
@@ -113,8 +113,8 @@
         />
 
         <item-browser
-          :items.sync="series"
-          :selected.sync="selectedSeries"
+          v-model:items="series"
+          v-model:selected="selectedSeries"
           :edit-function="isAdmin ? editSingleSeries : undefined"
           :draggable="editElements && collection.ordered"
           :deletable="editElements"
@@ -145,7 +145,7 @@ import {
   SERIES_CHANGED,
   SERIES_DELETED,
 } from '@/types/events'
-import Vue from 'vue'
+import {defineComponent} from 'vue'
 import MultiSelectBar from '@/components/bars/MultiSelectBar.vue'
 import {LIBRARIES_ALL} from '@/types/library'
 import {ReadStatus} from '@/types/enum-books'
@@ -154,7 +154,7 @@ import {mergeFilterParams, toNameValue} from '@/functions/filter'
 import FilterDrawer from '@/components/FilterDrawer.vue'
 import FilterPanels from '@/components/FilterPanels.vue'
 import FilterList from '@/components/FilterList.vue'
-import {Location} from 'vue-router'
+import type {RouteLocationRaw} from 'vue-router'
 import EmptyState from '@/components/EmptyState.vue'
 import {Oneshot, SeriesDto} from '@/types/komga-series'
 import {authorRoles} from '@/types/author-roles'
@@ -168,7 +168,7 @@ import PageSizeSelect from '@/components/PageSizeSelect.vue'
 import {BookSearch, SearchConditionAnyOfBook, SearchConditionSeriesId, SearchOperatorIs} from '@/types/komga-search'
 import {FiltersActive, FiltersOptions, NameValue} from '@/types/filter'
 
-export default Vue.extend({
+export default defineComponent({
   name: 'BrowseCollection',
   components: {
     PageSizeSelect,
@@ -223,7 +223,7 @@ export default Vue.extend({
     this.$eventHub.$on(READPROGRESS_SERIES_CHANGED, this.readProgressChanged)
     this.$eventHub.$on(READPROGRESS_SERIES_DELETED, this.readProgressChanged)
   },
-  beforeDestroy() {
+  beforeUnmount() {
     this.$eventHub.$off(COLLECTION_CHANGED, this.collectionChanged)
     this.$eventHub.$off(COLLECTION_DELETED, this.collectionDeleted)
     this.$eventHub.$off(SERIES_CHANGED, this.seriesChanged)
@@ -280,7 +280,7 @@ export default Vue.extend({
       return {
         readStatus: {
           values: [
-            {name: this.$i18n.t('filter.unread').toString(), value: ReadStatus.UNREAD},
+            {name: this.$t('filter.unread').toString(), value: ReadStatus.UNREAD},
             {name: this.$t('filter.in_progress').toString(), value: ReadStatus.IN_PROGRESS},
             {name: this.$t('filter.read').toString(), value: ReadStatus.READ},
           ],
@@ -334,17 +334,17 @@ export default Vue.extend({
     resetFilters() {
       this.drawer = false
       for (const prop in this.filters) {
-        this.$set(this.filters, prop, [])
+        this.filters[prop] = []
       }
       this.$store.commit('setCollectionFilter', {id: this.collectionId, filter: this.filters})
       this.updateRouteAndReload()
     },
     async resetParams(route: any, collectionId: string) {
       // load dynamic filters
-      this.$set(this.filterOptions, 'library', this.$store.state.komgaLibraries.libraries.map((x: LibraryDto) => ({
+      this.filterOptions.library = this.$store.state.komgaLibraries.libraries.map((x: LibraryDto) => ({
         name: x.name,
         value: x.id,
-      })))
+      }))
 
       const [genres, tags, publishers, languages, ageRatings, releaseDates] = await Promise.all([
         this.$komgaReferential.getGenres(undefined, collectionId),
@@ -354,12 +354,12 @@ export default Vue.extend({
         this.$komgaReferential.getAgeRatings(undefined, collectionId),
         this.$komgaReferential.getSeriesReleaseDates(undefined, collectionId),
       ])
-      this.$set(this.filterOptions, 'genre', toNameValue(genres))
-      this.$set(this.filterOptions, 'tag', toNameValue(tags))
-      this.$set(this.filterOptions, 'publisher', toNameValue(publishers))
-      this.$set(this.filterOptions, 'language', (languages))
-      this.$set(this.filterOptions, 'ageRating', toNameValue(ageRatings))
-      this.$set(this.filterOptions, 'releaseDate', toNameValue(releaseDates))
+      this.filterOptions.genre = toNameValue(genres)
+      this.filterOptions.tag = toNameValue(tags)
+      this.filterOptions.publisher = toNameValue(publishers)
+      this.filterOptions.language = languages
+      this.filterOptions.ageRating = toNameValue(ageRatings)
+      this.filterOptions.releaseDate = toNameValue(releaseDates)
 
       // get filter from query params or local storage and validate with available filter values
       let activeFilters: any
@@ -490,7 +490,7 @@ export default Vue.extend({
           page: `${this.page}`,
           pageSize: `${this.pageSize}`,
         },
-      } as Location
+      } as RouteLocationRaw
       mergeFilterParams(this.filters, loc.query)
       this.$router.replace(loc).catch((_: any) => {
       })

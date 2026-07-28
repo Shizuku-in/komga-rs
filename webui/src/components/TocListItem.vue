@@ -1,32 +1,31 @@
 <template>
   <v-list-item link>
-    <v-list-item-content>
+    <div>
       <v-list-item-title
         @click.stop="goto(item)"
         :title="item.title"
         style="width: 100px"
-        :class="item.current ? 'primary--text' : ''"
+        :class="item.current ? 'text-primary' : ''"
         :style="item.href ? 'cursor: pointer' : undefined"
       >
         <v-badge
-          :value="!!item.current"
+          :model-value="!!item.current"
           color="primary"
-          dot
-          left
+          dot location="top start"
           offset-y="0"
           offset-x="-5"
         />
         {{ item.title }}
       </v-list-item-title>
-    </v-list-item-content>
+    </div>
   </v-list-item>
 </template>
 
 <script lang="ts">
-import Vue, {PropType} from 'vue'
+import {defineComponent, PropType} from 'vue'
 import {TocEntry} from '@/types/epub'
 
-export default Vue.extend({
+export default defineComponent({
   name: 'TocListItem',
   props: {
     item: {

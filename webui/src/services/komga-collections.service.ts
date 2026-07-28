@@ -2,7 +2,7 @@ import {AxiosInstance} from 'axios'
 import {SeriesDto} from '@/types/komga-series'
 import {AuthorDto} from '@/types/komga-books'
 
-const qs = require('qs')
+import qs from 'qs'
 
 const API_COLLECTIONS = '/api/v1/collections'
 

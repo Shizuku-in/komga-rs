@@ -1,20 +1,20 @@
 import KomgaTransientBooksService from '@/services/komga-transientbooks.service'
 import {AxiosInstance} from 'axios'
-import _Vue from 'vue'
+import type {App} from 'vue'
 
 let service: KomgaTransientBooksService
 
 export default {
   install (
-    Vue: typeof _Vue,
+    Vue: App,
     { http }: { http: AxiosInstance }) {
     service = new KomgaTransientBooksService(http)
-    Vue.prototype.$komgaTransientBooks = service
+    Vue.config.globalProperties.$komgaTransientBooks = service
   },
 }
 
-declare module 'vue/types/vue' {
-  interface Vue {
+declare module '@vue/runtime-core' {
+  interface ComponentCustomProperties {
     $komgaTransientBooks: KomgaTransientBooksService;
   }
 }

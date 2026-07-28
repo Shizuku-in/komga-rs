@@ -6,7 +6,7 @@
       <v-card>
         <v-card-title v-if="!rightBook">{{ $t('dialog.transient_book_details.title') }}</v-card-title>
         <v-card-title v-else>{{ $t('dialog.transient_book_details.title_comparison') }}</v-card-title>
-        <v-btn icon absolute top right @click="dialogClose">
+        <v-btn icon position="absolute" location="top right" @click="dialogClose">
           <v-icon>mdi-close</v-icon>
         </v-btn>
 
@@ -15,7 +15,7 @@
         <v-card-text style="height: 50%">
           <v-container fluid>
 
-            <v-simple-table class="body-2">
+            <v-table class="text-body-2">
               <thead v-if="rightBook">
               <tr>
                 <th></th>
@@ -55,7 +55,7 @@
               </tr>
 
               </tbody>
-            </v-simple-table>
+            </v-table>
 
           </v-container>
         </v-card-text>
@@ -66,13 +66,13 @@
 </template>
 
 <script lang="ts">
-import Vue, {PropType} from 'vue'
+import {defineComponent, PropType} from 'vue'
 import {TransientBookDto} from '@/types/komga-transientbooks'
 import {BookDto, PageDto} from '@/types/komga-books'
 import {getBookFormatFromMedia, getBookFormatFromMediaType} from '@/functions/book-format'
 import PagesTable from '@/components/PagesTable.vue'
 
-export default Vue.extend({
+export default defineComponent({
   name: 'TransientBookDetailsDialog',
   components: {PagesTable},
   data: () => {
@@ -83,7 +83,7 @@ export default Vue.extend({
     }
   },
   props: {
-    value: Boolean,
+    modelValue: Boolean,
     leftBook: {
       type: Object as PropType<TransientBookDto>,
       required: false,
@@ -107,7 +107,7 @@ export default Vue.extend({
   },
   methods: {
     dialogClose() {
-      this.$emit('input', false)
+      this.$emit('update:modelValue', false)
     },
   },
 })

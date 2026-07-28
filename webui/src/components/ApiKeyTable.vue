@@ -2,12 +2,11 @@
   <div style="position: relative">
     <div v-if="apiKeys">
       <div v-if="apiKeys.length > 0">
-        <v-list elevation="3"
-                three-line
+        <v-list elevation="3" lines="three"
         >
           <div v-for="(apiKey, index) in apiKeys" :key="apiKey.id">
             <v-list-item>
-              <v-list-item-content>
+              <div>
                 <v-list-item-title>{{ apiKey.comment }}</v-list-item-title>
                 <v-list-item-subtitle>
                   {{
@@ -32,35 +31,35 @@
                   }}
                 </v-list-item-subtitle>
                 <v-list-item-subtitle v-else>{{ $t('settings_user.no_recent_activity') }}</v-list-item-subtitle>
-              </v-list-item-content>
+              </div>
 
-              <v-list-item-action>
-                <v-tooltip bottom>
-                  <template v-slot:activator="{ on }">
-                    <v-btn icon @click="promptSyncPointDelete(apiKey)" v-on="on">
-                      <v-icon>mdi-book-refresh</v-icon>
-                    </v-btn>
-                  </template>
-                  <span>{{ $t('account_settings.api_key.force_kobo_sync') }}</span>
-                </v-tooltip>
-              </v-list-item-action>
+              <template #append>
+                <v-list-item-action>
+                  <v-tooltip location="bottom">
+                    <template v-slot:activator="{ props }">
+                      <v-btn icon @click="promptSyncPointDelete(apiKey)" v-bind="props">
+                        <v-icon>mdi-book-refresh</v-icon>
+                      </v-btn>
+                    </template>
+                    <span>{{ $t('account_settings.api_key.force_kobo_sync') }}</span>
+                  </v-tooltip>
+                </v-list-item-action>
 
-              <v-list-item-action>
-                <v-btn icon @click="promptDeleteApiKey(apiKey)">
-                  <v-icon>mdi-delete</v-icon>
-                </v-btn>
-              </v-list-item-action>
+                <v-list-item-action>
+                  <v-btn icon @click="promptDeleteApiKey(apiKey)">
+                    <v-icon>mdi-delete</v-icon>
+                  </v-btn>
+                </v-list-item-action>
+              </template>
             </v-list-item>
 
             <v-divider v-if="index !== apiKeys.length-1"/>
           </div>
         </v-list>
 
-        <v-btn fab absolute bottom color="primary"
-               :right="!$vuetify.rtl"
-               :left="$vuetify.rtl"
-               class="mx-6"
-               small
+        <v-btn icon position="absolute" color="primary"
+               :location="$vuetify.rtl ? 'bottom left' : 'bottom right'"
+               class="mx-6" size="small"
                @click="generateApiKey"
         >
           <v-icon>mdi-plus</v-icon>
@@ -114,13 +113,13 @@
 </template>
 
 <script lang="ts">
-import Vue from 'vue'
+import {defineComponent} from 'vue'
 import {ApiKeyDto} from '@/types/komga-users'
 import {ERROR} from '@/types/events'
 import ConfirmationDialog from '@/components/dialogs/ConfirmationDialog.vue'
 import ApiKeyAddDialog from '@/components/dialogs/ApiKeyAddDialog.vue'
 
-export default Vue.extend({
+export default defineComponent({
   name: 'ApiKeyTable',
   components: {ApiKeyAddDialog, ConfirmationDialog},
   data: () => {
@@ -143,7 +142,7 @@ export default Vue.extend({
         this.apiKeys = await this.$komgaUsers.getApiKeys()
         this.apiKeys.forEach((a: ApiKeyDto) => {
           this.$komgaUsers.getLatestAuthenticationActivityForUser(a.userId, a.id)
-            .then(value => this.$set(this.apiKeyLastActivity, `${a.id}`, value.dateTime))
+            .then(value => { this.apiKeyLastActivity[`${a.id}`] = value.dateTime })
             .catch(e => {
             })
         })

@@ -7,7 +7,7 @@
       <v-card>
         <v-card-title v-if="single">{{ $t('dialog.transient_book_viewer.title') }}</v-card-title>
         <v-card-title v-else>{{ $t('dialog.transient_book_viewer.title_comparison') }}</v-card-title>
-        <v-btn icon absolute top right @click="dialogClose">
+        <v-btn icon position="absolute" location="top right" @click="dialogClose">
           <v-icon>mdi-close</v-icon>
         </v-btn>
 
@@ -113,12 +113,12 @@
 </template>
 
 <script lang="ts">
-import Vue, {PropType} from 'vue'
+import {defineComponent, PropType} from 'vue'
 import {PageDtoWithUrl} from '@/types/komga-books'
 import RtlIcon from '@/components/RtlIcon.vue'
 
 
-export default Vue.extend({
+export default defineComponent({
   name: 'TransientBookViewerDialog',
   components: {RtlIcon},
   data: () => {
@@ -129,7 +129,7 @@ export default Vue.extend({
     }
   },
   props: {
-    value: Boolean,
+    modelValue: Boolean,
     leftPages: {
       type: Array as PropType<PageDtoWithUrl[]>,
       default: () => [],
@@ -219,7 +219,7 @@ export default Vue.extend({
       this.lastPageRight()
     },
     dialogClose() {
-      this.$emit('input', false)
+      this.$emit('update:modelValue', false)
     },
   },
 })

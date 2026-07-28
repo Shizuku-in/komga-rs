@@ -9,7 +9,7 @@ import {
   UserUpdateDto,
 } from '@/types/komga-users'
 
-const qs = require('qs')
+import qs from 'qs'
 
 const API_USERS = '/api/v2/users'
 

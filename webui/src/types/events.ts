@@ -1,4 +1,4 @@
-import {Route} from 'vue-router'
+import type {NavigationFailure} from 'vue-router'
 
 export const LIBRARY_ADDED = 'library-added'
 export const LIBRARY_CHANGED = 'library-changed'
@@ -52,6 +52,6 @@ export interface NotificationEvent {
   text2?: string,
   goTo?: {
     text: string,
-    click: () => Promise<Route>
+    click: () => Promise<void | NavigationFailure>
   }
 }

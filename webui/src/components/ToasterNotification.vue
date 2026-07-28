@@ -1,28 +1,23 @@
 <template>
   <v-snackbar
     v-model="snackbar.show"
-    :color="snackbar.color"
-    bottom
+    :color="snackbar.color" location="bottom"
     multi-line
     :vertical="snackbar.vertical"
     :timeout="snackbar.timeout"
   >
     <p>{{ snackbar.text }}</p>
     <p>{{ snackbar.text2 }}</p>
-    <template v-slot:action="{ attrs }">
+    <template #actions>
       <v-btn
         v-if="snackbar.goTo"
-        color="secondary"
-        text
-        v-bind="attrs"
+        color="secondary" variant="text"
         @click="snackbar.goTo.click(); close()"
       >
         {{ snackbar.goTo.text }}
       </v-btn>
 
-      <v-btn
-        text
-        v-bind="attrs"
+      <v-btn variant="text"
         @click="close"
       >{{ $t('common.dismiss') }}
       </v-btn>
@@ -31,12 +26,12 @@
 </template>
 
 <script lang="ts">
-import Vue from 'vue'
+import {defineComponent} from 'vue'
 import {BOOK_IMPORTED, ERROR, ErrorEvent, NOTIFICATION, NotificationEvent} from '@/types/events'
 import {convertErrorCodes} from '@/functions/error-codes'
 import {BookImportSseDto} from '@/types/komga-sse'
 
-export default Vue.extend({
+export default defineComponent({
   name: 'ToasterNotification',
   data: function () {
     return {
@@ -61,7 +56,7 @@ export default Vue.extend({
     this.$eventHub.$on(ERROR, this.onError)
     this.$eventHub.$on(NOTIFICATION, this.onNotification)
   },
-  beforeDestroy() {
+  beforeUnmount() {
     this.$eventHub.$off(BOOK_IMPORTED, this.onBookImported)
     this.$eventHub.$off(ERROR, this.onError)
     this.$eventHub.$off(NOTIFICATION, this.onNotification)

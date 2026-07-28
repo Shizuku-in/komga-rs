@@ -1,6 +1,6 @@
 <template>
   <v-container fluid class="pa-6">
-    <v-alert type="info" text class="body-2" dismissible>
+    <v-alert type="info" variant="tonal" class="text-body-2" closable>
       <div>{{ $t('book_import.info_part1') }}</div>
       <div class="mt-2">{{ $t('book_import.info_part2') }}</div>
     </v-alert>
@@ -17,7 +17,7 @@
       <v-col cols="auto">
         <file-browser-dialog
           v-model="modalFileBrowser"
-          :path.sync="importPath"
+          v-model:path="importPath"
         />
         <v-btn @click="modalFileBrowser = true">{{ $t('book_import.button_browse') }}</v-btn>
       </v-col>
@@ -43,7 +43,7 @@
     <template v-if="transientBooks.length > 0">
       <v-divider/>
 
-      <v-simple-table>
+      <v-table>
         <thead class="font-weight-medium">
         <tr>
           <td>
@@ -67,11 +67,11 @@
           :key="i"
         >
         <file-import-row :book="book" :series="selected.includes(i) ? selectedSeries : undefined"
-                         :payload.sync="payloads[i]">
+                         v-model:payload="payloads[i]">
           <v-checkbox v-model="selected" :value="i"/>
         </file-import-row>
         </tbody>
-      </v-simple-table>
+      </v-table>
 
       <v-row align="center">
         <v-col cols="3">
@@ -82,7 +82,7 @@
           <v-btn @click="modalSeriesPicker = true" :disabled="globalSelect === 0">
             {{ $t('book_import.button_select_series') }}
           </v-btn>
-          <series-picker-dialog v-model="modalSeriesPicker" :series.sync="selectedSeries" :include-oneshots="false"/>
+          <series-picker-dialog v-model="modalSeriesPicker" v-model:series="selectedSeries" :include-oneshots="false"/>
         </v-col>
         <v-spacer/>
 
@@ -91,7 +91,7 @@
                  :disabled="payloadBatch.books.length === 0"
                  @click="performImport"
           >
-            <v-icon left v-if="importFinished">mdi-check</v-icon>
+            <v-icon start v-if="importFinished">mdi-check</v-icon>
             {{ $t('book_import.button_import') }}
           </v-btn>
         </v-col>
@@ -102,7 +102,7 @@
 </template>
 
 <script lang="ts">
-import Vue from 'vue'
+import {defineComponent} from 'vue'
 import FileBrowserDialog from '@/components/dialogs/FileBrowserDialog.vue'
 import FileImportRow from '@/components/FileImportRow.vue'
 import {TransientBookDto} from '@/types/komga-transientbooks'
@@ -114,7 +114,7 @@ import {convertErrorCodes} from '@/functions/error-codes'
 import {ERROR} from '@/types/events'
 import EmptyState from '@/components/EmptyState.vue'
 
-export default Vue.extend({
+export default defineComponent({
   name: 'ImportBooks',
   components: {EmptyState, FileBrowserDialog, FileImportRow, SeriesPickerDialog},
   data: () => ({

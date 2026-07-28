@@ -44,7 +44,7 @@ The mounted directories must be accessible to UID/GID 1000. The library mount is
 
 ### From Source
 
-Rust 1.96.1 or newer and Node.js 22.11 ~ 24 are required. Cargo builds and embeds the Web UI automatically.
+Rust 1.96.1 or newer and Node.js 22.12 through 24 are required. Cargo builds and embeds the Web UI automatically.
 
 ```bash
 cargo run --release -p komga-server -- --config-dir ./config
@@ -97,9 +97,18 @@ Run the Web UI checks:
 cd webui
 npm ci
 npm run lint
-npm run test:unit -- --runInBand
+npm run test:unit
 npm run build
 ```
+
+For live Web UI development, run the backend above and start Vite in a second terminal:
+
+```bash
+cd webui
+npm run dev
+```
+
+Open <http://localhost:8081>. Vite proxies backend requests to `http://127.0.0.1:25600` by default; set `VITE_KOMGA_PROXY_TARGET` when the backend uses another address.
 
 Browser tests additionally require Playwright Chromium:
 

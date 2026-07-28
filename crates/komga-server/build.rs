@@ -112,7 +112,7 @@ fn package_webui() -> Result<(), String> {
                 .arg("run")
                 .arg("build")
                 .arg("--")
-                .arg("--dest")
+                .arg("--outDir")
                 .arg(&output_dir),
             "npm run build",
         )?;
@@ -125,14 +125,14 @@ fn watch_webui_inputs(webui_dir: &Path) {
     for path in [
         ".browserslistrc",
         ".env",
-        "babel.config.js",
+        "index.html",
         "package-lock.json",
         "package.json",
         "postcss.config.js",
         "public",
         "src",
         "tsconfig.json",
-        "vue.config.js",
+        "vite.config.ts",
     ] {
         println!("cargo::rerun-if-changed={}", webui_dir.join(path).display());
     }
@@ -143,7 +143,7 @@ fn validate_node(webui_dir: &Path) -> Result<(), String> {
         .arg("--version")
         .current_dir(webui_dir)
         .output()
-        .map_err(|error| format!("Node.js 22.11 through 24 is required: {error}"))?;
+        .map_err(|error| format!("Node.js 22.12 through 24 is required: {error}"))?;
     if !output.status.success() {
         return Err(format!("Node.js version check failed with {}", output.status));
     }
@@ -159,9 +159,9 @@ fn validate_node(webui_dir: &Path) -> Result<(), String> {
         .next()
         .and_then(|value| value.parse::<u32>().ok())
         .ok_or_else(|| format!("could not parse Node.js version {version:?}"))?;
-    if !(major == 22 && minor >= 11 || (23..25).contains(&major)) {
+    if !(major == 22 && minor >= 12 || (23..25).contains(&major)) {
         return Err(format!(
-            "Node.js {version} is unsupported; install a version in the range >=22.11.0 <25"
+            "Node.js {version} is unsupported; install a version in the range >=22.12.0 <25"
         ));
     }
     Ok(())

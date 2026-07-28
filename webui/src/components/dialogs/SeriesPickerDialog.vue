@@ -6,7 +6,7 @@
     >
       <v-card>
         <v-card-title>{{ $t('dialog.series_picker.title') }}</v-card-title>
-        <v-btn icon absolute top right @click="dialogClose">
+        <v-btn icon position="absolute" location="top right" @click="dialogClose">
           <v-icon>mdi-close</v-icon>
         </v-btn>
 
@@ -29,7 +29,7 @@
 
             <v-row v-if="results">
               <v-col>
-                <v-list elevation="5" v-if="results.length > 0" three-line>
+                <v-list elevation="5" v-if="results.length > 0" lines="three">
                   <div v-for="(s, index) in results"
                        :key="index"
                   >
@@ -40,7 +40,7 @@
                              class="my-1 mx-3"
                              contain
                       />
-                      <v-list-item-content>
+                      <div>
                         <v-list-item-title>{{ s.metadata.title }}</v-list-item-title>
                         <v-list-item-subtitle>{{
                             $t('searchbox.in_library', {library: getLibraryName(s)})
@@ -53,7 +53,7 @@
                             }).format(new Date(s.booksMetadata.releaseDate))
                           }}
                         </v-list-item-subtitle>
-                      </v-list-item-content>
+                      </div>
                     </v-list-item>
                     <v-divider v-if="index !== results.length-1"/>
                   </div>
@@ -61,8 +61,7 @@
 
                 <v-alert
                   v-if="results.length === 0 && showResults"
-                  type="info"
-                  text
+                  type="info" variant="tonal"
                 >{{ $t('dialog.series_picker.no_results') }}
                 </v-alert>
 
@@ -78,13 +77,13 @@
 </template>
 
 <script lang="ts">
-import Vue, {PropType} from 'vue'
+import {defineComponent, PropType} from 'vue'
 import {SeriesDto} from '@/types/komga-series'
 import {debounce} from 'lodash'
 import {seriesThumbnailUrl} from '@/functions/urls'
 import {SearchConditionOneShot, SearchOperatorIsFalse, SeriesSearch} from '@/types/komga-search'
 
-export default Vue.extend({
+export default defineComponent({
   name: 'SeriesPickerDialog',
   data: () => {
     return {
@@ -96,7 +95,7 @@ export default Vue.extend({
     }
   },
   props: {
-    value: Boolean,
+    modelValue: Boolean,
     series: {
       type: Object as PropType<SeriesDto>,
       required: false,
@@ -107,7 +106,7 @@ export default Vue.extend({
     },
   },
   watch: {
-    value(val) {
+    modelValue(val) {
       this.modal = val
       if (val) {
         this.clear()
@@ -143,7 +142,7 @@ export default Vue.extend({
       this.dialogClose()
     },
     dialogClose() {
-      this.$emit('input', false)
+      this.$emit('update:modelValue', false)
     },
     getLibraryName(item: SeriesDto): string {
       return this.$store.getters.getLibraryById(item.libraryId).name

@@ -1,7 +1,7 @@
 import KomgaUsersService from '@/services/komga-users.service'
 import {UserRoles} from '@/types/enum-users'
 import {AxiosInstance} from 'axios'
-import _Vue from 'vue'
+import type {App} from 'vue'
 import {Module} from 'vuex/types'
 import {UserCreationDto, UserDto, UserUpdateDto} from '@/types/komga-users'
 
@@ -64,17 +64,17 @@ const vuexModule: Module<any, any> = {
 
 export default {
   install (
-    Vue: typeof _Vue,
+    Vue: App,
     { store, http }: { store: any, http: AxiosInstance }) {
     service = new KomgaUsersService(http)
-    Vue.prototype.$komgaUsers = service
+    Vue.config.globalProperties.$komgaUsers = service
 
     store.registerModule('komgaUsers', vuexModule)
   },
 }
 
-declare module 'vue/types/vue' {
-  interface Vue {
+declare module '@vue/runtime-core' {
+  interface ComponentCustomProperties {
     $komgaUsers: KomgaUsersService
   }
 }

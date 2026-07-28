@@ -19,18 +19,18 @@
       <v-spacer/>
 
       <v-btn icon @click="startEditElements" v-if="isAdmin">
-        <v-tooltip bottom>
-          <template v-slot:activator="{ on }">
-            <v-icon v-on="on">mdi-playlist-edit</v-icon>
+        <v-tooltip location="bottom">
+          <template v-slot:activator="{ props }">
+            <v-icon v-bind="props">mdi-playlist-edit</v-icon>
           </template>
           <span>{{ $t('browse_readlist.edit_elements') }}</span>
         </v-tooltip>
       </v-btn>
 
       <v-btn icon @click="editReadList" v-if="isAdmin">
-        <v-tooltip bottom>
-          <template v-slot:activator="{ on }">
-            <v-icon v-on="on">mdi-pencil</v-icon>
+        <v-tooltip location="bottom">
+          <template v-slot:activator="{ props }">
+            <v-icon v-bind="props">mdi-pencil</v-icon>
           </template>
           <span>{{ $t('browse_readlist.edit_readlist') }}</span>
         </v-tooltip>
@@ -82,14 +82,14 @@
       <template v-slot:default>
         <filter-list
           :filters-options="filterOptionsList"
-          :filters-active.sync="filters"
+          v-model:filters-active="filters"
         />
       </template>
 
       <template v-slot:filter>
         <filter-panels
           :filters-options="filterOptionsPanel"
-          :filters-active.sync="filters"
+          v-model:filters-active="filters"
         />
       </template>
     </filter-drawer>
@@ -104,11 +104,10 @@
 
       <v-row class="px-2">
         <v-col>
-          <v-btn :title="$t('menu.download_readlist')"
-                 small
+          <v-btn :title="$t('menu.download_readlist')" size="small"
                  :disabled="!canDownload"
                  :href="fileUrl">
-            <v-icon left small>mdi-file-download</v-icon>
+            <v-icon start size="small">mdi-file-download</v-icon>
             {{ $t('common.download') }}
           </v-btn>
         </v-col>
@@ -135,9 +134,9 @@
         />
 
         <item-browser
-          :items.sync="books"
+          v-model:items="books"
           :item-context="itemContext"
-          :selected.sync="selectedBooks"
+          v-model:selected="selectedBooks"
           :edit-function="isAdmin ? editSingleBook : undefined"
           :draggable="editElements && readList.ordered"
           :deletable="editElements"
@@ -167,7 +166,7 @@ import {
   READPROGRESS_CHANGED,
   READPROGRESS_DELETED,
 } from '@/types/events'
-import Vue from 'vue'
+import {defineComponent} from 'vue'
 import ReadListActionsMenu from '@/components/menus/ReadListActionsMenu.vue'
 import MultiSelectBar from '@/components/bars/MultiSelectBar.vue'
 import {AuthorDto, BookDto, ReadProgressUpdateDto} from '@/types/komga-books'
@@ -182,7 +181,7 @@ import {ReadStatus} from '@/types/enum-books'
 import {authorRoles} from '@/types/author-roles'
 import {LibraryDto} from '@/types/komga-libraries'
 import {mergeFilterParams, toNameValue} from '@/functions/filter'
-import {Location} from 'vue-router'
+import type {RouteLocationRaw} from 'vue-router'
 import {readListFileUrl} from '@/functions/urls'
 import {ItemContext} from '@/types/items'
 import PageSizeSelect from '@/components/PageSizeSelect.vue'
@@ -191,7 +190,7 @@ import {ReadListDto, ReadListUpdateDto} from '@/types/komga-readlists'
 import {Oneshot} from '@/types/komga-series'
 import {FiltersActive, FiltersOptions, NameValue} from '@/types/filter'
 
-export default Vue.extend({
+export default defineComponent({
   name: 'BrowseReadList',
   components: {
     EmptyState,
@@ -243,7 +242,7 @@ export default Vue.extend({
     this.$eventHub.$on(READPROGRESS_CHANGED, this.readProgressChanged)
     this.$eventHub.$on(READPROGRESS_DELETED, this.readProgressChanged)
   },
-  beforeDestroy() {
+  beforeUnmount() {
     this.$eventHub.$off(READLIST_CHANGED, this.readListChanged)
     this.$eventHub.$off(READLIST_DELETED, this.readListDeleted)
     this.$eventHub.$off(BOOK_CHANGED, this.bookChanged)
@@ -304,7 +303,7 @@ export default Vue.extend({
       return {
         readStatus: {
           values: [
-            {name: this.$i18n.t('filter.unread').toString(), value: ReadStatus.UNREAD},
+            {name: this.$t('filter.unread').toString(), value: ReadStatus.UNREAD},
             {name: this.$t('filter.in_progress').toString(), value: ReadStatus.IN_PROGRESS},
             {name: this.$t('filter.read').toString(), value: ReadStatus.READ},
           ],
@@ -348,20 +347,20 @@ export default Vue.extend({
     resetFilters() {
       this.drawer = false
       for (const prop in this.filters) {
-        this.$set(this.filters, prop, [])
+        this.filters[prop] = []
       }
       this.$store.commit('setReadListFilter', {id: this.readListId, filter: this.filters})
       this.updateRouteAndReload()
     },
     async resetParams(route: any, readListId: string) {
       // load dynamic filters
-      this.$set(this.filterOptions, 'library', this.$store.state.komgaLibraries.libraries.map((x: LibraryDto) => ({
+      this.filterOptions.library = this.$store.state.komgaLibraries.libraries.map((x: LibraryDto) => ({
         name: x.name,
         value: x.id,
-      })))
+      }))
 
       const tags = await this.$komgaReferential.getBookTags(undefined, readListId)
-      this.$set(this.filterOptions, 'tag', toNameValue(tags))
+      this.filterOptions.tag = toNameValue(tags)
 
       // get filter from query params or local storage and validate with available filter values
       let activeFilters: any
@@ -428,7 +427,7 @@ export default Vue.extend({
           page: `${this.page}`,
           pageSize: `${this.pageSize}`,
         },
-      } as Location
+      } as RouteLocationRaw
       mergeFilterParams(this.filters, loc.query)
       this.$router.replace(loc).catch((_: any) => {
       })

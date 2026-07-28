@@ -18,7 +18,7 @@
             <v-container>
               <v-row>
                 <v-col>
-                  <v-chip label small :color="actionColor">
+                  <v-chip label size="small" :color="actionColor">
                     {{ $t(`enums.page_hash_action.${hash.action}`) }}
                   </v-chip>
                 </v-col>
@@ -34,8 +34,7 @@
               <v-row>
                 <v-col>
                   <v-btn
-                    @click="$emit('matches-clicked')"
-                    outlined
+                    @click="$emit('matches-clicked')" variant="outlined"
                     rounded
                     :disabled="hash.matchCount == 0"
                   >
@@ -74,18 +73,18 @@
              :disabled="hash.matchCount == 0"
              @click="deleteMatches"
       >
-        <v-icon left v-if="deleteRequested">mdi-check</v-icon>
+        <v-icon start v-if="deleteRequested">mdi-check</v-icon>
         {{ $t('duplicate_pages.action_delete_matches') }}
       </v-btn>
 
-      <v-btn v-if="hash.action !== PageHashAction.IGNORE" text @click="ignore">{{
+      <v-btn v-if="hash.action !== PageHashAction.IGNORE" variant="text" @click="ignore">{{
           $t('duplicate_pages.action_ignore')
         }}
       </v-btn>
-      <v-btn v-if="hash.action !== PageHashAction.DELETE_MANUAL" text @click="deleteManual">
+      <v-btn v-if="hash.action !== PageHashAction.DELETE_MANUAL" variant="text" @click="deleteManual">
         {{ $t('duplicate_pages.action_delete_manual') }}
       </v-btn>
-      <v-btn v-if="hash.action !== PageHashAction.DELETE_AUTO" text @click="deleteAuto" :disabled="!hash.size">
+      <v-btn v-if="hash.action !== PageHashAction.DELETE_AUTO" variant="text" @click="deleteAuto" :disabled="!hash.size">
         {{ $t('duplicate_pages.action_delete_auto') }}
       </v-btn>
     </v-card-actions>
@@ -93,13 +92,13 @@
 </template>
 
 <script lang="ts">
-import Vue, {PropType} from 'vue'
+import {defineComponent, PropType} from 'vue'
 import {pageHashKnownThumbnailUrl} from '@/functions/urls'
 import {PageHashKnownDto} from '@/types/komga-pagehashes'
 import {PageHashAction} from '@/types/enum-pagehashes'
 import {getFileSize} from '@/functions/file'
 
-export default Vue.extend({
+export default defineComponent({
   name: 'PageHashKnownCard',
   props: {
     hash: {

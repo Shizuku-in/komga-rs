@@ -36,12 +36,12 @@
 </template>
 
 <script lang="ts">
-import Vue from 'vue'
+import {defineComponent} from 'vue'
 import {ContinuousScaleType} from '@/types/enum-reader'
 import {PageDtoWithUrl} from '@/types/komga-books'
 import {throttle} from 'lodash'
 
-export default Vue.extend({
+export default defineComponent({
   name: 'ContinuousReader',
   data: () => {
     return {
@@ -99,7 +99,7 @@ export default Vue.extend({
   created() {
     window.addEventListener('keydown', this.keyPressed)
   },
-  destroyed() {
+  unmounted() {
     window.removeEventListener('keydown', this.keyPressed)
   },
   mounted() {

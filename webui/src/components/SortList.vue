@@ -1,26 +1,26 @@
 <template>
-  <v-list dense>
+  <v-list density="compact">
     <v-list-item v-for="(item, index) in sortOptions"
                  :key="index"
                  @click="setSort(item)"
     >
-      <v-list-item-icon>
+      <template #prepend>
         <v-icon color="secondary" v-if="item.key === sortActive.key && sortActive.order === 'asc'">
           mdi-chevron-up
         </v-icon>
         <v-icon color="secondary" v-if="item.key === sortActive.key && sortActive.order === 'desc'">
           mdi-chevron-down
         </v-icon>
-      </v-list-item-icon>
+      </template>
       <v-list-item-title>{{ item.name }}</v-list-item-title>
     </v-list-item>
   </v-list>
 </template>
 
 <script lang="ts">
-import Vue from 'vue'
+import {defineComponent} from 'vue'
 
-export default Vue.extend({
+export default defineComponent({
   name: 'SortList',
   props: {
     sortOptions: {

@@ -4,12 +4,12 @@
   </v-app>
 </template>
 <script lang="ts">
-import Vue from 'vue'
+import {defineComponent} from 'vue'
 import {Theme} from '@/types/themes'
 import {LIBRARY_ADDED, LIBRARY_CHANGED, LIBRARY_DELETED, SESSION_EXPIRED} from '@/types/events'
 import {LibrarySseDto, SessionExpiredDto} from '@/types/komga-sse'
 
-export default Vue.extend({
+export default defineComponent({
   name: 'App',
   created() {
     window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', this.systemThemeChange)
@@ -20,7 +20,7 @@ export default Vue.extend({
 
     this.$eventHub.$on(SESSION_EXPIRED, this.logout)
   },
-  beforeDestroy() {
+  beforeUnmount() {
     window.matchMedia('(prefers-color-scheme: dark)').removeEventListener('change', this.systemThemeChange)
 
     this.$eventHub.$off(LIBRARY_ADDED, this.reloadLibraries)

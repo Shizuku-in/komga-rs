@@ -5,7 +5,7 @@
   >
     <v-card>
       <v-card-title>{{ $t('dialog.add_to_collection.dialog_title') }}</v-card-title>
-      <v-btn icon absolute top right @click="dialogClose">
+      <v-btn icon position="absolute" location="top right" @click="dialogClose">
         <v-icon>mdi-close</v-icon>
       </v-btn>
 
@@ -42,15 +42,14 @@
                 <div v-for="(c, index) in collectionsFiltered"
                      :key="index"
                 >
-                  <v-list-item @click="addTo(c)"
-                               two-line
+                  <v-list-item @click="addTo(c)" lines="two"
                   >
-                    <v-list-item-content>
+                    <div>
                       <v-list-item-title>{{ c.name }}</v-list-item-title>
                       <v-list-item-subtitle>
                         {{ $tc('dialog.add_to_collection.card_collection_subtitle', c.seriesIds.length) }}
                       </v-list-item-subtitle>
-                    </v-list-item-content>
+                    </div>
                   </v-list-item>
                   <v-divider v-if="index !== collectionsFiltered.length-1"/>
                 </div>
@@ -58,8 +57,7 @@
 
               <v-alert
                 v-else
-                type="info"
-                text
+                type="info" variant="tonal"
               >{{ $t('dialog.add_to_collection.label_no_matching_collection') }}
               </v-alert>
             </v-col>
@@ -73,11 +71,11 @@
 </template>
 
 <script lang="ts">
-import Vue from 'vue'
+import {defineComponent} from 'vue'
 import {ERROR} from '@/types/events'
 import {stripAccents} from '@/functions/string'
 
-export default Vue.extend({
+export default defineComponent({
   name: 'CollectionAddToDialog',
   data: () => {
     return {
@@ -88,7 +86,7 @@ export default Vue.extend({
     }
   },
   props: {
-    value: Boolean,
+    modelValue: Boolean,
     seriesIds: {
       type: [Array as () => string[]],
       required: true,
@@ -121,7 +119,7 @@ export default Vue.extend({
   },
   methods: {
     dialogClose() {
-      this.$emit('input', false)
+      this.$emit('update:modelValue', false)
     },
     async addTo(collection: CollectionDto) {
       const seriesIds = this.$_.uniq(collection.seriesIds.concat(this.seriesIds))

@@ -21,11 +21,11 @@
 </template>
 
 <script lang="ts">
-import Vue from 'vue'
+import {defineComponent} from 'vue'
 import AuthenticationActivityTable from '@/components/AuthenticationActivityTable.vue'
 import UsersList from '@/components/UsersList.vue'
 
-export default Vue.extend({
+export default defineComponent({
   name: 'SettingsUsers',
   components: {UsersList, AuthenticationActivityTable  },
 })

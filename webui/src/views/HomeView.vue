@@ -1,13 +1,12 @@
 <template>
   <div class="fill-height">
     <v-app-bar
-      app
     >
       <v-badge
         dot
         offset-x="15"
         offset-y="20"
-        :value="drawerVisible ? 0 : $store.state.booksToCheck + $store.getters.getUnreadAnnouncementsCount()"
+        :model-value="!drawerVisible && !!($store.state.booksToCheck + $store.getters.getUnreadAnnouncementsCount())"
         :color="$store.state.booksToCheck ? 'accent' : 'info'"
         class="ms-n3"
       >
@@ -18,28 +17,30 @@
 
     </v-app-bar>
 
-    <v-navigation-drawer app v-model="drawerVisible" :right="$vuetify.rtl">
-      <v-list-item @click="$router.push({name: 'home'})" inactive class="pb-2">
-        <v-list-item-avatar>
-          <v-img src="../assets/logo.svg"/>
-        </v-list-item-avatar>
+    <v-navigation-drawer v-model="drawerVisible" :location="$vuetify.rtl ? 'right' : 'left'">
+      <v-list-item @click="$router.push({name: 'home'})" class="pb-2">
+        <template #prepend>
+          <v-avatar>
+            <v-img src="../assets/logo.svg"/>
+          </v-avatar>
+        </template>
 
-        <v-list-item-content>
-          <v-list-item-title class="title">
+        <div>
+          <v-list-item-title class="text-h6">
             Komga
           </v-list-item-title>
-        </v-list-item-content>
+        </div>
 
-        <v-tooltip left>
-          <template v-slot:activator="{ on }">
+        <v-tooltip location="left">
+          <template v-slot:activator="{ props }">
             <v-progress-linear
               :active="taskCount > 0"
               indeterminate
               absolute
-              bottom
+              location="bottom"
               height="5"
               color="secondary"
-              v-on="on"
+              v-bind="props"
             />
           </template>
           <div class="mb-2">{{ $tc('common.pending_tasks', taskCount) }}</div>
@@ -57,32 +58,34 @@
       </v-slide-x-transition>
 
       <template v-if="!showReorder">
-        <v-list nav shaped dense>
+        <v-list v-model:opened="openedGroups" nav density="compact">
           <v-list-item :to="{name: 'dashboard'}">
-            <v-list-item-icon>
+            <template #prepend>
               <v-icon>mdi-home</v-icon>
-            </v-list-item-icon>
-            <v-list-item-content>
+            </template>
+            <div>
               <v-list-item-title>{{ $t('navigation.home') }}</v-list-item-title>
-            </v-list-item-content>
+            </div>
           </v-list-item>
 
           <!--   LIBRARIES     -->
           <v-list-item :to="{name:'libraries', params: {libraryId: LIBRARIES_ALL}}">
-            <v-list-item-icon>
+            <template #prepend>
               <v-icon>mdi-book-multiple</v-icon>
-            </v-list-item-icon>
-            <v-list-item-content>
+            </template>
+            <div>
               <v-list-item-title>{{ $t('navigation.libraries') }}</v-list-item-title>
-            </v-list-item-content>
-            <v-list-item-action v-if="isAdmin" class="ma-0">
-              <v-btn icon @click.stop.capture.prevent="addLibrary">
-                <v-icon>mdi-plus</v-icon>
-              </v-btn>
-            </v-list-item-action>
-            <v-list-item-action class="ma-0">
-              <libraries-actions-menu @reorder="showReorder = true"/>
-            </v-list-item-action>
+            </div>
+            <template #append>
+              <v-list-item-action v-if="isAdmin" class="ma-0">
+                <v-btn icon @click.stop.capture.prevent="addLibrary">
+                  <v-icon>mdi-plus</v-icon>
+                </v-btn>
+              </v-list-item-action>
+              <v-list-item-action class="ma-0">
+                <libraries-actions-menu @reorder="showReorder = true"/>
+              </v-list-item-action>
+            </template>
           </v-list-item>
 
           <!--   PINNED LIBRARIES     -->
@@ -90,57 +93,60 @@
                        :key="index"
                        :to="{name:'libraries', params: {libraryId: l.id}}"
           >
-            <v-list-item-icon>
-            </v-list-item-icon>
-            <v-list-item-content>
+            <template #prepend>
+            </template>
+            <div>
               <v-list-item-title>{{ l.name }}</v-list-item-title>
               <v-list-item-subtitle
                 v-if="l.unavailable"
-                class="error--text caption"
+                class="text-error text-caption"
               >{{ $t('common.unavailable') }}
               </v-list-item-subtitle>
-            </v-list-item-content>
-            <v-list-item-action class="ma-0" v-if="isAdmin">
-              <library-actions-menu :library="l"/>
-            </v-list-item-action>
+            </div>
+            <template #append>
+              <v-list-item-action class="ma-0" v-if="isAdmin">
+                <library-actions-menu :library="l"/>
+              </v-list-item-action>
+            </template>
           </v-list-item>
 
           <!--   UNPINNED LIBRARIES     -->
-          <v-list-group no-action
-                        sub-group
-                        v-if="librariesUnpinned.length > 0"
-                        v-model="expandUnpinned"
+          <v-list-group
+            v-if="librariesUnpinned.length > 0"
+            value="unpinned"
+            subgroup
           >
-            <template v-slot:activator>
-              <v-list-item-title>{{ $t('common.more') }}</v-list-item-title>
+            <template #activator="{props}">
+              <v-list-item v-bind="props" :title="$t('common.more')"/>
             </template>
 
             <v-list-item v-for="(l, index) in librariesUnpinned"
                          :key="index"
                          :to="{name:'libraries', params: {libraryId: l.id}}"
             >
-              <v-list-item-content>
+              <div>
                 <v-list-item-title>{{ l.name }}</v-list-item-title>
                 <v-list-item-subtitle
                   v-if="l.unavailable"
-                  class="error--text caption"
+                  class="text-error text-caption"
                 >{{ $t('common.unavailable') }}
                 </v-list-item-subtitle>
-              </v-list-item-content>
-              <v-list-item-action class="ma-0">
-                <library-actions-menu :library="l"/>
-              </v-list-item-action>
+              </div>
+              <template #append>
+                <v-list-item-action class="ma-0">
+                  <library-actions-menu :library="l"/>
+                </v-list-item-action>
+              </template>
             </v-list-item>
           </v-list-group>
 
           <!--   IMPORT     -->
-          <v-list-group v-if="isAdmin"
-                        prepend-icon="mdi-import"
-                        no-action
-                        v-model="expandImport"
+          <v-list-group
+            v-if="isAdmin"
+            value="import"
           >
-            <template v-slot:activator>
-              <v-list-item-title>{{ $t('book_import.title') }}</v-list-item-title>
+            <template #activator="{props}">
+              <v-list-item v-bind="props" prepend-icon="mdi-import" :title="$t('book_import.title')"/>
             </template>
 
             <v-list-item :to="{name: 'import-books'}">
@@ -153,29 +159,30 @@
           </v-list-group>
 
           <!--   MEDIA MANAGEMENT     -->
-          <v-list-group v-if="isAdmin"
-                        no-action
-                        v-model="expandMediaManagement"
+          <v-list-group
+            v-if="isAdmin"
+            value="media-management"
           >
-            <template v-slot:prependIcon>
-              <v-badge
-                dot
-                inline
-                :value="$store.state.booksToCheck"
-                color="accent"
-              >
-                <v-icon>mdi-book-cog</v-icon>
-              </v-badge>
-            </template>
-            <template v-slot:activator>
-              <v-list-item-title>{{ $t('common.media') }}</v-list-item-title>
+            <template #activator="{props}">
+              <v-list-item v-bind="props" :title="$t('common.media')">
+                <template #prepend>
+                  <v-badge
+                    dot
+                    inline
+                    :model-value="!!$store.state.booksToCheck"
+                    color="accent"
+                  >
+                    <v-icon>mdi-book-cog</v-icon>
+                  </v-badge>
+                </template>
+              </v-list-item>
             </template>
 
             <v-list-item :to="{name: 'media-analysis'}">
               <v-badge
                 dot
                 inline
-                :value="$store.state.booksToCheck"
+                :model-value="!!$store.state.booksToCheck"
                 color="accent"
               >
                 <v-list-item-title>{{ $t('media_analysis.media_analysis') }}</v-list-item-title>
@@ -190,12 +197,12 @@
               <v-list-item-title>{{ $t('duplicates.title') }}</v-list-item-title>
             </v-list-item>
 
-            <v-list-group no-action
-                          sub-group
-                          v-model="expandDuplicatePages"
+            <v-list-group
+              value="duplicate-pages"
+              subgroup
             >
-              <template v-slot:activator>
-                <v-list-item-title>{{ $t('duplicate_pages.title') }}</v-list-item-title>
+              <template #activator="{props}">
+                <v-list-item v-bind="props" :title="$t('duplicate_pages.title')"/>
               </template>
 
               <v-list-item :to="{name: 'settings-duplicate-pages-known'}">
@@ -209,31 +216,32 @@
           </v-list-group>
 
           <v-list-item :to="{name: 'history'}" v-if="isAdmin">
-            <v-list-item-icon>
+            <template #prepend>
               <v-icon>mdi-clock-time-four-outline</v-icon>
-            </v-list-item-icon>
-            <v-list-item-content>
+            </template>
+            <div>
               <v-list-item-title>{{ $t('history.title') }}</v-list-item-title>
-            </v-list-item-content>
+            </div>
           </v-list-item>
 
           <!--   SETTINGS     -->
-          <v-list-group v-if="isAdmin"
-                        no-action
-                        v-model="expandSettings"
+          <v-list-group
+            v-if="isAdmin"
+            value="settings"
           >
-            <template v-slot:prependIcon>
-              <v-badge
-                dot
-                inline
-                :value="$store.getters.getUnreadAnnouncementsCount()"
-                color="info"
-              >
-                <v-icon>mdi-cog</v-icon>
-              </v-badge>
-            </template>
-            <template v-slot:activator>
-              <v-list-item-title>{{ $t('server.tab_title') }}</v-list-item-title>
+            <template #activator="{props}">
+              <v-list-item v-bind="props" :title="$t('server.tab_title')">
+                <template #prepend>
+                  <v-badge
+                    dot
+                    inline
+                    :model-value="!!$store.getters.getUnreadAnnouncementsCount()"
+                    color="info"
+                  >
+                    <v-icon>mdi-cog</v-icon>
+                  </v-badge>
+                </template>
+              </v-list-item>
             </template>
 
             <v-list-item :to="{name: 'settings-users'}">
@@ -256,7 +264,7 @@
               <v-badge
                 dot
                 inline
-                :value="$store.getters.getUnreadAnnouncementsCount()"
+                :model-value="!!$store.getters.getUnreadAnnouncementsCount()"
                 color="info"
               >
                 <v-list-item-title>{{ $t('announcements.tab_title') }}</v-list-item-title>
@@ -267,7 +275,7 @@
               <v-badge
                 dot
                 inline
-                :value="$store.getters.isLatestVersion() == 0"
+                :model-value="$store.getters.isLatestVersion() == 0"
                 color="warning"
               >
                 <v-list-item-title>{{ $t('server.updates') }}</v-list-item-title>
@@ -276,12 +284,11 @@
           </v-list-group>
 
           <!--   ACCOUNT     -->
-          <v-list-group prepend-icon="mdi-account"
-                        no-action
-                        v-model="expandAccount"
+          <v-list-group
+            value="account"
           >
-            <template v-slot:activator>
-              <v-list-item-title>{{ $t('account_settings.my_account') }}</v-list-item-title>
+            <template #activator="{props}">
+              <v-list-item v-bind="props" prepend-icon="mdi-account" :title="$t('account_settings.my_account')"/>
             </template>
 
             <v-list-item :to="{name: 'account-me'}">
@@ -302,25 +309,24 @@
           </v-list-group>
 
           <v-list-item @click="logout">
-            <v-list-item-icon>
+            <template #prepend>
               <v-icon>mdi-power</v-icon>
-            </v-list-item-icon>
-            <v-list-item-content>
+            </template>
+            <div>
               <v-list-item-title>{{ $t('navigation.logout') }}</v-list-item-title>
-            </v-list-item-content>
+            </div>
           </v-list-item>
         </v-list>
 
         <v-divider/>
 
-        <v-list dense class="mt-2">
+        <v-list density="compact" class="mt-2">
           <v-list-item>
-            <v-list-item-icon>
+            <template #prepend>
               <v-icon>{{ themeIcon }}</v-icon>
-            </v-list-item-icon>
+            </template>
             <v-select
-              class="py-2"
-              dense
+              class="py-2" density="compact"
               v-model="theme"
               :items="themes"
               :label="$t('home.theme')"
@@ -328,11 +334,10 @@
           </v-list-item>
 
           <v-list-item>
-            <v-list-item-icon>
+            <template #prepend>
               <v-icon>mdi-translate</v-icon>
-            </v-list-item-icon>
-            <v-select
-              dense
+            </template>
+            <v-select density="compact"
               class="py-2"
               v-model="locale"
               :items="locales"
@@ -351,7 +356,7 @@
         >
           <v-badge
             dot
-            :value="$store.getters.isLatestVersion() == 0"
+            :model-value="$store.getters.isLatestVersion() == 0"
             color="warning"
           >
             <router-link :to="{name: 'updates'}" class="link-none">
@@ -375,7 +380,7 @@ import ReusableDialogs from '@/components/ReusableDialogs.vue'
 import LibraryActionsMenu from '@/components/menus/LibraryActionsMenu.vue'
 import SearchBox from '@/components/SearchBox.vue'
 import {Theme} from '@/types/themes'
-import Vue from 'vue'
+import {defineComponent} from 'vue'
 import {LIBRARIES_ALL} from '@/types/library'
 import ToasterNotification from '@/components/ToasterNotification.vue'
 import {MediaStatus} from '@/types/enum-books'
@@ -384,7 +389,7 @@ import {BookSearch, SearchConditionAnyOfBook, SearchConditionMediaStatus, Search
 import LibrariesActionsMenu from '@/components/menus/LibrariesActionsMenu.vue'
 import ReorderLibraries from '@/components/ReorderLibraries.vue'
 
-export default Vue.extend({
+export default defineComponent({
   name: 'HomeView',
   components: {
     ReorderLibraries,
@@ -398,13 +403,8 @@ export default Vue.extend({
     return {
       LIBRARIES_ALL,
       drawerVisible: this.$vuetify.breakpoint.lgAndUp,
-      locales: this.$i18n.availableLocales.map((x: any) => ({text: this.$i18n.t('common.locale_name', x), value: x})),
-      expandSettings: false,
-      expandDuplicatePages: false,
-      expandMediaManagement: false,
-      expandImport: false,
-      expandAccount: false,
-      expandUnpinned: false,
+      locales: this.$i18n.availableLocales.map((x: any) => ({text: this.$t('common.locale_name', x), value: x})),
+      openedGroups: [] as string[],
       showReorder: false,
     }
   },
@@ -417,7 +417,7 @@ export default Vue.extend({
           new SearchConditionMediaStatus(new SearchOperatorIs(MediaStatus.ERROR)),
           new SearchConditionMediaStatus(new SearchOperatorIs(MediaStatus.UNSUPPORTED)),
         ]),
-      } as BookSearch, {size: 0} as PageRequest)
+      } as BookSearch, {size: 1} as PageRequest)
         .then(x => this.$store.commit('setBooksToCheck', x.totalElements))
       this.$komgaAnnouncements.getAnnouncements()
         .then(x => this.$store.commit('setAnnouncements', x))
@@ -452,9 +452,9 @@ export default Vue.extend({
     },
     themes(): object[] {
       return [
-        {text: this.$i18n.t(Theme.LIGHT), value: Theme.LIGHT},
-        {text: this.$i18n.t(Theme.DARK), value: Theme.DARK},
-        {text: this.$i18n.t(Theme.SYSTEM), value: Theme.SYSTEM},
+        {text: this.$t(Theme.LIGHT), value: Theme.LIGHT},
+        {text: this.$t(Theme.DARK), value: Theme.DARK},
+        {text: this.$t(Theme.SYSTEM), value: Theme.SYSTEM},
       ]
     },
     themeIcon(): string {
@@ -492,13 +492,14 @@ export default Vue.extend({
   },
   methods: {
     checkRoute(to) {
-      this.expandSettings = to.path.includes('/settings/')
-      this.expandMediaManagement = to.path.includes('/media-management/')
-      this.expandImport = to.path.includes('/import/')
-      this.expandDuplicatePages = to.path.includes('/duplicate-pages/')
-      this.expandAccount = to.path.includes('/account/')
-      if (this.librariesUnpinned.some(it => it.id === to.params.libraryId)) this.expandUnpinned = true
-      else if (this.librariesPinned.some(it => it.id === to.params.libraryId)) this.expandUnpinned = false
+      const openedGroups: string[] = []
+      if (to.path.includes('/settings/')) openedGroups.push('settings')
+      if (to.path.includes('/media-management/')) openedGroups.push('media-management')
+      if (to.path.includes('/duplicate-pages/')) openedGroups.push('media-management', 'duplicate-pages')
+      if (to.path.includes('/import/')) openedGroups.push('import')
+      if (to.path.includes('/account/')) openedGroups.push('account')
+      if (this.librariesUnpinned.some(it => it.id === to.params.libraryId)) openedGroups.push('unpinned')
+      this.openedGroups = [...new Set(openedGroups)]
     },
     toggleDrawer() {
       this.drawerVisible = !this.drawerVisible

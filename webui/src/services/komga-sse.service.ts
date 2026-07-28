@@ -29,21 +29,21 @@ import {
   THUMBNAILSERIES_ADDED,
   THUMBNAILSERIES_DELETED,
 } from '@/types/events'
-import Vue from 'vue'
 import {TaskQueueSseDto} from '@/types/komga-sse'
+import EventHub from '@/services/event-hub'
 
 const API_SSE = '/sse/v1/events'
 
 export default class KomgaSseService {
   private eventSource: EventSource | undefined
-  private eventHub: Vue
+  private eventHub: EventHub
   private store: any
 
-  constructor(eventHub: Vue, store: any) {
+  constructor(eventHub: EventHub, store: any) {
     this.eventHub = eventHub
     this.store = store
 
-    this.eventHub.$watch(
+    this.store.watch(
       () => this.store.getters.authenticated,
       (val) => {
         if (val) this.connect()

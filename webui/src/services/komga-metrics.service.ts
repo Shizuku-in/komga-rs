@@ -1,7 +1,7 @@
 import {AxiosInstance} from 'axios'
 import {MetricDto, Tag} from '@/types/komga-metrics'
 
-const qs = require('qs')
+import qs from 'qs'
 
 const API_METRICS = '/actuator/metrics'
 

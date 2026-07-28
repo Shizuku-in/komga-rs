@@ -1,14 +1,14 @@
 <template>
-  <v-list dense>
+  <v-list density="compact">
     <div v-for="(f, key) in filtersOptions"
          :key="key"
     >
-      <v-subheader v-if="f.name">{{ f.name }}</v-subheader>
+      <v-list-subheader v-if="f.name">{{ f.name }}</v-list-subheader>
       <v-list-item v-for="v in f.values"
                    :key="JSON.stringify(v.value)"
                    @click.stop="click(key, v.value, v.nValue)"
       >
-        <v-list-item-icon>
+        <template #prepend>
           <v-icon v-if="key in filtersActive && includes(filtersActive[key], v.nValue)" color="secondary">
             mdi-minus-box
           </v-icon>
@@ -18,7 +18,7 @@
           <v-icon v-else>
             mdi-checkbox-blank-outline
           </v-icon>
-        </v-list-item-icon>
+        </template>
         <v-list-item-title>{{ v.name }}</v-list-item-title>
       </v-list-item>
     </div>
@@ -26,10 +26,10 @@
 </template>
 
 <script lang="ts">
-import Vue from 'vue'
+import {defineComponent} from 'vue'
 import {FiltersActive, FiltersOptions} from '@/types/filter'
 
-export default Vue.extend({
+export default defineComponent({
   name: 'FilterList',
   props: {
     filtersOptions: {

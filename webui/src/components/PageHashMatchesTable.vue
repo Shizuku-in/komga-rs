@@ -1,14 +1,12 @@
 <template>
-  <v-data-table
+  <v-data-table-server
     :headers="headers"
     :items="elements"
-    :options.sync="options"
-    :server-items-length="totalElements"
+    v-model:options="options"
+    :items-length="totalElements"
     :loading="loading"
     class="elevation-1"
-    :footer-props="{
-        itemsPerPageOptions: [10, 20, 50]
-      }"
+    :items-per-page-options="[10, 20, 50]"
   >
     <template v-slot:item.url="{ item }">
       <router-link :to="{name:'browse-book', params: {bookId: item.bookId}}">{{ item.url }}</router-link>
@@ -37,15 +35,16 @@
         <v-icon>mdi-refresh</v-icon>
       </v-btn>
     </template>
-  </v-data-table>
+  </v-data-table-server>
 </template>
 
 <script lang="ts">
-import Vue, {PropType} from 'vue'
+import {defineComponent, PropType} from 'vue'
 import {bookPageThumbnailUrl} from '@/functions/urls'
 import {PageHashDto, PageHashMatchDto} from '@/types/komga-pagehashes'
+import {createServerTableOptions, toPageRequest} from '@/functions/data-table'
 
-export default Vue.extend({
+export default defineComponent({
   name: 'PageHashMatchesTable',
   props: {
     hash: {
@@ -57,7 +56,7 @@ export default Vue.extend({
       elements: [] as PageHashMatchDto[],
       totalElements: 0,
       loading: true,
-      options: {} as any,
+      options: createServerTableOptions(10),
       bookPageThumbnailUrl,
     }
   },
@@ -71,7 +70,6 @@ export default Vue.extend({
     hash() {
       this.options.page = 1
       this.options.sortBy = []
-      this.options.sortDesc = []
       this.elements = []
       this.totalElements = 0
     },
@@ -79,11 +77,11 @@ export default Vue.extend({
   computed: {
     headers(): object[] {
       return [
-        {text: this.$t('common.url').toString(), value: 'url'},
-        {text: this.$t('common.filename').toString(), value: 'fileName'},
-        {text: this.$t('common.page_number').toString(), value: 'pageNumber'},
-        {text: this.$t('common.page').toString(), value: 'bookId'},
-        {text: this.$t('menu.delete').toString(), value: 'delete'},
+        {title: this.$t('common.url').toString(), key: 'url'},
+        {title: this.$t('common.filename').toString(), key: 'fileName'},
+        {title: this.$t('common.page_number').toString(), key: 'pageNumber'},
+        {title: this.$t('common.page').toString(), key: 'bookId'},
+        {title: this.$t('menu.delete').toString(), key: 'delete'},
       ]
     },
   },
@@ -91,17 +89,7 @@ export default Vue.extend({
     async loadData(hash: PageHashDto) {
       this.loading = true
 
-      const {sortBy, sortDesc, page, itemsPerPage} = this.options
-
-      const pageRequest = {
-        page: page - 1,
-        size: itemsPerPage,
-        sort: [],
-      } as PageRequest
-
-      for (let i = 0; i < sortBy.length; i++) {
-        pageRequest.sort!!.push(`${sortBy[i]},${sortDesc[i] ? 'desc' : 'asc'}`)
-      }
+      const pageRequest = toPageRequest(this.options)
 
       const elementsPage = await this.$komgaPageHashes.getPageHashMatches(hash, pageRequest)
       this.totalElements = elementsPage.totalElements

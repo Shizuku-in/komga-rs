@@ -29,7 +29,7 @@
 
       <v-card-actions>
         <v-spacer/>
-        <v-btn text @click="dialogCancel">{{ $t('dialog.edit_user.button_cancel') }}</v-btn>
+        <v-btn variant="text" @click="dialogCancel">{{ $t('dialog.edit_user.button_cancel') }}</v-btn>
         <v-btn color="primary"
                @click="dialogConfirm"
         >{{ $t('dialog.edit_user.button_confirm') }}
@@ -41,11 +41,11 @@
 
 <script lang="ts">
 import {UserRoles} from '@/types/enum-users'
-import Vue from 'vue'
+import {defineComponent} from 'vue'
 import {ERROR} from '@/types/events'
 import {UserDto, UserUpdateDto} from '@/types/komga-users'
 
-export default Vue.extend({
+export default defineComponent({
   name: 'UserEditDialog',
   data: () => {
     return {
@@ -54,14 +54,14 @@ export default Vue.extend({
     }
   },
   props: {
-    value: Boolean,
+    modelValue: Boolean,
     user: {
       type: Object,
       required: true,
     },
   },
   watch: {
-    value(val) {
+    modelValue(val) {
       this.modal = val
     },
     modal(val) {
@@ -84,12 +84,12 @@ export default Vue.extend({
       this.roles = user.roles
     },
     dialogCancel() {
-      this.$emit('input', false)
+      this.$emit('update:modelValue', false)
       this.dialogReset(this.user)
     },
     dialogConfirm() {
       this.editUser()
-      this.$emit('input', false)
+      this.$emit('update:modelValue', false)
       this.dialogReset(this.user)
     },
     async editUser() {

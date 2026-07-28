@@ -7,27 +7,27 @@
       <v-col cols="auto">
         <v-select
           v-model="form.thumbnailSize"
-          @change="$v.form.thumbnailSize.$touch()"
+          @update:model-value="v$.form.thumbnailSize.$touch()"
           :items="thumbnailSizes"
           :label="$t('server_settings.label_thumbnail_size')"
           hide-details
         />
         <v-checkbox
           v-model="form.deleteEmptyCollections"
-          @change="$v.form.deleteEmptyCollections.$touch()"
+          @update:model-value="v$.form.deleteEmptyCollections.$touch()"
           :label="$t('server_settings.label_delete_empty_collections')"
           hide-details
         />
         <v-checkbox
           v-model="form.deleteEmptyReadLists"
-          @change="$v.form.deleteEmptyReadLists.$touch()"
+          @update:model-value="v$.form.deleteEmptyReadLists.$touch()"
           :label="$t('server_settings.label_delete_empty_readlists')"
           hide-details
         />
         <v-text-field
           v-model="form.taskPoolSize"
-          @input="$v.form.taskPoolSize.$touch()"
-          @blur="$v.form.taskPoolSize.$touch()"
+          @update:model-value="v$.form.taskPoolSize.$touch()"
+          @blur="v$.form.taskPoolSize.$touch()"
           :error-messages="taskPoolSizeErrors"
           :label="$t('server_settings.label_task_pool_size')"
           type="number"
@@ -36,8 +36,8 @@
         />
         <v-text-field
           v-model="form.rememberMeDurationDays"
-          @input="$v.form.rememberMeDurationDays.$touch()"
-          @blur="$v.form.rememberMeDurationDays.$touch()"
+          @update:model-value="v$.form.rememberMeDurationDays.$touch()"
+          @blur="v$.form.rememberMeDurationDays.$touch()"
           :error-messages="rememberMeDurationErrors"
           :label="$t('server_settings.label_rememberme_duration')"
           :hint="$t('server_settings.requires_restart')"
@@ -48,7 +48,7 @@
         />
         <v-checkbox
           v-model="form.renewRememberMeKey"
-          @change="$v.form.renewRememberMeKey.$touch()"
+          @update:model-value="v$.form.renewRememberMeKey.$touch()"
           label="Regenerate the RememberMe key"
           persistent-hint
           :hint="$t('server_settings.requires_restart')"
@@ -56,8 +56,8 @@
 
         <v-text-field
           v-model="form.serverPort"
-          @input="$v.form.serverPort.$touch()"
-          @blur="$v.form.serverPort.$touch()"
+          @update:model-value="v$.form.serverPort.$touch()"
+          @blur="v$.form.serverPort.$touch()"
           :error-messages="serverPortErrors"
           :placeholder="existingSettings.serverPort?.configurationSource?.toString()"
           :persistent-placeholder="!!existingSettings.serverPort?.configurationSource"
@@ -71,9 +71,9 @@
           class="mt-4"
         >
           <template v-slot:append v-if="!!existingSettings.serverPort?.configurationSource">
-            <v-tooltip bottom>
-              <template v-slot:activator="{ on }">
-                <v-icon v-on="on">
+            <v-tooltip location="bottom">
+              <template v-slot:activator="{ props }">
+                <v-icon v-bind="props">
                   mdi-information-outline
                 </v-icon>
               </template>
@@ -84,8 +84,8 @@
 
         <v-text-field
           v-model="form.serverContextPath"
-          @input="$v.form.serverContextPath.$touch()"
-          @blur="$v.form.serverContextPath.$touch()"
+          @update:model-value="v$.form.serverContextPath.$touch()"
+          @blur="v$.form.serverContextPath.$touch()"
           :error-messages="serverContextPathErrors"
           :placeholder="existingSettings.serverContextPath?.configurationSource"
           :persistent-placeholder="!!existingSettings.serverContextPath?.configurationSource"
@@ -96,9 +96,9 @@
           class="mt-4"
         >
           <template v-slot:append v-if="!!existingSettings.serverContextPath?.configurationSource">
-            <v-tooltip bottom>
-              <template v-slot:activator="{ on }">
-                <v-icon v-on="on">
+            <v-tooltip location="bottom">
+              <template v-slot:activator="{ props }">
+                <v-icon v-bind="props">
                   mdi-information-outline
                 </v-icon>
               </template>
@@ -109,15 +109,15 @@
 
         <v-checkbox
           v-model="form.koboProxy"
-          @change="$v.form.koboProxy.$touch()"
+          @update:model-value="v$.form.koboProxy.$touch()"
           :label="$t('server_settings.label_kobo_proxy')"
           hide-details
         />
 
         <v-text-field
           v-model="form.koboPort"
-          @input="$v.form.koboPort.$touch()"
-          @blur="$v.form.koboPort.$touch()"
+          @update:model-value="v$.form.koboPort.$touch()"
+          @blur="v$.form.koboPort.$touch()"
           :error-messages="koboPortErrors"
           clearable
           :label="$t('server_settings.label_kobo_port')"
@@ -162,14 +162,16 @@
 
 <script lang="ts">
 import {SettingsDto, ThumbnailSizeDto} from '@/types/komga-settings'
-import Vue from 'vue'
-import {helpers, maxValue, minValue, required} from 'vuelidate/lib/validators'
+import {defineComponent} from 'vue'
+import useVuelidate from '@vuelidate/core'
+import {helpers, maxValue, minValue, required} from '@vuelidate/validators'
 import ConfirmationDialog from '@/components/dialogs/ConfirmationDialog.vue'
 
-const contextPath = helpers.regex('contextPath', /^\/[-a-zA-Z0-9_\/]*[a-zA-Z0-9]$/)
+const contextPath = helpers.regex(/^\/[-a-zA-Z0-9_\/]*[a-zA-Z0-9]$/)
 
-export default Vue.extend({
+export default defineComponent({
   name: 'ServerSettings',
+  setup: () => ({v$: useVuelidate()}),
   components: {ConfirmationDialog},
   data: () => ({
     form: {
@@ -227,41 +229,41 @@ export default Vue.extend({
     },
     rememberMeDurationErrors(): string[] {
       const errors = [] as string[]
-      if (!this.$v.form?.rememberMeDurationDays?.$dirty) return errors
-      !this.$v?.form?.rememberMeDurationDays?.minValue && errors.push(this.$t('validation.one_or_more').toString())
-      !this.$v?.form?.rememberMeDurationDays?.required && errors.push(this.$t('common.required').toString())
+      if (!this.v$.form?.rememberMeDurationDays?.$dirty) return errors
+      !this.v$?.form?.rememberMeDurationDays?.minValue && errors.push(this.$t('validation.one_or_more').toString())
+      !this.v$?.form?.rememberMeDurationDays?.required && errors.push(this.$t('common.required').toString())
       return errors
     },
     taskPoolSizeErrors(): string[] {
       const errors = [] as string[]
-      if (!this.$v.form?.taskPoolSize?.$dirty) return errors
-      !this.$v?.form?.taskPoolSize?.minValue && errors.push(this.$t('validation.one_or_more').toString())
-      !this.$v?.form?.taskPoolSize?.required && errors.push(this.$t('common.required').toString())
+      if (!this.v$.form?.taskPoolSize?.$dirty) return errors
+      !this.v$?.form?.taskPoolSize?.minValue && errors.push(this.$t('validation.one_or_more').toString())
+      !this.v$?.form?.taskPoolSize?.required && errors.push(this.$t('common.required').toString())
       return errors
     },
     serverPortErrors(): string[] {
       const errors = [] as string[]
-      if (!this.$v.form?.serverPort?.$dirty) return errors;
-      (!this.$v?.form?.serverPort?.minValue || !this.$v?.form?.serverPort?.maxValue) && errors.push(this.$t('validation.tcp_port').toString())
+      if (!this.v$.form?.serverPort?.$dirty) return errors;
+      (!this.v$?.form?.serverPort?.minValue || !this.v$?.form?.serverPort?.maxValue) && errors.push(this.$t('validation.tcp_port').toString())
       return errors
     },
     serverContextPathErrors(): string[] {
       const errors = [] as string[]
-      if (!this.$v.form?.serverContextPath?.$dirty) return errors
-      !this.$v?.form?.serverContextPath?.contextPath && errors.push(this.$t('validation.context_path').toString())
+      if (!this.v$.form?.serverContextPath?.$dirty) return errors
+      !this.v$?.form?.serverContextPath?.contextPath && errors.push(this.$t('validation.context_path').toString())
       return errors
     },
     koboPortErrors(): string[] {
       const errors = [] as string[]
-      if (!this.$v.form?.koboPort?.$dirty) return errors;
-      (!this.$v?.form?.koboPort?.minValue || !this.$v?.form?.koboPort?.maxValue) && errors.push(this.$t('validation.tcp_port').toString())
+      if (!this.v$.form?.koboPort?.$dirty) return errors;
+      (!this.v$?.form?.koboPort?.minValue || !this.v$?.form?.koboPort?.maxValue) && errors.push(this.$t('validation.tcp_port').toString())
       return errors
     },
     saveDisabled(): boolean {
-      return this.$v.form.$invalid || !this.$v.form.$anyDirty
+      return this.v$.form.$invalid || !this.v$.form.$anyDirty
     },
     discardDisabled(): boolean {
-      return !this.$v.form.$anyDirty
+      return !this.v$.form.$anyDirty
     },
   },
   methods: {
@@ -271,34 +273,34 @@ export default Vue.extend({
       this.form.serverPort = settings.serverPort.databaseSource
       this.form.serverContextPath = settings.serverContextPath.databaseSource
       this.$_.merge(this.existingSettings, settings)
-      this.$v.form.$reset()
+      this.v$.form.$reset()
     },
     async saveSettings() {
       const newSettings = {}
       let thumbnailSizeHasChanged = false
-      if (this.$v.form?.deleteEmptyCollections?.$dirty)
+      if (this.v$.form?.deleteEmptyCollections?.$dirty)
         this.$_.merge(newSettings, {deleteEmptyCollections: this.form.deleteEmptyCollections})
-      if (this.$v.form?.deleteEmptyReadLists?.$dirty)
+      if (this.v$.form?.deleteEmptyReadLists?.$dirty)
         this.$_.merge(newSettings, {deleteEmptyReadLists: this.form.deleteEmptyReadLists})
-      if (this.$v.form?.rememberMeDurationDays?.$dirty)
+      if (this.v$.form?.rememberMeDurationDays?.$dirty)
         this.$_.merge(newSettings, {rememberMeDurationDays: this.form.rememberMeDurationDays})
-      if (this.$v.form?.renewRememberMeKey?.$dirty)
+      if (this.v$.form?.renewRememberMeKey?.$dirty)
         this.$_.merge(newSettings, {renewRememberMeKey: this.form.renewRememberMeKey})
-      if (this.$v.form?.thumbnailSize?.$dirty) {
+      if (this.v$.form?.thumbnailSize?.$dirty) {
         this.$_.merge(newSettings, {thumbnailSize: this.form.thumbnailSize})
         thumbnailSizeHasChanged = this.existingSettings.thumbnailSize != this.form.thumbnailSize
       }
-      if (this.$v.form?.taskPoolSize?.$dirty)
+      if (this.v$.form?.taskPoolSize?.$dirty)
         this.$_.merge(newSettings, {taskPoolSize: this.form.taskPoolSize})
-      if (this.$v.form?.serverPort?.$dirty)
+      if (this.v$.form?.serverPort?.$dirty)
         this.$_.merge(newSettings, {serverPort: this.form.serverPort})
-      if (this.$v.form?.serverContextPath?.$dirty)
+      if (this.v$.form?.serverContextPath?.$dirty)
         // coerce empty string to null
         this.$_.merge(newSettings, {serverContextPath: this.form.serverContextPath || null})
 
-      if (this.$v.form?.koboProxy?.$dirty)
+      if (this.v$.form?.koboProxy?.$dirty)
         this.$_.merge(newSettings, {koboProxy: this.form.koboProxy})
-      if (this.$v.form?.koboPort?.$dirty)
+      if (this.v$.form?.koboPort?.$dirty)
         this.$_.merge(newSettings, {koboPort: this.form.koboPort})
 
       await this.$komgaSettings.updateSettings(newSettings)

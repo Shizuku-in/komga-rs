@@ -43,7 +43,7 @@
       <item-browser
         :items="readLists"
         :selectable="isAdmin"
-        :selected.sync="selectedReadLists"
+        v-model:selected="selectedReadLists"
         :edit-function="isAdmin ? editSingle : undefined"
       />
 
@@ -65,15 +65,15 @@ import LibraryNavigation from '@/components/LibraryNavigation.vue'
 import LibraryActionsMenu from '@/components/menus/LibraryActionsMenu.vue'
 import PageSizeSelect from '@/components/PageSizeSelect.vue'
 import {LIBRARY_CHANGED, READLIST_ADDED, READLIST_CHANGED, READLIST_DELETED} from '@/types/events'
-import Vue from 'vue'
-import {Location} from 'vue-router'
+import {defineComponent} from 'vue'
+import type {RouteLocationRaw} from 'vue-router'
 import {LIBRARIES_ALL, LIBRARY_ROUTE} from '@/types/library'
 import {LibrarySseDto} from '@/types/komga-sse'
 import MultiSelectBar from '@/components/bars/MultiSelectBar.vue'
 import {LibraryDto} from '@/types/komga-libraries'
 import {ReadListDto} from '@/types/komga-readlists'
 
-export default Vue.extend({
+export default defineComponent({
   name: 'BrowseReadLists',
   components: {
     LibraryActionsMenu,
@@ -115,7 +115,7 @@ export default Vue.extend({
     this.$eventHub.$on(READLIST_DELETED, this.reloadElements)
     this.$eventHub.$on(LIBRARY_CHANGED, this.reloadLibrary)
   },
-  beforeDestroy() {
+  beforeUnmount() {
     this.$eventHub.$off(READLIST_ADDED, this.reloadElements)
     this.$eventHub.$off(READLIST_CHANGED, this.reloadElements)
     this.$eventHub.$off(READLIST_DELETED, this.reloadElements)
@@ -206,7 +206,7 @@ export default Vue.extend({
           page: `${this.page}`,
           pageSize: `${this.pageSize}`,
         },
-      } as Location).catch((_: any) => {
+      } as RouteLocationRaw).catch((_: any) => {
       })
     },
     reloadElements() {

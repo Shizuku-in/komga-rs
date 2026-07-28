@@ -6,33 +6,25 @@
     >
       <draggable v-model="localItems"
                  :class="flexClass"
+                 item-key="id"
                  handle=".handle"
                  v-bind="dragOptions"
                  :forceFallback="true"
                  :scroll-sensitivity="200"
-                 @start="transitions = false"
-                 @end="transitions = true"
       >
-        <transition-group type="transition"
-                          :name="transitions ? 'flip-list' : null"
-                          :class="flexClass"
-        >
-          <v-item
-            v-for="item in localItems"
-            :key="item.id"
-            class="my-2 mx-2"
-            v-slot:default="{ toggle, active }" :value="item"
-          >
-            <slot name="item">
-              <div style="position: relative"
-                   :class="draggable ? 'draggable-item' : undefined"
-              >
+        <template #item="{ element: item }">
+          <div class="my-2 mx-2">
+            <v-item v-slot:default="{ toggle, isSelected }" :value="item">
+              <slot name="item">
+                <div style="position: relative"
+                     :class="draggable ? 'draggable-item' : undefined"
+                >
                 <item-card
                   class="item-card"
                   :item="item"
                   :item-context="itemContext"
                   :width="itemWidth"
-                  :selected="active"
+                  :selected="isSelected"
                   :no-link="draggable || deletable"
                   :preselect="shouldPreselect"
                   :onEdit="(draggable || deletable) ? undefined : editFunction"
@@ -46,8 +38,7 @@
                                 v-model="localItemsIndex[JSON.stringify(item)]"
                                 type="number"
                                 min="0"
-                                :max="localItems.length - 1"
-                                solo
+                                :max="localItems.length - 1" variant="solo"
                                 style="position: absolute; top: 0; left: 0;"
                                 ref=""
                                 @blur="updateIndex(item)"
@@ -68,8 +59,8 @@
                 <v-fab-transition>
                   <v-btn
                     v-if="deletable"
-                    fab
-                    small
+                    icon
+                    size="small"
                     color="accent"
                     class="fab-delete"
                     @click="deleteItem(item)"
@@ -79,10 +70,11 @@
                   </v-btn>
                 </v-fab-transition>
 
-              </div>
-            </slot>
-          </v-item>
-        </transition-group>
+                </div>
+              </slot>
+            </v-item>
+          </div>
+        </template>
       </draggable>
     </div>
     <v-row v-else justify="center">
@@ -94,11 +86,11 @@
 <script lang="ts">
 import ItemCard from '@/components/ItemCard.vue'
 import {computeCardWidth} from '@/functions/grid-utilities'
-import Vue from 'vue'
+import {defineComponent} from 'vue'
 import draggable from 'vuedraggable'
 import {ItemContext} from '@/types/items'
 
-export default Vue.extend({
+export default defineComponent({
   name: 'ItemBrowser',
   components: {ItemCard, draggable},
   props: {
@@ -153,7 +145,6 @@ export default Vue.extend({
       lastClickedNoShift: undefined as any,
       lastClickedShift: undefined as any,
       width: 150,
-      transitions: true,
     }
   },
   watch: {
@@ -174,7 +165,7 @@ export default Vue.extend({
         this.localItems = this.items as []
         this.localItemsIndex = {}
         for (const [i, value] of this.localItems.entries()) {
-          this.$set(this.localItemsIndex, JSON.stringify(value), i)
+          this.localItemsIndex[JSON.stringify(value)] = i
         }
       },
       immediate: true,

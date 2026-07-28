@@ -25,8 +25,7 @@
               <v-row>
                 <v-col>
                   <v-btn
-                    @click="$emit('matches-clicked')"
-                    outlined
+                    @click="$emit('matches-clicked')" variant="outlined"
                     rounded
                   >
                     {{ $tc('duplicate_pages.matches_n', hash.matchCount) }}
@@ -50,21 +49,21 @@
     </v-container>
 
     <v-card-actions>
-      <v-btn text @click="ignore">{{ $t('duplicate_pages.action_ignore') }}</v-btn>
-      <v-btn text @click="deleteManual">{{ $t('duplicate_pages.action_delete_manual') }}</v-btn>
-      <v-btn text @click="deleteAuto" :disabled="!hash.size">{{ $t('duplicate_pages.action_delete_auto') }}</v-btn>
+      <v-btn variant="text" @click="ignore">{{ $t('duplicate_pages.action_ignore') }}</v-btn>
+      <v-btn variant="text" @click="deleteManual">{{ $t('duplicate_pages.action_delete_manual') }}</v-btn>
+      <v-btn variant="text" @click="deleteAuto" :disabled="!hash.size">{{ $t('duplicate_pages.action_delete_auto') }}</v-btn>
     </v-card-actions>
   </v-card>
 </template>
 
 <script lang="ts">
-import Vue, {PropType} from 'vue'
+import {defineComponent, PropType} from 'vue'
 import {pageHashUnknownThumbnailUrl} from '@/functions/urls'
 import {PageHashUnknownDto} from '@/types/komga-pagehashes'
 import {PageHashAction} from '@/types/enum-pagehashes'
 import {getFileSize} from '@/functions/file'
 
-export default Vue.extend({
+export default defineComponent({
   name: 'PageHashUnknownCard',
   props: {
     hash: {

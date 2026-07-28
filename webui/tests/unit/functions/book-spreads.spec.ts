@@ -1,6 +1,7 @@
 import {buildSpreads} from '@/functions/book-spreads'
 import {PagedReaderLayout} from '@/types/enum-reader'
 import {PageDtoWithUrl} from '@/types/komga-books'
+import {describe, expect, test} from 'vitest'
 
 describe('Single Page', () => {
   const pageLayout = PagedReaderLayout.SINGLE_PAGE

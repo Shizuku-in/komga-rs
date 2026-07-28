@@ -1,17 +1,14 @@
 <template>
   <v-container fluid class="pa-6">
-    <v-data-table
+    <v-data-table-server
       :headers="headers"
       :items="booksData"
-      :options.sync="options"
-      :server-items-length="totalBooks"
+      v-model:options="options"
+      :items-length="totalBooks"
       :loading="loading"
-      sort-by="media.status"
       multi-sort
       class="elevation-1"
-      :footer-props="{
-        itemsPerPageOptions: [20, 50, 100]
-      }"
+      :items-per-page-options="[20, 50, 100]"
     >
       <template v-slot:top>
         <v-container>
@@ -26,11 +23,10 @@
               <v-select v-model="filterLibraries"
                         :items="filterLibrariesOptions"
                         :label="$t('navigation.libraries')"
-                        clearable
-                        solo
+                        clearable variant="solo"
                         multiple
                         chips
-                        deletable-chips
+                        closable-chips
               />
             </v-col>
           </v-row>
@@ -51,7 +47,7 @@
       <template v-slot:item.deleted="{ item }">
         <v-chip
           v-if="item.deleted"
-          label small color="error">
+          label size="small" color="error">
           {{ $t('common.unavailable') }}
         </v-chip>
       </template>
@@ -61,12 +57,12 @@
           <v-icon>mdi-refresh</v-icon>
         </v-btn>
       </template>
-    </v-data-table>
+    </v-data-table-server>
   </v-container>
 </template>
 
 <script lang="ts">
-import Vue from 'vue'
+import {defineComponent} from 'vue'
 import {MediaStatus} from '@/types/enum-books'
 import {BookDto} from '@/types/komga-books'
 import {convertErrorCodes} from '@/functions/error-codes'
@@ -79,15 +75,16 @@ import {
   SearchConditionMediaStatus,
   SearchOperatorIs,
 } from '@/types/komga-search'
+import {createServerTableOptions, toPageRequest} from '@/functions/data-table'
 
-export default Vue.extend({
+export default defineComponent({
   name: 'MediaAnalysis',
   data: function () {
     return {
       books: [] as BookDto[],
       totalBooks: 0,
       loading: true,
-      options: {} as any,
+      options: createServerTableOptions(20, [{key: 'media.status', order: 'asc'}]),
       filterStatus: ['error', 'unsupported'],
       filterLibraries: [] as string[],
     }
@@ -115,14 +112,14 @@ export default Vue.extend({
     },
     headers(): object[] {
       return [
-        {text: this.$i18n.t('common.library').toString(), value: 'libraryId', sortable: false},
-        {text: this.$i18n.t('media_analysis.name').toString(), value: 'name'},
-        {text: this.$i18n.t('media_analysis.status').toString(), value: 'media.status'},
-        {text: this.$i18n.t('media_analysis.comment').toString(), value: 'media.comment'},
-        {text: this.$i18n.t('media_analysis.media_type').toString(), value: 'media.mediaType'},
-        {text: this.$i18n.t('media_analysis.url').toString(), value: 'url'},
-        {text: this.$i18n.t('media_analysis.size').toString(), value: 'size'},
-        {text: '', value: 'deleted', groupable: false, sortable: false},
+        {title: this.$t('common.library').toString(), key: 'libraryId', sortable: false},
+        {title: this.$t('media_analysis.name').toString(), key: 'name'},
+        {title: this.$t('media_analysis.status').toString(), key: 'media.status'},
+        {title: this.$t('media_analysis.comment').toString(), key: 'media.comment'},
+        {title: this.$t('media_analysis.media_type').toString(), key: 'media.mediaType'},
+        {title: this.$t('media_analysis.url').toString(), key: 'url'},
+        {title: this.$t('media_analysis.size').toString(), key: 'size'},
+        {title: '', key: 'deleted', sortable: false},
       ]
     },
     booksData(): BookDto[] {
@@ -143,17 +140,7 @@ export default Vue.extend({
     async loadBooks() {
       this.loading = true
 
-      const {sortBy, sortDesc, page, itemsPerPage} = this.options
-
-      const pageRequest = {
-        page: page - 1,
-        size: itemsPerPage,
-        sort: [],
-      } as PageRequest
-
-      for (let i = 0; i < sortBy.length; i++) {
-        pageRequest.sort!!.push(`${sortBy[i]},${sortDesc[i] ? 'desc' : 'asc'}`)
-      }
+      const pageRequest = toPageRequest(this.options)
 
       const conditionsStatus = [] as SearchConditionBook[]
       if (this.filterStatus.includes('error')) conditionsStatus.push(new SearchConditionMediaStatus(new SearchOperatorIs(MediaStatus.ERROR)))

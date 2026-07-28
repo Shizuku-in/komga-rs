@@ -39,10 +39,10 @@
 
 <script lang="ts">
 import PasswordChangeDialog from '@/components/dialogs/PasswordChangeDialog.vue'
-import Vue from 'vue'
+import {defineComponent} from 'vue'
 import {UserDto} from '@/types/komga-users'
 
-export default Vue.extend({
+export default defineComponent({
   name: 'AccountSettings',
   components: {PasswordChangeDialog},
   data: () => {

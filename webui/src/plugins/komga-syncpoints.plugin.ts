@@ -1,17 +1,17 @@
 import {AxiosInstance} from 'axios'
-import _Vue from 'vue'
+import type {App} from 'vue'
 import KomgaSyncPointsService from '@/services/komga-syncpoints.service'
 
 export default {
   install(
-    Vue: typeof _Vue,
+    Vue: App,
     {http}: { http: AxiosInstance }) {
-    Vue.prototype.$komgaSyncPoints = new KomgaSyncPointsService(http)
+    Vue.config.globalProperties.$komgaSyncPoints = new KomgaSyncPointsService(http)
   },
 }
 
-declare module 'vue/types/vue' {
-  interface Vue {
+declare module '@vue/runtime-core' {
+  interface ComponentCustomProperties {
     $komgaSyncPoints: KomgaSyncPointsService;
   }
 }

@@ -1,5 +1,5 @@
 import {AxiosInstance} from 'axios'
-import _Vue from 'vue'
+import type {App} from 'vue'
 import KomgaSettingsService from '@/services/komga-settings.service'
 import {Module} from 'vuex'
 import {
@@ -71,17 +71,17 @@ const vuexModule: Module<any, any> = {
 
 export default {
   install(
-    Vue: typeof _Vue,
+    Vue: App,
     {store, http}: { store: any, http: AxiosInstance }) {
     service = new KomgaSettingsService(http)
-    Vue.prototype.$komgaSettings = new KomgaSettingsService(http)
+    Vue.config.globalProperties.$komgaSettings = new KomgaSettingsService(http)
 
     store.registerModule('komgaSettings', vuexModule)
   },
 }
 
-declare module 'vue/types/vue' {
-  interface Vue {
+declare module '@vue/runtime-core' {
+  interface ComponentCustomProperties {
     $komgaSettings: KomgaSettingsService;
   }
 }

@@ -40,13 +40,13 @@
 </template>
 
 <script lang="ts">
-import Vue from 'vue'
+import {defineComponent} from 'vue'
 import ConfirmationDialog from '@/components/dialogs/ConfirmationDialog.vue'
 import {ERROR, ErrorEvent, NOTIFICATION, NotificationEvent} from '@/types/events'
 import jsFileDownloader from 'js-file-downloader'
 import urls from '@/functions/urls'
 
-export default Vue.extend({
+export default defineComponent({
   name: 'ServerManagement',
   components: {ConfirmationDialog},
   data: () => ({

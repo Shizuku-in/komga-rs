@@ -49,15 +49,15 @@
       <template v-slot:default>
         <filter-list
           :filters-options="filterOptionsList"
-          :filters-active.sync="filters"
+          v-model:filters-active="filters"
         />
       </template>
 
       <template v-slot:filter>
         <filter-panels
           :filters-options="filterOptionsPanel"
-          :filters-active.sync="filters"
-          :filters-active-mode.sync="filtersMode"
+          v-model:filters-active="filters"
+          v-model:filters-active-mode="filtersMode"
         />
       </template>
 
@@ -65,7 +65,7 @@
         <sort-list
           :sort-default="sortDefault"
           :sort-options="sortOptions"
-          :sort-active.sync="sortActive"
+          v-model:sort-active="sortActive"
         />
       </template>
     </filter-drawer>
@@ -99,7 +99,7 @@
         <item-browser
           :items="books"
           :item-context="itemContext"
-          :selected.sync="selectedBooks"
+          v-model:selected="selectedBooks"
           :edit-function="isAdmin ? editSingleBook : undefined"
         />
 
@@ -134,8 +134,8 @@ import {
   READPROGRESS_CHANGED,
   READPROGRESS_DELETED,
 } from '@/types/events'
-import Vue from 'vue'
-import {Location} from 'vue-router'
+import {defineComponent} from 'vue'
+import type {RouteLocationRaw} from 'vue-router'
 import {LIBRARIES_ALL, LIBRARY_ROUTE} from '@/types/library'
 import FilterDrawer from '@/components/FilterDrawer.vue'
 import SortList from '@/components/SortList.vue'
@@ -186,7 +186,7 @@ import {
 } from '@/types/filter'
 import {BookDto} from '@/types/komga-books'
 
-export default Vue.extend({
+export default defineComponent({
   name: 'BrowseBooks',
   components: {
     LibraryActionsMenu,
@@ -248,7 +248,7 @@ export default Vue.extend({
     this.$eventHub.$on(READPROGRESS_CHANGED, this.readProgressChanged)
     this.$eventHub.$on(READPROGRESS_DELETED, this.readProgressChanged)
   },
-  beforeDestroy() {
+  beforeUnmount() {
     this.$eventHub.$off(LIBRARY_DELETED, this.libraryDeleted)
     this.$eventHub.$off(LIBRARY_CHANGED, this.libraryChanged)
     this.$eventHub.$off(BOOK_ADDED, this.bookChanged)
@@ -432,7 +432,7 @@ export default Vue.extend({
     resetSortAndFilters() {
       this.drawer = false
       for (const prop in this.filters) {
-        this.$set(this.filters, prop, [])
+        this.filters[prop] = []
       }
       this.sortActive = this.sortDefault
       this.$store.commit('setLibraryFilterBooks', {id: this.libraryId, filter: this.filters})
@@ -450,7 +450,7 @@ export default Vue.extend({
       const [tags] = await Promise.all([
         this.$komgaReferential.getBookTags(undefined, undefined, requestLibraryIds),
       ])
-      this.$set(this.filterOptions, 'tag', toNameValueCondition(tags, x => new SearchConditionTag(new SearchOperatorIs(x)), x => new SearchConditionTag(new SearchOperatorIsNot(x))))
+      this.filterOptions.tag = toNameValueCondition(tags, x => new SearchConditionTag(new SearchOperatorIs(x)), x => new SearchConditionTag(new SearchOperatorIsNot(x)))
 
       // get filter from query params or local storage and validate with available filter values
       let activeFilters: any
@@ -573,7 +573,7 @@ export default Vue.extend({
           pageSize: `${this.pageSize}`,
           sort: `${this.sortActive.key},${this.sortActive.order}`,
         },
-      } as Location
+      } as RouteLocationRaw
       mergeFilterParams(this.filters, loc.query)
       loc.query['filterMode'] = this.validateFiltersMode(this.filtersMode)
       this.$router.replace(loc).catch((_: any) => {

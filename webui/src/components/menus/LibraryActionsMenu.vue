@@ -1,12 +1,12 @@
 <template>
   <div>
-    <v-menu offset-y>
-      <template v-slot:activator="{ on }">
-        <v-btn icon v-on="on" @click.prevent="">
+    <v-menu location="bottom">
+      <template v-slot:activator="{ props }">
+        <v-btn icon v-bind="props" @click.prevent="">
           <v-icon>mdi-dots-vertical</v-icon>
         </v-btn>
       </template>
-      <v-list dense>
+      <v-list density="compact">
         <v-list-item @click="scan(false)" v-if="isAdmin">
           <v-list-item-title>{{ $t('menu.scan_library_files') }}</v-list-item-title>
         </v-list-item>
@@ -60,11 +60,11 @@
   </div>
 </template>
 <script lang="ts">
-import Vue from 'vue'
+import {defineComponent} from 'vue'
 import ConfirmationDialog from '@/components/dialogs/ConfirmationDialog.vue'
 import {LibraryDto} from '@/types/komga-libraries'
 
-export default Vue.extend({
+export default defineComponent({
   name: 'LibraryActionsMenu',
   components: {ConfirmationDialog},
   props: {

@@ -1,5 +1,5 @@
 <template>
-  <v-simple-table v-if="leftPages.length > 0">
+  <v-table v-if="leftPages.length > 0">
     <thead>
       <tr>
         <th>{{ $t('dialog.transient_book_details.pages_table.index') }}</th>
@@ -37,14 +37,14 @@
         </template>
       </tr>
     </tbody>
-  </v-simple-table>
+  </v-table>
 </template>
 
 <script lang="ts">
-import Vue, {PropType} from 'vue'
+import {defineComponent, PropType} from 'vue'
 import {PageDto} from '@/types/komga-books'
 
-export default Vue.extend({
+export default defineComponent({
   name: 'PagesTable',
   props: {
     leftPages: {

@@ -3,12 +3,12 @@
     <v-row>
       <v-col>
         <div v-if="$store.getters.isLatestVersion() == 1">
-          <v-alert type="success" text>
+          <v-alert type="success" variant="tonal">
             {{ $t('updates.latest_installed')}}
           </v-alert>
         </div>
         <div v-if="$store.getters.isLatestVersion() == 0">
-          <v-alert type="warning" text>
+          <v-alert type="warning" variant="tonal">
             {{ $t('updates.available')}}
           </v-alert>
         </div>
@@ -24,19 +24,17 @@
               }}</a>
             <v-chip
               v-if="release.version == currentVersion"
-              class="mx-2 mt-n3"
-              small
+              class="mx-2 mt-n3" size="small"
               label
               color="info"
             >Currently installed</v-chip>
             <v-chip
               v-if="release.version == latest?.version"
-              class="mx-2 mt-n3"
-              small
+              class="mx-2 mt-n3" size="small"
               label
             >Latest</v-chip>
           </div>
-          <div class="mt-2 subtitle-1">
+          <div class="mt-2 text-subtitle-1">
             {{ new Intl.DateTimeFormat($i18n.locale, {dateStyle: 'long'}).format(release.releaseDate) }}
           </div>
         </v-col>
@@ -53,10 +51,10 @@
 </template>
 
 <script lang="ts">
-import Vue from 'vue'
+import {defineComponent} from 'vue'
 import {marked} from 'marked'
 
-export default Vue.extend({
+export default defineComponent({
   name: 'UpdatesView',
   data: () => ({
     marked,

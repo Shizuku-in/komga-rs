@@ -6,7 +6,7 @@
     >
       <v-card>
         <v-card-title>{{ $t('dialog.filename_chooser.title') }}</v-card-title>
-        <v-btn icon absolute top right @click="dialogClose">
+        <v-btn icon position="absolute" location="top right" @click="dialogClose">
           <v-icon>mdi-close</v-icon>
         </v-btn>
 
@@ -40,7 +40,7 @@
 
             <v-divider/>
 
-            <v-simple-table
+            <v-table
               v-if="books.length > 0"
               fixed-header
               :height="$vuetify.breakpoint.height / 2"
@@ -59,7 +59,7 @@
                 <td style="cursor: pointer" @click="change(b.name)">{{ b.name }}</td>
               </tr>
               </tbody>
-            </v-simple-table>
+            </v-table>
 
           </v-container>
         </v-card-text>
@@ -70,9 +70,9 @@
 </template>
 
 <script lang="ts">
-import Vue from 'vue'
+import {defineComponent} from 'vue'
 
-export default Vue.extend({
+export default defineComponent({
   name: 'FileNameChooserDialog',
   data: () => {
     return {
@@ -81,7 +81,7 @@ export default Vue.extend({
     }
   },
   props: {
-    value: Boolean,
+    modelValue: Boolean,
     name: {
       type: String,
       required: true,
@@ -96,7 +96,7 @@ export default Vue.extend({
     },
   },
   watch: {
-    value(val) {
+    modelValue(val) {
       this.modal = val
       if (val) {
         this.clear()
@@ -126,7 +126,7 @@ export default Vue.extend({
       }
     },
     dialogClose() {
-      this.$emit('input', false)
+      this.$emit('update:modelValue', false)
     },
   },
 })
