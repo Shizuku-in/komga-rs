@@ -105,7 +105,7 @@ async fn core_api_manifest_is_valid_and_every_declared_route_is_registered() {
         }
     }
 
-    assert_eq!(route_count, 204, "update the reviewed baseline count with the manifest");
+    assert_eq!(route_count, 207, "update the reviewed baseline count with the manifest");
 }
 
 async fn app_with_context_path(context_path: &str) -> Router {

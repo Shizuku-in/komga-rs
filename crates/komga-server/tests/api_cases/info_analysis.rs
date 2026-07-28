@@ -65,6 +65,149 @@ async fn actuator_info_is_admin_only_and_exposes_webui_build_fields() {
 }
 
 #[tokio::test]
+async fn actuator_logfile_is_admin_only_and_streams_the_configured_file() {
+    let storage = Storage::connect_memory().await.unwrap();
+    let tasks = TaskStorage::connect_memory().await.unwrap();
+    let temporary = tempfile::tempdir().unwrap();
+    let log_file = temporary.path().join("logs/komga.log");
+    fs::create_dir_all(log_file.parent().unwrap()).unwrap();
+    let log_contents = b"startup complete\nrequest handled\n";
+    fs::write(&log_file, log_contents).unwrap();
+    let app = build_app(
+        AppState::new(storage.clone(), tasks)
+            .await
+            .unwrap()
+            .with_log_file(log_file.clone()),
+    );
+
+    let unauthorized = app
+        .clone()
+        .oneshot(Request::get("/actuator/logfile").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+
+    assert_eq!(claim(&app).await.status(), StatusCode::OK);
+    storage
+        .create_user(&User::new(
+            "reader-logfile@example.org".into(),
+            bcrypt::hash("reader-password", 4).unwrap(),
+        ))
+        .await
+        .unwrap();
+    let forbidden = app
+        .clone()
+        .oneshot(
+            Request::get("/actuator/logfile")
+                .header(
+                    header::AUTHORIZATION,
+                    basic("reader-logfile@example.org", "reader-password"),
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(forbidden.status(), StatusCode::FORBIDDEN);
+
+    let response = app
+        .oneshot(
+            Request::get("/actuator/logfile")
+                .header(header::AUTHORIZATION, basic("admin@example.org", "password"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()[header::CONTENT_TYPE], "text/plain;charset=UTF-8");
+    assert_eq!(
+        response.headers()[header::CONTENT_DISPOSITION],
+        "attachment; filename=\"komga.log\""
+    );
+    assert_eq!(
+        response.headers()[header::CONTENT_LENGTH],
+        log_contents.len().to_string()
+    );
+    let mut writer = fs::OpenOptions::new().append(true).open(&log_file).unwrap();
+    std::io::Write::write_all(&mut writer, b"written after response headers\n").unwrap();
+    assert_eq!(body_bytes(response).await, log_contents);
+
+    let missing = build_app(
+        AppState::new(storage, TaskStorage::connect_memory().await.unwrap())
+            .await
+            .unwrap()
+            .with_log_file(temporary.path().join("logs/missing.log")),
+    )
+    .oneshot(
+        Request::get("/actuator/logfile")
+            .header(header::AUTHORIZATION, basic("admin@example.org", "password"))
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn actuator_shutdown_is_admin_only_returns_before_requesting_graceful_shutdown() {
+    let storage = Storage::connect_memory().await.unwrap();
+    let tasks = TaskStorage::connect_memory().await.unwrap();
+    let state = AppState::new(storage.clone(), tasks).await.unwrap();
+    let runtime = state.start_runtime().await.unwrap();
+    let shutdown_requested = runtime.shutdown_handle();
+    let app = build_app(state);
+
+    let unauthorized = app
+        .clone()
+        .oneshot(Request::post("/actuator/shutdown").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+
+    assert_eq!(claim(&app).await.status(), StatusCode::OK);
+    storage
+        .create_user(&User::new(
+            "reader-shutdown@example.org".into(),
+            bcrypt::hash("reader-password", 4).unwrap(),
+        ))
+        .await
+        .unwrap();
+    let forbidden = app
+        .clone()
+        .oneshot(
+            Request::post("/actuator/shutdown")
+                .header(
+                    header::AUTHORIZATION,
+                    basic("reader-shutdown@example.org", "reader-password"),
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(forbidden.status(), StatusCode::FORBIDDEN);
+
+    let response = app
+        .oneshot(
+            Request::post("/actuator/shutdown")
+                .header(header::AUTHORIZATION, basic("admin@example.org", "password"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(body_json(response).await["message"], "Shutting down, bye...");
+    tokio::time::timeout(Duration::from_secs(1), shutdown_requested.cancelled_owned())
+        .await
+        .expect("shutdown request should reach the runtime");
+
+    runtime.shutdown().await;
+}
+
+#[tokio::test]
 async fn library_and_series_analysis_queue_all_books_at_priority_six() {
     let storage = Storage::connect_memory().await.unwrap();
     let tasks = TaskStorage::connect_memory().await.unwrap();

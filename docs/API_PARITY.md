@@ -1,20 +1,20 @@
 # API compatibility surface
 
 The canonical machine-readable inventory is [`api-parity.json`](api-parity.json). It is pinned to
-the Kotlin baseline at commit `4ef86df` and currently contains 204 registered route templates. A
+the Kotlin baseline at commit `4ef86df` and currently contains 207 registered route templates. A
 template with multiple HTTP methods is one manifest entry.
 
 The inventory covers the core protocols used by Komga clients:
 
 | Area | Kotlin source | Route templates | Contract status |
 | --- | --- | ---: | --- |
-| REST and browser authentication | 21 REST controllers, CommonBookController, OAuth callback | 133 | Implemented or explicitly Partial by domain |
+| REST and browser authentication | 21 REST controllers, CommonBookController, OAuth callback | 134 | Implemented or explicitly Partial by domain |
 | OPDS 1.2 | OpdsController, OpdsCommonController | 19 | Implemented |
-| OPDS 2 | Opds2Controller, OpdsCommonController | 32 | Implemented |
+| OPDS 2 | Opds2Controller, OpdsCommonController, CommonBookController | 33 | Implemented |
 | Kobo | KoboController | 10 | Implemented |
 | KOReader | KoreaderSyncController | 4 | Implemented |
 | SSE | SseController | 1 | Implemented |
-| Supported management | Spring Boot Actuator equivalents | 4 | Implemented |
+| Supported management | Spring Boot Actuator equivalents | 6 | Implemented |
 
 Each manifest group records its Kotlin source, access class, domain behavior status, paths, and
 methods. Protocol-level media types are also recorded. Detailed status and media semantics remain
@@ -50,5 +50,6 @@ incompatible. Reading or writing the Kotlin Lucene directory is not part of the 
 | Spring Boot configuration files | Replace with CLI arguments, `KOMGA_*`, database settings, and `oauth2.json`. |
 
 The supported management surface is limited to `/actuator/health`, `/actuator/info`,
-`/actuator/metrics`, and `/actuator/metrics/{metric}`. Exclusions must be documented here and in the
-JSON manifest; they must not be represented by placeholder handlers.
+`/actuator/logfile`, `/actuator/metrics`, `/actuator/metrics/{metric}`, and `/actuator/shutdown`.
+Exclusions must be documented here and in the JSON manifest; they must not be represented by
+placeholder handlers.

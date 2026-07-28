@@ -94,8 +94,10 @@
       "except": [
         "/actuator/health",
         "/actuator/info",
+        "/actuator/logfile",
         "/actuator/metrics",
-        "/actuator/metrics/{metric}"
+        "/actuator/metrics/{metric}",
+        "/actuator/shutdown"
       ],
       "reason": "JVM and Spring management endpoints are outside the compatibility target."
     },
@@ -147,6 +149,12 @@
           "methods": [
             "GET"
           ],
+          "path": "/actuator/logfile"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
           "path": "/actuator/metrics"
         },
         {
@@ -154,6 +162,12 @@
             "GET"
           ],
           "path": "/actuator/metrics/{metric}"
+        },
+        {
+          "methods": [
+            "POST"
+          ],
+          "path": "/actuator/shutdown"
         }
       ]
     },
@@ -1413,7 +1427,7 @@
     },
     {
       "area": "opds-v2",
-      "kotlinSource": "Opds2Controller / OpdsCommonController",
+      "kotlinSource": "Opds2Controller / OpdsCommonController / CommonBookController",
       "access": "public",
       "behavior": "implemented",
       "routes": [
@@ -1422,12 +1436,18 @@
             "GET"
           ],
           "path": "/opds/v2/auth"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/opds/v2/books/{book_id}/resource/{*resource}"
         }
       ]
     },
     {
       "area": "opds-v2",
-      "kotlinSource": "Opds2Controller / OpdsCommonController",
+      "kotlinSource": "Opds2Controller / OpdsCommonController / CommonBookController",
       "access": "opds-basic",
       "behavior": "implemented",
       "routes": [

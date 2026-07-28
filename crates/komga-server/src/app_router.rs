@@ -21,11 +21,11 @@ use tower_http::{
 use crate::webui_routes;
 use crate::{
     AppState, auth, authentication_activity_routes, book_file_routes, container_routes, content_routes,
-    filesystem_routes, font_routes, history_routes, info_routes, kobo, koreader_routes, library_routes, media_routes,
-    metadata_routes, metrics_routes, oauth, opds_router, operations_routes, page_hash_routes, proxy,
-    read_list_file_routes, read_list_match_routes, read_progress_routes, referential_routes, routes,
-    series_file_routes, settings_routes, source_file_routes, source_import_routes, sse_routes, thumbnail_routes,
-    transient_book_routes, webpub_routes,
+    filesystem_routes, font_routes, history_routes, info_routes, kobo, koreader_routes, library_routes,
+    management_routes, media_routes, metadata_routes, metrics_routes, oauth, opds_router, operations_routes,
+    page_hash_routes, proxy, read_list_file_routes, read_list_match_routes, read_progress_routes, referential_routes,
+    routes, series_file_routes, settings_routes, source_file_routes, source_import_routes, sse_routes,
+    thumbnail_routes, transient_book_routes, webpub_routes,
 };
 
 pub(crate) fn build(state: AppState) -> Router {
@@ -176,8 +176,10 @@ fn redacted_request_uri(uri: &Uri) -> String {
 fn protected_api() -> Router<AppState> {
     Router::new()
         .route("/actuator/info", get(info_routes::info))
+        .route("/actuator/logfile", get(management_routes::logfile))
         .route("/actuator/metrics", get(metrics_routes::list))
         .route("/actuator/metrics/{metric}", get(metrics_routes::get))
+        .route("/actuator/shutdown", post(management_routes::shutdown))
         .route(
             "/api/v1/announcements",
             get(operations_routes::announcements).put(operations_routes::mark_announcements_read),

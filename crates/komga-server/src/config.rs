@@ -131,6 +131,11 @@ impl Config {
         })
     }
 
+    /// Returns the current application log file in the config directory.
+    pub fn log_file(&self) -> PathBuf {
+        self.config_dir().join("logs").join("komga.log")
+    }
+
     /// Returns the explicit database file or `database.sqlite` in the config directory.
     pub fn database_file(&self) -> PathBuf {
         self.database_file
@@ -189,6 +194,7 @@ mod tests {
         assert!(config.oauth2_config_file.is_none());
         assert_eq!(config.oauth2_config_file(), config.config_dir().join("oauth2.json"));
         assert_eq!(config.fonts_directory(), config.config_dir().join("fonts"));
+        assert_eq!(config.log_file(), config.config_dir().join("logs/komga.log"));
         let kobo = Config::try_parse_from([
             "komga-server",
             "--kobo-kepubify-path",

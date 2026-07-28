@@ -1,25 +1,27 @@
 //! `komga-server` process entry point.
 
-use std::net::SocketAddr;
+use std::{
+    fs::{self, OpenOptions},
+    net::SocketAddr,
+    path::Path,
+    sync::Mutex,
+};
 
 use anyhow::Context;
 use clap::Parser;
 use komga_search::SearchIndex;
 use komga_server::{AppState, ServerBindSettings, build_app, config::Config};
 use komga_storage::{Storage, TaskStorage};
-use tracing_subscriber::EnvFilter;
+use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("komga_server=info,tower_http=info")),
-        )
-        .init();
+    let config = Config::parse();
+    let log_file = config.log_file();
+    init_tracing(&log_file)?;
 
     log_native_image_capabilities();
 
-    let config = Config::parse();
     let database_file = config.database_file();
     let tasks_database_file = config.tasks_database_file();
     let search_directory = config.search_directory();
@@ -69,6 +71,7 @@ async fn main() -> anyhow::Result<()> {
             effective_port: Some(effective_address.port()),
             effective_context_path,
         })
+        .with_log_file(log_file)
         .with_cors_allowed_origins(config.cors_allowed_origins)
         .with_trusted_proxies(config.trusted_proxies)
         .with_oauth2_config(&oauth2_config_file, oauth2_config_file_is_explicit)
@@ -91,6 +94,26 @@ async fn main() -> anyhow::Result<()> {
     .await;
     runtime.shutdown().await;
     result.context("HTTP server failed")
+}
+
+fn init_tracing(log_file: &Path) -> anyhow::Result<()> {
+    let parent = log_file
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("log file path has no parent: {}", log_file.display()))?;
+    fs::create_dir_all(parent).with_context(|| format!("failed to create log directory {}", parent.display()))?;
+    let file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_file)
+        .with_context(|| format!("failed to open log file {}", log_file.display()))?;
+    let filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("komga_server=info,tower_http=info"));
+    tracing_subscriber::registry()
+        .with(filter)
+        .with(fmt::layer().with_writer(std::io::stdout))
+        .with(fmt::layer().with_ansi(false).with_writer(Mutex::new(file)))
+        .init();
+    Ok(())
 }
 
 #[cfg(feature = "heif-native")]

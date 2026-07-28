@@ -25,6 +25,7 @@ mod kobo;
 mod koreader_routes;
 mod legacy_content_query;
 mod library_routes;
+mod management_routes;
 mod media_routes;
 mod metadata_routes;
 mod metrics_routes;
@@ -118,6 +119,7 @@ pub struct AppState {
     effective_server_context_path: String,
     configuration_kobo_proxy: bool,
     configuration_kepubify_path: Option<PathBuf>,
+    log_file: Option<PathBuf>,
     cors_allowed_origins: Arc<[http::HeaderValue]>,
     trusted_proxies: Arc<[IpNet]>,
 }
@@ -211,6 +213,7 @@ impl AppState {
             effective_server_context_path: String::new(),
             configuration_kobo_proxy: false,
             configuration_kepubify_path: None,
+            log_file: None,
             cors_allowed_origins: Arc::from([]),
             trusted_proxies: Arc::from([]),
         })
@@ -275,6 +278,13 @@ impl AppState {
         self.configuration_server_context_path = settings.configuration_context_path;
         self.effective_server_port = settings.effective_port;
         self.effective_server_context_path = settings.effective_context_path;
+        self
+    }
+
+    /// Configures the file exposed by the administrator log download endpoint.
+    #[must_use]
+    pub fn with_log_file(mut self, path: PathBuf) -> Self {
+        self.log_file = Some(path);
         self
     }
 
