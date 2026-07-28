@@ -3,6 +3,8 @@
 use std::{net::IpAddr, num::NonZeroUsize, path::PathBuf};
 
 use clap::Parser;
+use http::HeaderValue;
+use url::Url;
 
 /// Command-line and environment configuration for the HTTP process.
 ///
@@ -63,12 +65,39 @@ pub struct Config {
     /// Optional servlet-style prefix under which every HTTP route is mounted.
     #[arg(long, env = "KOMGA_CONTEXT_PATH", value_parser = parse_context_path)]
     pub context_path: Option<String>,
+
+    /// Exact browser origins allowed to make credentialed cross-origin requests.
+    #[arg(
+        long,
+        env = "KOMGA_CORS_ALLOWED_ORIGINS",
+        value_delimiter = ',',
+        value_parser = parse_cors_origin
+    )]
+    pub cors_allowed_origins: Vec<HeaderValue>,
 }
 
 fn parse_context_path(value: &str) -> Result<String, String> {
     komga_core::valid_server_context_path(value)
         .then(|| value.to_owned())
         .ok_or_else(|| "context path must start with '/' and end with an ASCII letter or digit".to_owned())
+}
+
+fn parse_cors_origin(value: &str) -> Result<HeaderValue, String> {
+    let url = Url::parse(value.trim()).map_err(|_| "CORS origin must be an absolute HTTP(S) URL".to_owned())?;
+    if !matches!(url.scheme(), "http" | "https")
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.path() != "/"
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return Err("CORS origin must contain only an HTTP(S) scheme, host, and optional port".to_owned());
+    }
+    url.origin()
+        .ascii_serialization()
+        .parse()
+        .map_err(|_| "CORS origin is not a valid HTTP header value".to_owned())
 }
 
 impl Config {
@@ -138,6 +167,7 @@ mod tests {
         assert!(config.kobo_kepubify_path.is_none());
         assert!(!config.kobo_proxy);
         assert!(config.context_path.is_none());
+        assert!(config.cors_allowed_origins.is_empty());
         assert!(config.oauth2_config_file.is_none());
         assert_eq!(config.oauth2_config_file(), config.config_dir().join("oauth2.json"));
         assert_eq!(config.fonts_directory(), config.config_dir().join("fonts"));
@@ -163,6 +193,30 @@ mod tests {
             Some("/komga/sub-path")
         );
         assert!(Config::try_parse_from(["komga-server", "--context-path", "/bad/"]).is_err());
+        let cors = Config::try_parse_from([
+            "komga-server",
+            "--cors-allowed-origins",
+            "https://reader.example/,http://localhost:5173",
+        ])
+        .unwrap();
+        assert_eq!(
+            cors.cors_allowed_origins
+                .iter()
+                .map(|origin| origin.to_str().unwrap())
+                .collect::<Vec<_>>(),
+            ["https://reader.example", "http://localhost:5173"]
+        );
+        for invalid in [
+            "*",
+            "file:///tmp",
+            "https://reader.example/path",
+            "https://user@reader.example",
+        ] {
+            assert!(
+                Config::try_parse_from(["komga-server", "--cors-allowed-origins", invalid]).is_err(),
+                "{invalid}"
+            );
+        }
         let fonts = Config::try_parse_from(["komga-server", "--fonts-directory", "/srv/fonts"]).unwrap();
         assert_eq!(fonts.fonts_directory(), std::path::Path::new("/srv/fonts"));
         let oauth = Config::try_parse_from(["komga-server", "--oauth2-config-file", "/srv/komga/oauth.json"]).unwrap();

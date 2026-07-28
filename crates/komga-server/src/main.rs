@@ -69,6 +69,7 @@ async fn main() -> anyhow::Result<()> {
             effective_port: Some(effective_address.port()),
             effective_context_path,
         })
+        .with_cors_allowed_origins(config.cors_allowed_origins)
         .with_oauth2_config(&oauth2_config_file, oauth2_config_file_is_explicit)
         .await
         .with_context(|| format!("failed to load OAuth configuration {}", oauth2_config_file.display()))?;

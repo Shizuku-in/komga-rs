@@ -40,7 +40,7 @@ use url::Url;
 
 use crate::{
     AppState,
-    auth::{append_cookie, authentication_request_metadata, record_oauth_activity, session_cookie},
+    auth::{CookieSettings, append_cookie, authentication_request_metadata, record_oauth_activity, session_cookie},
     error::ApiError,
     webpub_routes::ManifestUrls,
 };
@@ -345,6 +345,7 @@ pub(crate) async fn authorize(
         .cloned()
         .ok_or_else(|| ApiError::not_found("OAuth provider not found"))?;
     let base_url = public_base_url(inner, request.headers(), request.uri())?;
+    let cookie_settings = CookieSettings::from_public_url(&base_url);
     let redirect_uri = url_with_segments(&base_url, &["login", "oauth2", "code", &registration_id]);
     let (pkce_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
     let (authorization_url, state_token, nonce) = match &provider {
@@ -404,7 +405,10 @@ pub(crate) async fn authorize(
     )
     .await?;
     let mut response = Redirect::temporary(authorization_url.as_str()).into_response();
-    append_cookie(response.headers_mut(), &binding_cookie(&browser_binding));
+    append_cookie(
+        response.headers_mut(),
+        &binding_cookie(&browser_binding, &cookie_settings),
+    );
     Ok(response)
 }
 
@@ -424,6 +428,7 @@ pub(crate) async fn callback(
         Ok(url) => url,
         Err(error) => return error.into_response(),
     };
+    let cookie_settings = CookieSettings::from_public_url(&base_url);
     let query = callback_query(request.uri().query());
     let result = match (query.state.as_deref(), binding_cookie_value(request.headers())) {
         (Some(state_token), Some(binding)) if state_token.len() <= 512 && binding.len() <= 512 => {
@@ -456,7 +461,7 @@ pub(crate) async fn callback(
             .await;
             let session_id = state.sessions.create(&user.id, false);
             let mut response = Redirect::to(success_redirect(&base_url).as_str()).into_response();
-            append_cookie(response.headers_mut(), &session_cookie(&session_id));
+            append_cookie(response.headers_mut(), &session_cookie(&session_id, &cookie_settings));
             response
         }
         Err(failure) => {
@@ -473,7 +478,7 @@ pub(crate) async fn callback(
             Redirect::to(failure_redirect(&base_url, failure.client_error).as_str()).into_response()
         }
     };
-    append_cookie(response.headers_mut(), expired_binding_cookie());
+    append_cookie(response.headers_mut(), &expired_binding_cookie(&cookie_settings));
     response
 }
 
@@ -772,12 +777,12 @@ fn random_secret() -> String {
     URL_SAFE_NO_PAD.encode(bytes)
 }
 
-fn binding_cookie(value: &str) -> String {
-    format!("{OAUTH_BINDING_COOKIE}={value}; Path=/; Max-Age=600; HttpOnly; SameSite=Lax")
+fn binding_cookie(value: &str, settings: &CookieSettings) -> String {
+    format!("{OAUTH_BINDING_COOKIE}={value}; Max-Age=600; {}", settings.attributes())
 }
 
-fn expired_binding_cookie() -> &'static str {
-    "KOMGA-OAUTH2-STATE=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax"
+fn expired_binding_cookie(settings: &CookieSettings) -> String {
+    format!("{OAUTH_BINDING_COOKIE}=; Max-Age=0; {}", settings.attributes())
 }
 
 fn binding_cookie_value(headers: &HeaderMap) -> Option<String> {
@@ -1382,6 +1387,15 @@ mod tests {
             .map(str::to_owned)
     }
 
+    fn response_set_cookie<'a>(response: &'a Response, name: &str) -> Option<&'a str> {
+        response
+            .headers()
+            .get_all(header::SET_COOKIE)
+            .iter()
+            .filter_map(|value| value.to_str().ok())
+            .find(|value| value.starts_with(&format!("{name}=")))
+    }
+
     async fn oidc_callback(
         app: &Router,
         fake: &FakeOidcState,
@@ -1573,6 +1587,9 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(authorization.status(), StatusCode::TEMPORARY_REDIRECT);
+        let binding_header = response_set_cookie(&authorization, OAUTH_BINDING_COOKIE).unwrap();
+        assert!(binding_header.contains("Path=/komga"));
+        assert!(binding_header.contains("Secure"));
         let binding = response_cookie(&authorization, OAUTH_BINDING_COOKIE).unwrap();
         let authorization_url =
             Url::parse(authorization.headers().get(header::LOCATION).unwrap().to_str().unwrap()).unwrap();
@@ -1604,7 +1621,13 @@ mod tests {
             callback.headers().get(header::LOCATION).unwrap(),
             "https://reader.example/komga/?server_redirect=Y"
         );
-        assert!(response_cookie(&callback, crate::SESSION_COOKIE).is_some());
+        let session_header = response_set_cookie(&callback, crate::SESSION_COOKIE).unwrap();
+        assert!(session_header.contains("Path=/komga"));
+        assert!(session_header.contains("Secure"));
+        let expired_binding = response_set_cookie(&callback, OAUTH_BINDING_COOKIE).unwrap();
+        assert!(expired_binding.contains("Max-Age=0"));
+        assert!(expired_binding.contains("Path=/komga"));
+        assert!(expired_binding.contains("Secure"));
 
         let token_requests = fake.token_requests.lock().await;
         assert_eq!(token_requests.len(), 1);

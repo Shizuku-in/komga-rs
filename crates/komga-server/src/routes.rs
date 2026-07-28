@@ -8,7 +8,7 @@ use std::collections::BTreeSet;
 use axum::{
     Json,
     body::Bytes,
-    extract::{Extension, FromRequest, Path, RawQuery, Request, State},
+    extract::{Extension, FromRequest, OriginalUri, Path, RawQuery, Request, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
@@ -21,7 +21,7 @@ use uuid::Uuid;
 
 use crate::{
     AppState,
-    auth::{AuthContext, append_cookie, expired_session_cookies, session_cookie},
+    auth::{AuthContext, CookieSettings, append_cookie, expired_session_cookies, session_cookie},
     dto::{
         AgeRestrictionUpdateDto, ApiKeyRequestDto, PasswordUpdateDto, Patch, RestrictionUpdate, UserCreationDto,
         UserUpdateDto,
@@ -310,22 +310,34 @@ pub(crate) async fn delete_my_sync_points(
     Ok(StatusCode::NO_CONTENT)
 }
 
-pub(crate) async fn set_cookie(Extension(auth): Extension<AuthContext>) -> Result<Response, ApiError> {
+pub(crate) async fn set_cookie(
+    State(state): State<AppState>,
+    OriginalUri(uri): OriginalUri,
+    headers: HeaderMap,
+    Extension(auth): Extension<AuthContext>,
+) -> Result<Response, ApiError> {
     let session_id = auth
         .session_id
         .ok_or_else(|| ApiError::bad_request("An existing session is required"))?;
     let mut response = StatusCode::NO_CONTENT.into_response();
-    append_cookie(response.headers_mut(), &session_cookie(&session_id));
+    let settings = CookieSettings::from_request(&state.effective_server_context_path, &headers, &uri);
+    append_cookie(response.headers_mut(), &session_cookie(&session_id, &settings));
     Ok(response)
 }
 
-pub(crate) async fn logout(State(state): State<AppState>, Extension(auth): Extension<AuthContext>) -> Response {
+pub(crate) async fn logout(
+    State(state): State<AppState>,
+    OriginalUri(uri): OriginalUri,
+    headers: HeaderMap,
+    Extension(auth): Extension<AuthContext>,
+) -> Response {
     if let Some(session_id) = auth.session_id {
         state.sessions.remove(&session_id);
     }
     let mut response = StatusCode::NO_CONTENT.into_response();
-    for cookie in expired_session_cookies() {
-        append_cookie(response.headers_mut(), cookie);
+    let settings = CookieSettings::from_request(&state.effective_server_context_path, &headers, &uri);
+    for cookie in expired_session_cookies(&settings) {
+        append_cookie(response.headers_mut(), &cookie);
     }
     response
 }

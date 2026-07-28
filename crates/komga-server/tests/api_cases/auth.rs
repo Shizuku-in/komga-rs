@@ -1,6 +1,72 @@
 use super::*;
 
 #[tokio::test]
+async fn cors_is_disabled_by_default_and_uses_an_explicit_origin_allowlist() {
+    let default_app = test_app().await;
+    let default_preflight = default_app
+        .oneshot(
+            Request::builder()
+                .method("OPTIONS")
+                .uri("/api/v1/claim")
+                .header(header::ORIGIN, "https://reader.example")
+                .header(header::ACCESS_CONTROL_REQUEST_METHOD, "POST")
+                .header(header::ACCESS_CONTROL_REQUEST_HEADERS, "x-komga-email,x-komga-password")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert!(
+        !default_preflight
+            .headers()
+            .contains_key(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+    );
+
+    let storage = Storage::connect_memory().await.unwrap();
+    let tasks = TaskStorage::connect_memory().await.unwrap();
+    let app = build_app(
+        AppState::new(storage, tasks)
+            .await
+            .unwrap()
+            .with_cors_allowed_origins(vec!["https://reader.example".parse().unwrap()]),
+    );
+    let allowed = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("OPTIONS")
+                .uri("/api/v1/claim")
+                .header(header::ORIGIN, "https://reader.example")
+                .header(header::ACCESS_CONTROL_REQUEST_METHOD, "POST")
+                .header(header::ACCESS_CONTROL_REQUEST_HEADERS, "x-komga-email,x-komga-password")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(allowed.status(), StatusCode::OK);
+    assert_eq!(
+        allowed.headers()[header::ACCESS_CONTROL_ALLOW_ORIGIN],
+        "https://reader.example"
+    );
+    assert_eq!(allowed.headers()[header::ACCESS_CONTROL_ALLOW_CREDENTIALS], "true");
+
+    let denied = app
+        .oneshot(
+            Request::builder()
+                .method("OPTIONS")
+                .uri("/api/v1/claim")
+                .header(header::ORIGIN, "https://attacker.example")
+                .header(header::ACCESS_CONTROL_REQUEST_METHOD, "POST")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert!(!denied.headers().contains_key(header::ACCESS_CONTROL_ALLOW_ORIGIN));
+}
+
+#[tokio::test]
 async fn server_can_be_claimed_only_once() {
     let app = test_app().await;
     let status = app
@@ -75,6 +141,62 @@ async fn basic_login_issues_cookie_and_session_authenticates_follow_up_requests(
         .unwrap();
     assert_eq!(me.status(), StatusCode::OK);
     assert_eq!(body_json(me).await["email"], "admin@example.org");
+}
+
+#[tokio::test]
+async fn authentication_cookies_follow_forwarded_https_and_prefix() {
+    let app = test_app().await;
+    assert_eq!(claim(&app).await.status(), StatusCode::OK);
+
+    let login = app
+        .clone()
+        .oneshot(
+            Request::get("/api/v2/users/me")
+                .header(header::AUTHORIZATION, basic("admin@example.org", "password"))
+                .header("forwarded", "for=192.0.2.10;proto=https;host=reader.example")
+                .header("x-forwarded-prefix", "/komga")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(login.status(), StatusCode::OK);
+    let set_cookie = login
+        .headers()
+        .get_all(header::SET_COOKIE)
+        .iter()
+        .find_map(|value| {
+            let value = value.to_str().unwrap();
+            value
+                .starts_with(komga_server::SESSION_COOKIE)
+                .then_some(value.to_owned())
+        })
+        .unwrap();
+    assert!(set_cookie.contains("Path=/komga"));
+    assert!(set_cookie.contains("HttpOnly"));
+    assert!(set_cookie.contains("SameSite=Lax"));
+    assert!(set_cookie.contains("Secure"));
+
+    let cookie = set_cookie.split(';').next().unwrap();
+    let logout = app
+        .oneshot(
+            Request::post("/api/logout")
+                .header(header::COOKIE, cookie)
+                .header("x-forwarded-proto", "https")
+                .header("x-forwarded-prefix", "/komga")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(logout.status(), StatusCode::NO_CONTENT);
+    assert!(
+        logout.headers().get_all(header::SET_COOKIE).iter().all(|value| value
+            .to_str()
+            .unwrap()
+            .contains("Path=/komga")
+            && value.to_str().unwrap().contains("Secure"))
+    );
 }
 
 #[tokio::test]

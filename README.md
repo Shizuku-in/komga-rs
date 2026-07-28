@@ -52,6 +52,8 @@ cargo run --release -p komga-server -- --config-dir ./config
 
 Run `cargo run -p komga-server -- --help` for configuration options. Settings can be supplied through command-line arguments, `KOMGA_*` environment variables, database-backed server settings, and an optional `<config-dir>/oauth2.json`.
 
+CORS is disabled by default. To permit a separate browser origin, set an exact comma-separated allowlist with `--cors-allowed-origins` or `KOMGA_CORS_ALLOWED_ORIGINS`, for example `https://reader.example,http://localhost:5173`.
+
 ## Migrating From Komga
 
 Compatibility is scoped to the pinned Kotlin baseline and is not a universal migration path for every historical Komga database. Before switching:

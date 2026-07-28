@@ -18,15 +18,16 @@ use std::{
 
 use axum::{
     extract::{ConnectInfo, Request, State},
-    http::{HeaderMap, HeaderValue, header},
+    http::{HeaderMap, HeaderValue, Uri, header},
     middleware::Next,
     response::{IntoResponse, Response},
 };
 use base64::{Engine, engine::general_purpose::STANDARD};
-use dashmap::DashMap;
 use komga_core::{ApiKey, AuthenticationActivity, User, UserRole};
+use moka::{Expiry, policy::EvictionPolicy, sync::Cache};
 use rand::RngCore;
 use sha2::{Digest, Sha512};
+use url::Url;
 
 use crate::{AppState, error::ApiError};
 
@@ -36,6 +37,76 @@ pub const SESSION_COOKIE: &str = "KOMGA-SESSION";
 pub const SESSION_HEADER: &str = "X-Auth-Token";
 /// Cookie name used for extended login sessions.
 pub const REMEMBER_ME_COOKIE: &str = "komga-remember-me";
+
+const MAX_SESSION_COUNT: u64 = 16_384;
+const ORDINARY_SESSION_IDLE_TIMEOUT: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CookieSettings {
+    path: String,
+    secure: bool,
+}
+
+impl CookieSettings {
+    pub(crate) fn from_request(context_path: &str, headers: &HeaderMap, uri: &Uri) -> Self {
+        let path = first_header_value(headers, "x-forwarded-prefix")
+            .and_then(|value| normalized_cookie_path(&value))
+            .or_else(|| normalized_cookie_path(context_path))
+            .unwrap_or_else(|| "/".to_owned());
+        let forwarded_scheme = forwarded_parameter_value(headers, "proto")
+            .or_else(|| first_header_value(headers, "x-forwarded-proto"))
+            .or_else(|| uri.scheme_str().map(str::to_owned));
+        let secure = forwarded_scheme.map_or_else(
+            || first_header_value(headers, "x-forwarded-ssl").is_some_and(|value| value.eq_ignore_ascii_case("on")),
+            |scheme| scheme.eq_ignore_ascii_case("https"),
+        );
+        Self { path, secure }
+    }
+
+    pub(crate) fn from_public_url(url: &Url) -> Self {
+        Self {
+            path: normalized_cookie_path(url.path()).unwrap_or_else(|| "/".to_owned()),
+            secure: url.scheme() == "https",
+        }
+    }
+
+    pub(crate) fn attributes(&self) -> String {
+        format!(
+            "Path={}; HttpOnly; SameSite=Lax{}",
+            self.path,
+            if self.secure { "; Secure" } else { "" }
+        )
+    }
+}
+
+fn normalized_cookie_path(value: &str) -> Option<String> {
+    let value = value.trim();
+    if value.is_empty() || value == "/" {
+        return Some("/".to_owned());
+    }
+    let path = format!("/{}", value.trim_matches('/'));
+    komga_core::valid_server_context_path(&path).then_some(path)
+}
+
+fn first_header_value(headers: &HeaderMap, name: &str) -> Option<String> {
+    headers
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(',').next())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+}
+
+fn forwarded_parameter_value(headers: &HeaderMap, name: &str) -> Option<String> {
+    first_header_value(headers, "forwarded")?
+        .split(';')
+        .find_map(|parameter| {
+            let (key, value) = parameter.trim().split_once('=')?;
+            key.eq_ignore_ascii_case(name)
+                .then(|| value.trim().trim_matches('"').to_owned())
+        })
+}
 
 #[derive(Debug, Clone)]
 pub(crate) struct AuthContext {
@@ -48,21 +119,59 @@ pub(crate) struct AuthContext {
 #[derive(Debug, Clone)]
 struct Session {
     user_id: String,
-    expires_at: Instant,
     remember_me: bool,
+    lifetime: Duration,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SessionExpiry;
+
+impl Expiry<String, Session> for SessionExpiry {
+    fn expire_after_create(&self, _key: &String, value: &Session, _created_at: Instant) -> Option<Duration> {
+        Some(value.lifetime)
+    }
+
+    fn expire_after_read(
+        &self,
+        _key: &String,
+        value: &Session,
+        _read_at: Instant,
+        duration_until_expiry: Option<Duration>,
+        _last_modified_at: Instant,
+    ) -> Option<Duration> {
+        if value.remember_me {
+            duration_until_expiry
+        } else {
+            Some(value.lifetime)
+        }
+    }
 }
 
 #[derive(Clone)]
 pub(crate) struct SessionStore {
-    sessions: Arc<DashMap<String, Session>>,
+    sessions: Cache<String, Session>,
     remember_me_duration_seconds: Arc<AtomicU64>,
+    ordinary_session_idle_timeout: Duration,
 }
 
 impl SessionStore {
     pub(crate) fn new(remember_me_duration_days: u64) -> Self {
+        Self::with_policy(
+            remember_me_duration_days,
+            MAX_SESSION_COUNT,
+            ORDINARY_SESSION_IDLE_TIMEOUT,
+        )
+    }
+
+    fn with_policy(remember_me_duration_days: u64, max_sessions: u64, ordinary_idle_timeout: Duration) -> Self {
         Self {
-            sessions: Arc::new(DashMap::new()),
+            sessions: Cache::builder()
+                .max_capacity(max_sessions)
+                .eviction_policy(EvictionPolicy::lru())
+                .expire_after(SessionExpiry)
+                .build(),
             remember_me_duration_seconds: Arc::new(AtomicU64::new(duration_seconds(remember_me_duration_days))),
+            ordinary_session_idle_timeout: ordinary_idle_timeout,
         }
     }
 
@@ -74,38 +183,39 @@ impl SessionStore {
         let duration = if remember_me {
             Duration::from_secs(self.remember_me_duration_seconds.load(Ordering::Relaxed))
         } else {
-            Duration::from_secs(7 * 24 * 60 * 60)
+            self.ordinary_session_idle_timeout
         };
         self.sessions.insert(
             id.clone(),
             Session {
                 user_id: user_id.to_owned(),
-                expires_at: Instant::now() + duration,
                 remember_me,
+                lifetime: duration,
             },
         );
         id
     }
 
-    /// Resolves a live session and eagerly removes it when expired.
+    /// Resolves a live session and refreshes the idle timeout for ordinary sessions.
     pub(crate) fn user_id(&self, session_id: &str) -> Option<String> {
-        let session = self.sessions.get(session_id)?;
-        if session.expires_at <= Instant::now() {
-            drop(session);
-            self.sessions.remove(session_id);
-            return None;
-        }
-        Some(session.user_id.clone())
+        self.sessions.get(session_id).map(|session| session.user_id)
     }
 
     /// Invalidates one session.
     pub(crate) fn remove(&self, session_id: &str) {
-        self.sessions.remove(session_id);
+        self.sessions.invalidate(session_id);
     }
 
     /// Invalidates every session owned by a user after security policy changes.
     pub(crate) fn remove_user(&self, user_id: &str) {
-        self.sessions.retain(|_, session| session.user_id != user_id);
+        let session_ids = self
+            .sessions
+            .iter()
+            .filter_map(|(session_id, session)| (session.user_id == user_id).then_some(session_id))
+            .collect::<Vec<_>>();
+        for session_id in session_ids {
+            self.sessions.invalidate(session_id.as_ref());
+        }
     }
 
     /// Updates the lifetime used by subsequently issued remember-me sessions.
@@ -116,7 +226,14 @@ impl SessionStore {
 
     /// Invalidates long-lived sessions while preserving ordinary sessions.
     pub(crate) fn remove_remembered(&self) {
-        self.sessions.retain(|_, session| !session.remember_me);
+        let session_ids = self
+            .sessions
+            .iter()
+            .filter_map(|(session_id, session)| session.remember_me.then_some(session_id))
+            .collect::<Vec<_>>();
+        for session_id in session_ids {
+            self.sessions.invalidate(session_id.as_ref());
+        }
     }
 
     pub(crate) fn remember_me_max_age(&self) -> u64 {
@@ -146,6 +263,8 @@ pub(crate) async fn require_auth(State(state): State<AppState>, mut request: Req
     let opds_v2 = request.uri().path().starts_with("/opds/v2/");
     let request_headers = request.headers().clone();
     let request_uri = request.uri().clone();
+    let cookie_settings =
+        CookieSettings::from_request(&state.effective_server_context_path, request.headers(), request.uri());
     let request_metadata = authentication_request_metadata(&request);
     match authenticate(&state, request.headers(), request.uri().query()).await {
         Ok((user, source)) => {
@@ -170,12 +289,12 @@ pub(crate) async fn require_auth(State(state): State<AppState>, mut request: Req
                         response.headers_mut().insert(SESSION_HEADER, value);
                     }
                 } else {
-                    append_cookie(response.headers_mut(), &session_cookie(&session_id));
+                    append_cookie(response.headers_mut(), &session_cookie(&session_id, &cookie_settings));
                 }
                 if remember_me {
                     append_cookie(
                         response.headers_mut(),
-                        &remember_me_cookie(&session_id, state.sessions.remember_me_max_age()),
+                        &remember_me_cookie(&session_id, state.sessions.remember_me_max_age(), &cookie_settings),
                     );
                 }
             }
@@ -512,26 +631,121 @@ pub(crate) fn append_cookie(headers: &mut HeaderMap, cookie: &str) {
 }
 
 /// Builds the ordinary HTTP-only session cookie.
-pub(crate) fn session_cookie(session_id: &str) -> String {
-    format!("{SESSION_COOKIE}={session_id}; Path=/; HttpOnly; SameSite=Lax")
+pub(crate) fn session_cookie(session_id: &str, settings: &CookieSettings) -> String {
+    format!("{SESSION_COOKIE}={session_id}; {}", settings.attributes())
 }
 
-fn remember_me_cookie(session_id: &str, max_age: u64) -> String {
+fn remember_me_cookie(session_id: &str, max_age: u64, settings: &CookieSettings) -> String {
     format!(
-        "{REMEMBER_ME_COOKIE}={session_id}; Path=/; Max-Age={}; HttpOnly; SameSite=Lax",
-        max_age
+        "{REMEMBER_ME_COOKIE}={session_id}; Max-Age={max_age}; {}",
+        settings.attributes()
     )
 }
 
 /// Returns deletion cookies for both supported browser-session mechanisms.
-pub(crate) fn expired_session_cookies() -> [&'static str; 2] {
+pub(crate) fn expired_session_cookies(settings: &CookieSettings) -> [String; 2] {
     [
-        "KOMGA-SESSION=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax",
-        "komga-remember-me=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax",
+        format!("{SESSION_COOKIE}=; Max-Age=0; {}", settings.attributes()),
+        format!("{REMEMBER_ME_COOKIE}=; Max-Age=0; {}", settings.attributes()),
     ]
 }
 
 /// Produces the lowercase SHA-512 representation used by Kotlin API keys.
 pub(crate) fn sha512_hex(value: &str) -> String {
     hex::encode(Sha512::digest(value.as_bytes()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn session_expiry_refreshes_only_ordinary_sessions() {
+        let expiry = SessionExpiry;
+        let ordinary = Session {
+            user_id: "ordinary".into(),
+            remember_me: false,
+            lifetime: Duration::from_secs(60),
+        };
+        let remembered = Session {
+            user_id: "remembered".into(),
+            remember_me: true,
+            lifetime: Duration::from_secs(600),
+        };
+        let now = Instant::now();
+
+        assert_eq!(
+            expiry.expire_after_create(&"ordinary".into(), &ordinary, now),
+            Some(Duration::from_secs(60))
+        );
+        assert_eq!(
+            expiry.expire_after_read(&"ordinary".into(), &ordinary, now, Some(Duration::from_secs(10)), now,),
+            Some(Duration::from_secs(60))
+        );
+        assert_eq!(
+            expiry.expire_after_read(
+                &"remembered".into(),
+                &remembered,
+                now,
+                Some(Duration::from_secs(10)),
+                now,
+            ),
+            Some(Duration::from_secs(10))
+        );
+    }
+
+    #[test]
+    fn session_store_enforces_its_capacity() {
+        let store = SessionStore::with_policy(30, 2, Duration::from_secs(60));
+        store.create("one", false);
+        store.create("two", false);
+        let newest = store.create("three", false);
+        store.sessions.run_pending_tasks();
+
+        assert!(store.sessions.entry_count() <= 2);
+        assert_eq!(store.user_id(&newest).as_deref(), Some("three"));
+    }
+
+    #[test]
+    fn cookie_settings_follow_forwarded_https_and_context_path() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "forwarded",
+            "for=192.0.2.10;proto=https;host=reader.example".parse().unwrap(),
+        );
+        headers.insert("x-forwarded-prefix", "/komga/".parse().unwrap());
+        let settings = CookieSettings::from_request("", &headers, &"/api/v2/users/me".parse().unwrap());
+
+        assert_eq!(settings.path, "/komga");
+        assert!(settings.secure);
+        assert_eq!(
+            session_cookie("session", &settings),
+            "KOMGA-SESSION=session; Path=/komga; HttpOnly; SameSite=Lax; Secure"
+        );
+        assert!(
+            expired_session_cookies(&settings)
+                .iter()
+                .all(|cookie| cookie.contains("Path=/komga") && cookie.ends_with("; Secure"))
+        );
+    }
+
+    #[test]
+    fn cookie_settings_reject_unsafe_forwarded_paths_and_support_public_urls() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-prefix", "/bad; Secure".parse().unwrap());
+        headers.insert("x-forwarded-ssl", "on".parse().unwrap());
+        let settings = CookieSettings::from_request("/configured", &headers, &"/api/v2/users/me".parse().unwrap());
+        assert_eq!(settings.path, "/configured");
+        assert!(settings.secure);
+
+        let public = CookieSettings::from_public_url(&Url::parse("https://reader.example/komga/").unwrap());
+        assert_eq!(public.path, "/komga");
+        assert!(public.secure);
+
+        let local = CookieSettings::from_request("", &HeaderMap::new(), &"/api/v2/users/me".parse().unwrap());
+        assert_eq!(local.path, "/");
+        assert!(!local.secure);
+        assert!(!session_cookie("session", &local).contains("Secure"));
+        assert!(!CookieSettings::from_public_url(&Url::parse("http://localhost:25600/").unwrap()).secure);
+    }
 }

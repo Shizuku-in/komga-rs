@@ -114,6 +114,7 @@ pub struct AppState {
     effective_server_context_path: String,
     configuration_kobo_proxy: bool,
     configuration_kepubify_path: Option<PathBuf>,
+    cors_allowed_origins: Arc<[http::HeaderValue]>,
 }
 
 /// Configuration-source and effective HTTP binding values exposed by the
@@ -201,6 +202,7 @@ impl AppState {
             effective_server_context_path: String::new(),
             configuration_kobo_proxy: false,
             configuration_kepubify_path: None,
+            cors_allowed_origins: Arc::from([]),
         })
     }
 
@@ -263,6 +265,15 @@ impl AppState {
         self.configuration_server_context_path = settings.configuration_context_path;
         self.effective_server_port = settings.effective_port;
         self.effective_server_context_path = settings.effective_context_path;
+        self
+    }
+
+    /// Enables credentialed CORS requests from the supplied exact origins.
+    ///
+    /// CORS is disabled when this list is empty, which is the default.
+    #[must_use]
+    pub fn with_cors_allowed_origins(mut self, origins: Vec<http::HeaderValue>) -> Self {
+        self.cors_allowed_origins = origins.into();
         self
     }
 
@@ -337,7 +348,7 @@ impl AppState {
 /// Builds the Komga HTTP router and its middleware stack.
 ///
 /// The returned router includes public health and claim endpoints, authenticated
-/// user/session endpoints, CORS handling, request IDs, a 2 MiB JSON body limit,
+/// user/session endpoints, optional allow-listed CORS handling, request IDs, a 2 MiB JSON body limit,
 /// and request tracing. The default `webui` feature also serves the embedded Web
 /// UI and its history fallback. The router can be served directly with
 /// `axum::serve` or cloned for in-process contract tests.

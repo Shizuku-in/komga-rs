@@ -71,7 +71,7 @@ natord = "1.0"
 oauth2 = { version = "=5.0.0", default-features = false }
 openidconnect = { version = "=4.0.1", default-features = false }
 mediatype = "0.21.0"
-moka = { version = "0.12", features = ["future"] }
+moka = { version = "0.12", features = ["future", "sync"] }
 md-5 = "0.10"
 pdf-writer = "0.15.0"
 percent-encoding = "2.3"

@@ -10,7 +10,7 @@ use axum::{
     routing::{delete, get, patch, post},
 };
 use tower_http::{
-    cors::CorsLayer,
+    cors::{AllowHeaders, AllowMethods, CorsLayer},
     request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer},
     trace::TraceLayer,
 };
@@ -27,6 +27,18 @@ use crate::{
 
 pub(crate) fn build(state: AppState) -> Router {
     let context_path = state.effective_server_context_path.clone();
+    let cors = (!state.cors_allowed_origins.is_empty()).then(|| {
+        CorsLayer::new()
+            .allow_origin(state.cors_allowed_origins.to_vec())
+            .allow_methods(AllowMethods::mirror_request())
+            .allow_headers(AllowHeaders::mirror_request())
+            .allow_credentials(true)
+            .expose_headers([
+                header::CONTENT_DISPOSITION,
+                header::HeaderName::from_static("x-auth-token"),
+            ])
+            .max_age(std::time::Duration::from_secs(30 * 60))
+    });
     let protected = protected_api()
         .merge(opds_router::protected())
         .route_layer(middleware::from_fn_with_state(state.clone(), auth::require_auth));
@@ -37,7 +49,6 @@ pub(crate) fn build(state: AppState) -> Router {
         .merge(kobo::router(&state))
         .merge(protected)
         .layer(DefaultBodyLimit::max(2 * 1024 * 1024))
-        .layer(CorsLayer::permissive())
         .layer(PropagateRequestIdLayer::x_request_id())
         .layer(SetRequestIdLayer::x_request_id(MakeRequestUuid))
         .layer(TraceLayer::new_for_http().make_span_with(make_http_span))
@@ -45,8 +56,9 @@ pub(crate) fn build(state: AppState) -> Router {
         .layer(middleware::from_fn_with_state(
             state.clone(),
             apply_server_request_settings,
-        ))
-        .with_state(state);
+        ));
+    let app = if let Some(cors) = cors { app.layer(cors) } else { app };
+    let app = app.with_state(state);
     #[cfg(feature = "webui")]
     let app = app.fallback_service(webui_routes::router(&context_path));
     if context_path.is_empty() {
