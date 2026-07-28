@@ -55,7 +55,7 @@ pub(crate) fn build(state: AppState) -> Router {
         .layer(PropagateRequestIdLayer::x_request_id())
         .layer(SetRequestIdLayer::x_request_id(MakeRequestUuid))
         .layer(TraceLayer::new_for_http().make_span_with(make_http_span))
-        .layer(middleware::from_fn(suppress_ajax_basic_challenge))
+        .layer(middleware::from_fn(suppress_webui_basic_challenge))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             apply_server_request_settings,
@@ -86,10 +86,10 @@ pub(crate) fn build(state: AppState) -> Router {
     }
 }
 
-async fn suppress_ajax_basic_challenge(request: Request<Body>, next: Next) -> Response {
-    let ajax = is_xml_http_request(request.headers());
+async fn suppress_webui_basic_challenge(request: Request<Body>, next: Next) -> Response {
+    let webui_request = is_xml_http_request(request.headers()) || accepts_event_stream(request.headers());
     let mut response = next.run(request).await;
-    if ajax
+    if webui_request
         && response.status() == StatusCode::UNAUTHORIZED
         && response.headers().get(header::WWW_AUTHENTICATE) == Some(&HeaderValue::from_static("Basic realm=\"Komga\""))
     {
@@ -103,6 +103,16 @@ fn is_xml_http_request(headers: &HeaderMap) -> bool {
         .get("x-requested-with")
         .and_then(|value| value.to_str().ok())
         .is_some_and(|value| value == "XMLHttpRequest")
+}
+
+fn accepts_event_stream(headers: &HeaderMap) -> bool {
+    headers
+        .get_all(header::ACCEPT)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(','))
+        .filter_map(|value| value.trim().split(';').next())
+        .any(|value| value.eq_ignore_ascii_case("text/event-stream"))
 }
 
 async fn apply_server_request_settings(

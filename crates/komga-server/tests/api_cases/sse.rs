@@ -21,6 +21,28 @@ async fn task_queue_sse_requires_authentication_and_reports_admin_counts() {
         .await
         .unwrap();
     assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        unauthorized.headers()[header::WWW_AUTHENTICATE],
+        "Basic realm=\"Komga\""
+    );
+
+    let event_source_unauthorized = app
+        .clone()
+        .oneshot(
+            Request::get("/sse/v1/events")
+                .header(header::ACCEPT, "text/event-stream")
+                .header(header::COOKIE, "KOMGA-SESSION=expired-after-restart")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(event_source_unauthorized.status(), StatusCode::UNAUTHORIZED);
+    assert!(
+        !event_source_unauthorized
+            .headers()
+            .contains_key(header::WWW_AUTHENTICATE)
+    );
 
     let response = app
         .oneshot(
