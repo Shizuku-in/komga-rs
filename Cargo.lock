@@ -2574,6 +2574,7 @@ dependencies = [
  "http-body-util",
  "httpdate",
  "include_dir",
+ "ipnet",
  "komga-core",
  "komga-media",
  "komga-search",

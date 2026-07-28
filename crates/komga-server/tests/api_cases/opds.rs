@@ -52,20 +52,25 @@ async fn opds_auth_document_and_challenge_match_the_v2_contract() {
 #[tokio::test]
 async fn opds_v1_catalog_and_acquisition_feeds_are_valid_atom() {
     let (_temporary, storage, tasks, book, _media) = analyzed_media_fixture("archives/zip.zip", "Volume 1.cbz").await;
-    let app = build_app(AppState::new(storage, tasks).await.unwrap());
+    let app = build_app(
+        AppState::new(storage, tasks)
+            .await
+            .unwrap()
+            .with_trusted_proxies(vec!["127.0.0.0/8".parse().unwrap()]),
+    );
     assert_eq!(claim(&app).await.status(), StatusCode::OK);
     let admin = basic("admin@example.org", "password");
 
     let catalog = app
         .clone()
-        .oneshot(
+        .oneshot(through_trusted_proxy(
             Request::get("/opds/v1.2/catalog")
                 .header(header::AUTHORIZATION, &admin)
                 .header("forwarded", "for=192.0.2.1;proto=https;host=reader.example")
                 .header("x-forwarded-prefix", "/komga")
                 .body(Body::empty())
                 .unwrap(),
-        )
+        ))
         .await
         .unwrap();
     assert_eq!(catalog.status(), StatusCode::OK);
@@ -134,20 +139,25 @@ async fn opds_v1_catalog_and_acquisition_feeds_are_valid_atom() {
 #[tokio::test]
 async fn opds_v2_catalog_publications_and_manifest_use_opds_links() {
     let (_temporary, storage, tasks, book, _media) = analyzed_media_fixture("archives/zip.zip", "Volume.cbz").await;
-    let app = build_app(AppState::new(storage, tasks).await.unwrap());
+    let app = build_app(
+        AppState::new(storage, tasks)
+            .await
+            .unwrap()
+            .with_trusted_proxies(vec!["127.0.0.0/8".parse().unwrap()]),
+    );
     assert_eq!(claim(&app).await.status(), StatusCode::OK);
     let admin = basic("admin@example.org", "password");
 
     let catalog = app
         .clone()
-        .oneshot(
+        .oneshot(through_trusted_proxy(
             Request::get("/opds/v2/catalog")
                 .header(header::AUTHORIZATION, &admin)
                 .header("forwarded", "for=192.0.2.1;proto=https;host=reader.example")
                 .header("x-forwarded-prefix", "/komga")
                 .body(Body::empty())
                 .unwrap(),
-        )
+        ))
         .await
         .unwrap();
     assert_eq!(catalog.status(), StatusCode::OK);

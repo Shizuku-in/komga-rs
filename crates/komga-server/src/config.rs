@@ -4,6 +4,7 @@ use std::{net::IpAddr, num::NonZeroUsize, path::PathBuf};
 
 use clap::Parser;
 use http::HeaderValue;
+use ipnet::IpNet;
 use url::Url;
 
 /// Command-line and environment configuration for the HTTP process.
@@ -74,6 +75,22 @@ pub struct Config {
         value_parser = parse_cors_origin
     )]
     pub cors_allowed_origins: Vec<HeaderValue>,
+
+    /// Proxy IP addresses or CIDR networks allowed to supply forwarding headers.
+    #[arg(
+        long,
+        env = "KOMGA_TRUSTED_PROXIES",
+        value_delimiter = ',',
+        value_parser = parse_trusted_proxy
+    )]
+    pub trusted_proxies: Vec<IpNet>,
+}
+
+fn parse_trusted_proxy(value: &str) -> Result<IpNet, String> {
+    value
+        .parse::<IpNet>()
+        .or_else(|_| value.parse::<IpAddr>().map(IpNet::from))
+        .map_err(|_| format!("invalid proxy IP address or CIDR network: {value}"))
 }
 
 fn parse_context_path(value: &str) -> Result<String, String> {
@@ -168,6 +185,7 @@ mod tests {
         assert!(!config.kobo_proxy);
         assert!(config.context_path.is_none());
         assert!(config.cors_allowed_origins.is_empty());
+        assert!(config.trusted_proxies.is_empty());
         assert!(config.oauth2_config_file.is_none());
         assert_eq!(config.oauth2_config_file(), config.config_dir().join("oauth2.json"));
         assert_eq!(config.fonts_directory(), config.config_dir().join("fonts"));
@@ -225,5 +243,12 @@ mod tests {
             std::path::Path::new("/srv/komga/oauth.json")
         );
         assert!(oauth.oauth2_config_file_is_explicit());
+
+        let proxies =
+            Config::try_parse_from(["komga-server", "--trusted-proxies", "127.0.0.1,172.16.0.0/12,::1"]).unwrap();
+        assert_eq!(proxies.trusted_proxies.len(), 3);
+        assert_eq!(proxies.trusted_proxies[0], "127.0.0.1/32".parse().unwrap());
+        assert_eq!(proxies.trusted_proxies[2], "::1/128".parse().unwrap());
+        assert!(Config::try_parse_from(["komga-server", "--trusted-proxies", "not-a-network"]).is_err());
     }
 }

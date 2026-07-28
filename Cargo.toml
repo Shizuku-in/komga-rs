@@ -41,6 +41,7 @@ httpdate = "1.0"
 include_dir = "0.7.4"
 image = { version = "0.25.10", default-features = false, features = ["bmp", "dds", "exr", "ff", "gif", "hdr", "ico", "jpeg", "png", "pnm", "qoi", "tga", "tiff", "webp"] }
 infer = "0.22"
+ipnet = "2"
 iso8601-duration = "0.2"
 jxl-oxide = { version = "0.12.6", default-features = false, features = ["image"] }
 libheif-rs = { version = "2.7.0", default-features = false, features = ["v1_17", "image"] }

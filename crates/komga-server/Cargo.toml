@@ -32,6 +32,7 @@ hex.workspace = true
 http.workspace = true
 httpdate.workspace = true
 include_dir = { workspace = true, optional = true }
+ipnet.workspace = true
 komga-core = { path = "../komga-core" }
 komga-media = { path = "../komga-media" }
 komga-search = { path = "../komga-search" }

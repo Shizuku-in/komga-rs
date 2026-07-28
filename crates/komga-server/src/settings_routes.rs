@@ -160,7 +160,7 @@ pub(crate) async fn update_server_settings(
         kepubify_path: setting_update(update.kepubify_path),
     };
     let settings = state.storage.update_server_settings(&patch).await?;
-    state.apply_server_settings(&settings, remember_me_key_renewed).await;
+    state.apply_server_settings(&settings).await;
     Ok(StatusCode::NO_CONTENT)
 }
 

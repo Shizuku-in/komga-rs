@@ -3,7 +3,12 @@ use super::*;
 #[tokio::test]
 async fn divina_webpub_manifest_matches_kotlin_contract() {
     let (_temporary, storage, tasks, book, _media) = analyzed_media_fixture("archives/zip.zip", "Volume 1.cbz").await;
-    let app = build_app(AppState::new(storage, tasks).await.unwrap());
+    let app = build_app(
+        AppState::new(storage, tasks)
+            .await
+            .unwrap()
+            .with_trusted_proxies(vec!["127.0.0.0/8".parse().unwrap()]),
+    );
 
     let unauthorized = app
         .clone()
@@ -19,14 +24,14 @@ async fn divina_webpub_manifest_matches_kotlin_contract() {
     assert_eq!(claim(&app).await.status(), StatusCode::OK);
     let manifest = app
         .clone()
-        .oneshot(
+        .oneshot(through_trusted_proxy(
             Request::get(format!("/api/v1/books/{}/manifest", book.id))
                 .header(header::AUTHORIZATION, basic("admin@example.org", "password"))
                 .header("forwarded", "for=192.0.2.10;proto=https;host=reader.example")
                 .header("x-forwarded-prefix", "/komga")
                 .body(Body::empty())
                 .unwrap(),
-        )
+        ))
         .await
         .unwrap();
     assert_eq!(manifest.status(), StatusCode::OK);

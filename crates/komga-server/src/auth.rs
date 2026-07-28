@@ -1,4 +1,4 @@
-//! Compatibility authentication and process-local session management.
+//! Compatibility authentication, signed remember-me tokens, and sessions.
 //!
 //! Authentication is attempted in this order: `X-API-Key`, an existing header
 //! or cookie session, then HTTP Basic credentials. Supplying an API key makes it
@@ -8,16 +8,15 @@
 //! `KOMGA-SESSION`.
 
 use std::{
-    net::{IpAddr, SocketAddr},
     sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
+        Arc, RwLock,
+        atomic::{AtomicU32, AtomicU64, Ordering},
     },
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use axum::{
-    extract::{ConnectInfo, Request, State},
+    extract::{Request, State},
     http::{HeaderMap, HeaderValue, Uri, header},
     middleware::Next,
     response::{IntoResponse, Response},
@@ -26,10 +25,11 @@ use base64::{Engine, engine::general_purpose::STANDARD};
 use komga_core::{ApiKey, AuthenticationActivity, User, UserRole};
 use moka::{Expiry, policy::EvictionPolicy, sync::Cache};
 use rand::RngCore;
-use sha2::{Digest, Sha512};
+use sha2::{Digest, Sha256, Sha512};
+use tokio::sync::Semaphore;
 use url::Url;
 
-use crate::{AppState, error::ApiError};
+use crate::{AppState, error::ApiError, proxy::ClientAddress};
 
 /// Cookie name used for ordinary Komga sessions.
 pub const SESSION_COOKIE: &str = "KOMGA-SESSION";
@@ -40,6 +40,12 @@ pub const REMEMBER_ME_COOKIE: &str = "komga-remember-me";
 
 const MAX_SESSION_COUNT: u64 = 16_384;
 const ORDINARY_SESSION_IDLE_TIMEOUT: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+const AUTH_FAILURE_WINDOW: Duration = Duration::from_secs(5 * 60);
+const ACCOUNT_FAILURE_LIMIT: u32 = 5;
+const IP_FAILURE_LIMIT: u32 = 25;
+const BCRYPT_QUEUE_TIMEOUT: Duration = Duration::from_secs(2);
+const BCRYPT_COST: u32 = 10;
+static BCRYPT_SEMAPHORE: Semaphore = Semaphore::const_new(4);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct CookieSettings {
@@ -119,7 +125,6 @@ pub(crate) struct AuthContext {
 #[derive(Debug, Clone)]
 struct Session {
     user_id: String,
-    remember_me: bool,
     lifetime: Duration,
 }
 
@@ -136,14 +141,10 @@ impl Expiry<String, Session> for SessionExpiry {
         _key: &String,
         value: &Session,
         _read_at: Instant,
-        duration_until_expiry: Option<Duration>,
+        _duration_until_expiry: Option<Duration>,
         _last_modified_at: Instant,
     ) -> Option<Duration> {
-        if value.remember_me {
-            duration_until_expiry
-        } else {
-            Some(value.lifetime)
-        }
+        Some(value.lifetime)
     }
 }
 
@@ -151,19 +152,26 @@ impl Expiry<String, Session> for SessionExpiry {
 pub(crate) struct SessionStore {
     sessions: Cache<String, Session>,
     remember_me_duration_seconds: Arc<AtomicU64>,
+    remember_me_key: Arc<RwLock<String>>,
     ordinary_session_idle_timeout: Duration,
 }
 
 impl SessionStore {
-    pub(crate) fn new(remember_me_duration_days: u64) -> Self {
+    pub(crate) fn new(remember_me_duration_days: u64, remember_me_key: String) -> Self {
         Self::with_policy(
             remember_me_duration_days,
+            remember_me_key,
             MAX_SESSION_COUNT,
             ORDINARY_SESSION_IDLE_TIMEOUT,
         )
     }
 
-    fn with_policy(remember_me_duration_days: u64, max_sessions: u64, ordinary_idle_timeout: Duration) -> Self {
+    fn with_policy(
+        remember_me_duration_days: u64,
+        remember_me_key: String,
+        max_sessions: u64,
+        ordinary_idle_timeout: Duration,
+    ) -> Self {
         Self {
             sessions: Cache::builder()
                 .max_capacity(max_sessions)
@@ -171,26 +179,21 @@ impl SessionStore {
                 .expire_after(SessionExpiry)
                 .build(),
             remember_me_duration_seconds: Arc::new(AtomicU64::new(duration_seconds(remember_me_duration_days))),
+            remember_me_key: Arc::new(RwLock::new(remember_me_key)),
             ordinary_session_idle_timeout: ordinary_idle_timeout,
         }
     }
 
-    /// Issues a cryptographically random session with the selected lifetime.
-    pub(crate) fn create(&self, user_id: &str, remember_me: bool) -> String {
+    /// Issues a cryptographically random ordinary session.
+    pub(crate) fn create(&self, user_id: &str) -> String {
         let mut bytes = [0_u8; 32];
         rand::rng().fill_bytes(&mut bytes);
         let id = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes);
-        let duration = if remember_me {
-            Duration::from_secs(self.remember_me_duration_seconds.load(Ordering::Relaxed))
-        } else {
-            self.ordinary_session_idle_timeout
-        };
         self.sessions.insert(
             id.clone(),
             Session {
                 user_id: user_id.to_owned(),
-                remember_me,
-                lifetime: duration,
+                lifetime: self.ordinary_session_idle_timeout,
             },
         );
         id
@@ -218,26 +221,45 @@ impl SessionStore {
         }
     }
 
-    /// Updates the lifetime used by subsequently issued remember-me sessions.
-    pub(crate) fn set_remember_me_duration_days(&self, days: u64) {
+    /// Updates the duration and signing key used for remember-me tokens.
+    pub(crate) fn set_remember_me_policy(&self, days: u64, key: String) {
         self.remember_me_duration_seconds
             .store(duration_seconds(days), Ordering::Relaxed);
-    }
-
-    /// Invalidates long-lived sessions while preserving ordinary sessions.
-    pub(crate) fn remove_remembered(&self) {
-        let session_ids = self
-            .sessions
-            .iter()
-            .filter_map(|(session_id, session)| session.remember_me.then_some(session_id))
-            .collect::<Vec<_>>();
-        for session_id in session_ids {
-            self.sessions.invalidate(session_id.as_ref());
-        }
+        *self
+            .remember_me_key
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = key;
     }
 
     pub(crate) fn remember_me_max_age(&self) -> u64 {
         self.remember_me_duration_seconds.load(Ordering::Relaxed)
+    }
+
+    fn remember_me_token(&self, user: &User) -> String {
+        let expires_at = unix_time_millis().saturating_add(self.remember_me_max_age().saturating_mul(1_000));
+        let signature = self.remember_me_signature(&user.email, expires_at, &user.password_hash, "SHA256");
+        encode_remember_me_tokens(&[&user.email, &expires_at.to_string(), "SHA256", &signature])
+    }
+
+    fn verify_remember_me_token(&self, token: &RememberMeToken, user: &User) -> bool {
+        if token.expires_at < unix_time_millis() || !token.email.eq_ignore_ascii_case(&user.email) {
+            return false;
+        }
+        let expected = self.remember_me_signature(&user.email, token.expires_at, &user.password_hash, token.algorithm);
+        constant_time_equal(expected.as_bytes(), token.signature.as_bytes())
+    }
+
+    fn remember_me_signature(&self, email: &str, expires_at: u64, password_hash: &str, algorithm: &str) -> String {
+        if algorithm != "SHA256" {
+            return String::new();
+        }
+        let key = self
+            .remember_me_key
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        hex::encode(Sha256::digest(
+            format!("{email}:{expires_at}:{password_hash}:{key}").as_bytes(),
+        ))
     }
 }
 
@@ -245,10 +267,154 @@ fn duration_seconds(days: u64) -> u64 {
     days.saturating_mul(24 * 60 * 60)
 }
 
+fn unix_time_millis() -> u64 {
+    u64::try_from(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis(),
+    )
+    .unwrap_or(u64::MAX)
+}
+
+struct RememberMeToken {
+    email: String,
+    expires_at: u64,
+    algorithm: &'static str,
+    signature: String,
+}
+
+impl RememberMeToken {
+    fn decode(value: &str) -> Option<Self> {
+        if value.len() > 4_096 {
+            return None;
+        }
+        let mut encoded = value.to_owned();
+        while !encoded.len().is_multiple_of(4) {
+            encoded.push('=');
+        }
+        let decoded = String::from_utf8(STANDARD.decode(encoded).ok()?).ok()?;
+        let tokens = decoded
+            .split(':')
+            .map(decode_form_component)
+            .collect::<Option<Vec<_>>>()?;
+        let (email, expires_at, algorithm, signature) = match tokens.as_slice() {
+            [email, expires_at, signature] => (email.clone(), expires_at, "SHA256", signature.clone()),
+            [email, expires_at, algorithm, signature] if algorithm == "SHA256" => {
+                (email.clone(), expires_at, "SHA256", signature.clone())
+            }
+            _ => return None,
+        };
+        if email.is_empty() || signature.len() != 64 || !signature.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return None;
+        }
+        Some(Self {
+            email,
+            expires_at: expires_at.parse().ok()?,
+            algorithm,
+            signature,
+        })
+    }
+}
+
+fn encode_remember_me_tokens(tokens: &[&str]) -> String {
+    let encoded = tokens
+        .iter()
+        .map(|token| url::form_urlencoded::byte_serialize(token.as_bytes()).collect::<String>())
+        .collect::<Vec<_>>()
+        .join(":");
+    STANDARD.encode(encoded).trim_end_matches('=').to_owned()
+}
+
+fn decode_form_component(value: &str) -> Option<String> {
+    url::form_urlencoded::parse(format!("value={value}").as_bytes())
+        .next()
+        .map(|(_, value)| value.into_owned())
+}
+
+fn constant_time_equal(left: &[u8], right: &[u8]) -> bool {
+    if left.len() != right.len() {
+        return false;
+    }
+    left.iter()
+        .zip(right)
+        .fold(0_u8, |difference, (left, right)| difference | (left ^ right))
+        == 0
+}
+
+#[derive(Clone)]
+pub(crate) struct AuthenticationLimiter {
+    failures: Cache<String, Arc<AtomicU32>>,
+    account_limit: u32,
+    ip_limit: u32,
+    retry_after_seconds: u64,
+}
+
+impl Default for AuthenticationLimiter {
+    fn default() -> Self {
+        Self::with_policy(ACCOUNT_FAILURE_LIMIT, IP_FAILURE_LIMIT, AUTH_FAILURE_WINDOW)
+    }
+}
+
+impl AuthenticationLimiter {
+    fn with_policy(account_limit: u32, ip_limit: u32, window: Duration) -> Self {
+        Self {
+            failures: Cache::builder().max_capacity(65_536).time_to_live(window).build(),
+            account_limit,
+            ip_limit,
+            retry_after_seconds: window.as_secs(),
+        }
+    }
+
+    fn check(&self, email: &str, ip: Option<ClientAddress>) -> Result<(), ApiError> {
+        let account = account_failure_key(email);
+        let account_limited = self.count(&account) >= self.account_limit;
+        let ip_limited = ip.is_some_and(|ip| self.count(&ip_failure_key(ip)) >= self.ip_limit);
+        if account_limited || ip_limited {
+            Err(ApiError::too_many_requests(self.retry_after_seconds))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn record_failure(&self, email: &str, ip: Option<ClientAddress>) {
+        self.increment(account_failure_key(email));
+        if let Some(ip) = ip {
+            self.increment(ip_failure_key(ip));
+        }
+    }
+
+    fn record_success(&self, email: &str) {
+        self.failures.invalidate(&account_failure_key(email));
+    }
+
+    fn count(&self, key: &str) -> u32 {
+        self.failures.get(key).map_or(0, |count| count.load(Ordering::Relaxed))
+    }
+
+    fn increment(&self, key: String) {
+        let count = self.failures.get_with(key, || Arc::new(AtomicU32::new(0)));
+        let _ = count.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+            Some(value.saturating_add(1))
+        });
+    }
+}
+
+fn account_failure_key(email: &str) -> String {
+    format!(
+        "account:{}",
+        hex::encode(Sha256::digest(email.trim().to_ascii_lowercase().as_bytes()))
+    )
+}
+
+fn ip_failure_key(ip: ClientAddress) -> String {
+    format!("ip:{}", ip.0)
+}
+
 enum AuthSource {
     ApiKey(ApiKey),
     Session(String),
-    RememberMe(String),
+    RememberMe,
     Basic { remember_me: bool },
 }
 
@@ -266,15 +432,17 @@ pub(crate) async fn require_auth(State(state): State<AppState>, mut request: Req
     let cookie_settings =
         CookieSettings::from_request(&state.effective_server_context_path, request.headers(), request.uri());
     let request_metadata = authentication_request_metadata(&request);
-    match authenticate(&state, request.headers(), request.uri().query()).await {
+    let client_address = request.extensions().get::<ClientAddress>().copied();
+    match authenticate(&state, request.headers(), request.uri().query(), client_address).await {
         Ok((user, source)) => {
             record_authentication_success(&state, &request_metadata, &user, &source).await;
-            let (session_id, issue_session, remember_me) = match source {
-                AuthSource::ApiKey(_) => (None, false, false),
-                AuthSource::Session(id) => (Some(id), false, false),
-                AuthSource::RememberMe(id) => (Some(id), false, true),
+            let (session_id, issue_session, remember_me_token) = match source {
+                AuthSource::ApiKey(_) => (None, false, None),
+                AuthSource::Session(id) => (Some(id), false, None),
+                AuthSource::RememberMe => (Some(state.sessions.create(&user.id)), true, None),
                 AuthSource::Basic { remember_me } => {
-                    (Some(state.sessions.create(&user.id, remember_me)), true, remember_me)
+                    let token = remember_me.then(|| state.sessions.remember_me_token(&user));
+                    (Some(state.sessions.create(&user.id)), true, token)
                 }
             };
             request.extensions_mut().insert(AuthContext {
@@ -291,10 +459,10 @@ pub(crate) async fn require_auth(State(state): State<AppState>, mut request: Req
                 } else {
                     append_cookie(response.headers_mut(), &session_cookie(&session_id, &cookie_settings));
                 }
-                if remember_me {
+                if let Some(token) = remember_me_token {
                     append_cookie(
                         response.headers_mut(),
-                        &remember_me_cookie(&session_id, state.sessions.remember_me_max_age(), &cookie_settings),
+                        &remember_me_cookie(&token, state.sessions.remember_me_max_age(), &cookie_settings),
                     );
                 }
             }
@@ -302,11 +470,18 @@ pub(crate) async fn require_auth(State(state): State<AppState>, mut request: Req
         }
         Err(error) => {
             record_authentication_failure(&state, &request_headers, &request_metadata).await;
-            if opds_v2 {
+            let mut response = if opds_v2 && error.is_unauthorized() {
                 crate::opds_v2::unauthorized(&request_headers, &request_uri)
             } else {
                 error.into_response()
+            };
+            if cookie_value(&request_headers, REMEMBER_ME_COOKIE).is_some() {
+                append_cookie(
+                    response.headers_mut(),
+                    &format!("{REMEMBER_ME_COOKIE}=; Max-Age=0; {}", cookie_settings.attributes()),
+                );
             }
+            response
         }
     }
 }
@@ -336,6 +511,7 @@ async fn authenticate(
     state: &AppState,
     headers: &HeaderMap,
     query: Option<&str>,
+    client_address: Option<ClientAddress>,
 ) -> Result<(User, AuthSource), ApiError> {
     if let Some(key) = headers.get("X-API-Key") {
         let key = key.to_str().map_err(|_| ApiError::unauthorized())?;
@@ -363,30 +539,29 @@ async fn authenticate(
     {
         return Ok((user, AuthSource::Session(session_id.to_owned())));
     }
-    if let Some(session_id) = cookie_value(headers, REMEMBER_ME_COOKIE)
-        && let Some(user_id) = state.sessions.user_id(&session_id)
-        && let Some(user) = state.storage.find_user_by_id(&user_id).await?
+    if let Some(value) = cookie_value(headers, REMEMBER_ME_COOKIE)
+        && let Some(token) = RememberMeToken::decode(&value)
+        && let Some(user) = state.storage.find_user_by_email(&token.email).await?
+        && state.sessions.verify_remember_me_token(&token, &user)
     {
-        return Ok((user, AuthSource::RememberMe(session_id)));
+        return Ok((user, AuthSource::RememberMe));
     }
 
     let Some((email, password)) = basic_credentials(headers) else {
         return Err(ApiError::unauthorized());
     };
+    state.authentication_limiter.check(&email, client_address)?;
     let Some(user) = state.storage.find_user_by_email(&email).await? else {
+        state.authentication_limiter.record_failure(&email, client_address);
         return Err(ApiError::unauthorized());
     };
     let password_hash = user.password_hash.clone();
-    let valid = tokio::task::spawn_blocking(move || bcrypt::verify(password, &password_hash))
-        .await
-        .map_err(|error| {
-            tracing::error!(%error, "password verification task failed");
-            ApiError::internal("Authentication failed")
-        })?
-        .unwrap_or(false);
+    let valid = verify_password(password, password_hash).await?;
     if !valid {
+        state.authentication_limiter.record_failure(&email, client_address);
         return Err(ApiError::unauthorized());
     }
+    state.authentication_limiter.record_success(&email);
 
     Ok((
         user,
@@ -408,7 +583,7 @@ async fn record_authentication_success(
             Some(key.id.clone()),
             Some(key.comment.clone()),
         ),
-        AuthSource::RememberMe(_) => (Some("RememberMe".to_owned()), None, None),
+        AuthSource::RememberMe => (Some("RememberMe".to_owned()), None, None),
         AuthSource::Basic { .. } => (Some("Password".to_owned()), None, None),
         AuthSource::Session(_) => return,
     };
@@ -526,57 +701,12 @@ fn user_agent(headers: &HeaderMap) -> Option<String> {
 
 pub(crate) fn authentication_request_metadata(request: &Request) -> AuthenticationRequestMetadata {
     AuthenticationRequestMetadata {
-        ip: forwarded_ip(request.headers())
-            .or_else(|| x_forwarded_for(request.headers()))
-            .or_else(|| {
-                request
-                    .extensions()
-                    .get::<ConnectInfo<SocketAddr>>()
-                    .map(|connect| connect.0.ip().to_string())
-            }),
+        ip: request
+            .extensions()
+            .get::<ClientAddress>()
+            .map(|address| address.0.to_string()),
         user_agent: user_agent(request.headers()),
     }
-}
-
-fn forwarded_ip(headers: &HeaderMap) -> Option<String> {
-    headers
-        .get_all("forwarded")
-        .iter()
-        .filter_map(|value| value.to_str().ok())
-        .flat_map(|value| value.split(','))
-        .flat_map(|element| element.split(';'))
-        .find_map(|parameter| {
-            let (name, value) = parameter.trim().split_once('=')?;
-            name.eq_ignore_ascii_case("for")
-                .then(|| normalize_forwarded_address(value.trim().trim_matches('"')))
-                .flatten()
-        })
-}
-
-fn x_forwarded_for(headers: &HeaderMap) -> Option<String> {
-    headers
-        .get_all("x-forwarded-for")
-        .iter()
-        .filter_map(|value| value.to_str().ok())
-        .flat_map(|value| value.split(','))
-        .find_map(|value| normalize_forwarded_address(value.trim()))
-}
-
-fn normalize_forwarded_address(value: &str) -> Option<String> {
-    if value.is_empty() || value.eq_ignore_ascii_case("unknown") || value.starts_with('_') {
-        return None;
-    }
-    if let Ok(ip) = value.parse::<IpAddr>() {
-        return Some(ip.to_string());
-    }
-    if let Ok(address) = value.parse::<SocketAddr>() {
-        return Some(address.ip().to_string());
-    }
-    value
-        .strip_prefix('[')
-        .and_then(|value| value.split_once(']'))
-        .and_then(|(ip, _)| ip.parse::<IpAddr>().ok())
-        .map(|ip| ip.to_string())
 }
 
 fn truncate(value: &str, max_chars: usize) -> String {
@@ -592,7 +722,9 @@ pub(crate) async fn optional_user(state: &AppState, headers: &HeaderMap) -> Resu
     if !has_credentials {
         return Ok(None);
     }
-    authenticate(state, headers, None).await.map(|(user, _)| Some(user))
+    authenticate(state, headers, None, None)
+        .await
+        .map(|(user, _)| Some(user))
 }
 
 fn basic_credentials(headers: &HeaderMap) -> Option<(String, String)> {
@@ -635,11 +767,43 @@ pub(crate) fn session_cookie(session_id: &str, settings: &CookieSettings) -> Str
     format!("{SESSION_COOKIE}={session_id}; {}", settings.attributes())
 }
 
-fn remember_me_cookie(session_id: &str, max_age: u64, settings: &CookieSettings) -> String {
+fn remember_me_cookie(token: &str, max_age: u64, settings: &CookieSettings) -> String {
     format!(
-        "{REMEMBER_ME_COOKIE}={session_id}; Max-Age={max_age}; {}",
+        "{REMEMBER_ME_COOKIE}={token}; Max-Age={max_age}; {}",
         settings.attributes()
     )
+}
+
+pub(crate) async fn hash_password(password: String) -> Result<String, ApiError> {
+    let _permit = bcrypt_permit().await?;
+    tokio::task::spawn_blocking(move || bcrypt::hash(password, BCRYPT_COST))
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, "password hashing task failed");
+            ApiError::internal("Password hashing failed")
+        })?
+        .map_err(|error| {
+            tracing::error!(%error, "password hashing failed");
+            ApiError::internal("Password hashing failed")
+        })
+}
+
+async fn verify_password(password: String, password_hash: String) -> Result<bool, ApiError> {
+    let _permit = bcrypt_permit().await?;
+    tokio::task::spawn_blocking(move || bcrypt::verify(password, &password_hash))
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, "password verification task failed");
+            ApiError::internal("Authentication failed")
+        })
+        .map(|result| result.unwrap_or(false))
+}
+
+async fn bcrypt_permit() -> Result<tokio::sync::SemaphorePermit<'static>, ApiError> {
+    tokio::time::timeout(BCRYPT_QUEUE_TIMEOUT, BCRYPT_SEMAPHORE.acquire())
+        .await
+        .map_err(|_| ApiError::too_many_requests(1))?
+        .map_err(|_| ApiError::service_unavailable("Authentication is unavailable"))
 }
 
 /// Returns deletion cookies for both supported browser-session mechanisms.
@@ -660,17 +824,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn session_expiry_refreshes_only_ordinary_sessions() {
+    fn ordinary_session_expiry_refreshes_after_reads() {
         let expiry = SessionExpiry;
         let ordinary = Session {
             user_id: "ordinary".into(),
-            remember_me: false,
             lifetime: Duration::from_secs(60),
-        };
-        let remembered = Session {
-            user_id: "remembered".into(),
-            remember_me: true,
-            lifetime: Duration::from_secs(600),
         };
         let now = Instant::now();
 
@@ -682,28 +840,65 @@ mod tests {
             expiry.expire_after_read(&"ordinary".into(), &ordinary, now, Some(Duration::from_secs(10)), now,),
             Some(Duration::from_secs(60))
         );
-        assert_eq!(
-            expiry.expire_after_read(
-                &"remembered".into(),
-                &remembered,
-                now,
-                Some(Duration::from_secs(10)),
-                now,
-            ),
-            Some(Duration::from_secs(10))
-        );
     }
 
     #[test]
     fn session_store_enforces_its_capacity() {
-        let store = SessionStore::with_policy(30, 2, Duration::from_secs(60));
-        store.create("one", false);
-        store.create("two", false);
-        let newest = store.create("three", false);
+        let store = SessionStore::with_policy(30, "key".into(), 2, Duration::from_secs(60));
+        store.create("one");
+        store.create("two");
+        let newest = store.create("three");
         store.sessions.run_pending_tasks();
 
         assert!(store.sessions.entry_count() <= 2);
         assert_eq!(store.user_id(&newest).as_deref(), Some("three"));
+    }
+
+    #[test]
+    fn remember_me_tokens_survive_store_recreation_and_follow_password_and_key_rotation() {
+        let user = User::new("reader+test@example.org".into(), "$2a$10$hash".into());
+        let first = SessionStore::with_policy(30, "persistent-key".into(), 2, Duration::from_secs(60));
+        let token = first.remember_me_token(&user);
+        let decoded = RememberMeToken::decode(&token).unwrap();
+        let restarted = SessionStore::with_policy(30, "persistent-key".into(), 2, Duration::from_secs(60));
+
+        assert_eq!(decoded.email, user.email);
+        assert!(restarted.verify_remember_me_token(&decoded, &user));
+
+        let changed_password = User::new(user.email.clone(), "$2a$10$changed".into());
+        assert!(!restarted.verify_remember_me_token(&decoded, &changed_password));
+        restarted.set_remember_me_policy(30, "rotated-key".into());
+        assert!(!restarted.verify_remember_me_token(&decoded, &user));
+    }
+
+    #[test]
+    fn spring_sha256_remember_me_cookie_fixture_is_accepted() {
+        let token = "cmVhZGVyJTJCdGVzdCU0MGV4YW1wbGUub3JnOjQxMDI0NDQ4MDAwMDA6U0hBMjU2OjgwMGE1Njk1MjU3NmQ3NzA1YmM3MTNjNTlkZTcyNWE5M2FjZTYzYmE3MjIxMTZlOTY1ZDkyZWYyNzBhZDJkMDI";
+        let user = User::new("reader+test@example.org".into(), "$2a$10$hash".into());
+        let store = SessionStore::with_policy(30, "persistent-key".into(), 2, Duration::from_secs(60));
+        let decoded = RememberMeToken::decode(token).unwrap();
+
+        assert_eq!(decoded.email, user.email);
+        assert!(store.verify_remember_me_token(&decoded, &user));
+    }
+
+    #[test]
+    fn authentication_limiter_blocks_accounts_and_ips_after_failed_attempts() {
+        let limiter = AuthenticationLimiter::with_policy(2, 3, Duration::from_secs(60));
+        let first_ip = Some(ClientAddress("192.0.2.1".parse().unwrap()));
+        let second_ip = Some(ClientAddress("192.0.2.2".parse().unwrap()));
+
+        limiter.record_failure("reader@example.org", first_ip);
+        assert!(limiter.check("reader@example.org", second_ip).is_ok());
+        limiter.record_failure("READER@example.org", first_ip);
+        assert!(limiter.check("reader@example.org", second_ip).is_err());
+        limiter.record_success("reader@example.org");
+        assert!(limiter.check("reader@example.org", second_ip).is_ok());
+
+        for email in ["one@example.org", "two@example.org", "three@example.org"] {
+            limiter.record_failure(email, first_ip);
+        }
+        assert!(limiter.check("other@example.org", first_ip).is_err());
     }
 
     #[test]

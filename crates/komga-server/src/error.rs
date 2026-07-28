@@ -12,6 +12,7 @@ use serde::Serialize;
 pub(crate) struct ApiError {
     status: StatusCode,
     message: String,
+    retry_after_seconds: Option<u64>,
 }
 
 #[derive(Serialize)]
@@ -76,11 +77,25 @@ impl ApiError {
         Self::new(StatusCode::SERVICE_UNAVAILABLE, message)
     }
 
+    /// Creates an authentication throttling response.
+    pub(crate) fn too_many_requests(retry_after_seconds: u64) -> Self {
+        Self {
+            status: StatusCode::TOO_MANY_REQUESTS,
+            message: "Too many authentication attempts".to_owned(),
+            retry_after_seconds: Some(retry_after_seconds),
+        }
+    }
+
+    pub(crate) fn is_unauthorized(&self) -> bool {
+        self.status == StatusCode::UNAUTHORIZED
+    }
+
     /// Creates an error with an explicit HTTP status and client-safe message.
     fn new(status: StatusCode, message: impl Into<String>) -> Self {
         Self {
             status,
             message: message.into(),
+            retry_after_seconds: None,
         }
     }
 }
@@ -102,6 +117,11 @@ impl IntoResponse for ApiError {
                 http::header::WWW_AUTHENTICATE,
                 http::HeaderValue::from_static("Basic realm=\"Komga\""),
             );
+        }
+        if let Some(seconds) = self.retry_after_seconds
+            && let Ok(value) = http::HeaderValue::from_str(&seconds.to_string())
+        {
+            response.headers_mut().insert(http::header::RETRY_AFTER, value);
         }
         response
     }

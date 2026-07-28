@@ -54,6 +54,8 @@ Run `cargo run -p komga-server -- --help` for configuration options. Settings ca
 
 CORS is disabled by default. To permit a separate browser origin, set an exact comma-separated allowlist with `--cors-allowed-origins` or `KOMGA_CORS_ALLOWED_ORIGINS`, for example `https://reader.example,http://localhost:5173`.
 
+Forwarding headers are ignored unless the immediate TCP peer is trusted. When Komga-rs runs behind a reverse proxy, set `--trusted-proxies` or `KOMGA_TRUSTED_PROXIES` to the proxy IP or CIDR network, for example `172.18.0.0/16,127.0.0.1/32`. Configure the narrowest network that contains the proxy; do not trust every Internet address. OAuth deployments should also set `publicBaseUrl` in `oauth2.json`.
+
 ## Migrating From Komga
 
 Compatibility is scoped to the pinned Kotlin baseline and is not a universal migration path for every historical Komga database. Before switching:

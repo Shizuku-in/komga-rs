@@ -1,8 +1,9 @@
-use std::{fs, path::PathBuf};
+use std::{fs, net::SocketAddr, path::PathBuf};
 
 use axum::{
     Router,
     body::Body,
+    extract::ConnectInfo,
     http::{Request, Response, header},
 };
 use base64::{Engine, engine::general_purpose::STANDARD};
@@ -22,6 +23,23 @@ pub async fn test_app() -> Router {
 pub async fn app_with_storage(storage: Storage) -> Router {
     let tasks = TaskStorage::connect_memory().await.unwrap();
     build_app(AppState::new(storage, tasks).await.unwrap())
+}
+
+pub async fn app_with_storage_trusting_loopback(storage: Storage) -> Router {
+    let tasks = TaskStorage::connect_memory().await.unwrap();
+    build_app(
+        AppState::new(storage, tasks)
+            .await
+            .unwrap()
+            .with_trusted_proxies(vec!["127.0.0.0/8".parse().unwrap()]),
+    )
+}
+
+pub fn through_trusted_proxy(mut request: Request<Body>) -> Request<Body> {
+    request
+        .extensions_mut()
+        .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 41_000))));
+    request
 }
 
 pub fn basic(email: &str, password: &str) -> String {

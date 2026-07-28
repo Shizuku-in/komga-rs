@@ -21,7 +21,7 @@ use uuid::Uuid;
 
 use crate::{
     AppState,
-    auth::{AuthContext, CookieSettings, append_cookie, expired_session_cookies, session_cookie},
+    auth::{AuthContext, CookieSettings, append_cookie, expired_session_cookies, hash_password, session_cookie},
     dto::{
         AgeRestrictionUpdateDto, ApiKeyRequestDto, PasswordUpdateDto, Patch, RestrictionUpdate, UserCreationDto,
         UserUpdateDto,
@@ -404,20 +404,6 @@ fn validate_password(password: &str) -> Result<(), ApiError> {
     } else {
         Ok(())
     }
-}
-
-async fn hash_password(password: String) -> Result<String, ApiError> {
-    // Spring's BCryptPasswordEncoder defaults to strength 10.
-    tokio::task::spawn_blocking(move || bcrypt::hash(password, 10))
-        .await
-        .map_err(|error| {
-            tracing::error!(%error, "password hashing task failed");
-            ApiError::internal("Password hashing failed")
-        })?
-        .map_err(|error| {
-            tracing::error!(%error, "password hashing failed");
-            ApiError::internal("Password hashing failed")
-        })
 }
 
 pub(crate) struct ApiJson<T>(pub(crate) T);

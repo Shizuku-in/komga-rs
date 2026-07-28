@@ -459,7 +459,7 @@ pub(crate) async fn callback(
                 None,
             )
             .await;
-            let session_id = state.sessions.create(&user.id, false);
+            let session_id = state.sessions.create(&user.id);
             let mut response = Redirect::to(success_redirect(&base_url).as_str()).into_response();
             append_cookie(response.headers_mut(), &session_cookie(&session_id, &cookie_settings));
             response
@@ -678,9 +678,8 @@ async fn bind_user(state: &AppState, email: &str, account_creation: bool) -> Res
         return Err("OAuth2 authentication failed");
     }
     let password = random_secret();
-    let password_hash = tokio::task::spawn_blocking(move || bcrypt::hash(password, 10))
+    let password_hash = crate::auth::hash_password(password)
         .await
-        .map_err(|_| "OAuth2 authentication failed")?
         .map_err(|_| "OAuth2 authentication failed")?;
     let user = User::new(email.to_owned(), password_hash);
     match state.storage.create_user(&user).await {
@@ -1118,13 +1117,14 @@ fn default_true() -> bool {
 mod tests {
     use std::{
         collections::HashMap,
+        net::SocketAddr,
         sync::atomic::{AtomicUsize, Ordering},
     };
 
     use axum::{
         Form, Router,
         body::Body,
-        extract::State,
+        extract::{ConnectInfo, State},
         http::{Request, StatusCode, header},
         routing::{get, post},
     };
@@ -1370,6 +1370,7 @@ mod tests {
 
     fn proxy_request(uri: &str) -> http::request::Builder {
         Request::get(uri)
+            .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 41_000))))
             .header(header::HOST, "internal.example:25600")
             .header("forwarded", "for=192.0.2.10;proto=https;host=reader.example")
             .header("x-forwarded-prefix", "/komga")
@@ -1570,7 +1571,8 @@ mod tests {
             .unwrap();
         let mut state = AppState::new(storage.clone(), TaskStorage::connect_memory().await.unwrap())
             .await
-            .unwrap();
+            .unwrap()
+            .with_trusted_proxies(vec!["127.0.0.0/8".parse().unwrap()]);
         state.oauth = oauth;
         let app = crate::build_app(state);
 
@@ -1687,7 +1689,8 @@ mod tests {
             TaskStorage::connect_memory().await.unwrap(),
         )
         .await
-        .unwrap();
+        .unwrap()
+        .with_trusted_proxies(vec!["127.0.0.0/8".parse().unwrap()]);
         state.oauth = oauth;
         let app = crate::build_app(state);
 
@@ -1741,7 +1744,8 @@ mod tests {
             .unwrap();
         let mut state = AppState::new(storage.clone(), TaskStorage::connect_memory().await.unwrap())
             .await
-            .unwrap();
+            .unwrap()
+            .with_trusted_proxies(vec!["127.0.0.0/8".parse().unwrap()]);
         state.oauth = oauth;
         let app = crate::build_app(state);
 
@@ -1797,7 +1801,8 @@ mod tests {
         );
         let mut state = AppState::new(storage, TaskStorage::connect_memory().await.unwrap())
             .await
-            .unwrap();
+            .unwrap()
+            .with_trusted_proxies(vec!["127.0.0.0/8".parse().unwrap()]);
         state.oauth = oauth;
         let app = crate::build_app(state);
 

@@ -145,19 +145,19 @@ async fn basic_login_issues_cookie_and_session_authenticates_follow_up_requests(
 
 #[tokio::test]
 async fn authentication_cookies_follow_forwarded_https_and_prefix() {
-    let app = test_app().await;
+    let app = app_with_storage_trusting_loopback(Storage::connect_memory().await.unwrap()).await;
     assert_eq!(claim(&app).await.status(), StatusCode::OK);
 
     let login = app
         .clone()
-        .oneshot(
+        .oneshot(through_trusted_proxy(
             Request::get("/api/v2/users/me")
                 .header(header::AUTHORIZATION, basic("admin@example.org", "password"))
                 .header("forwarded", "for=192.0.2.10;proto=https;host=reader.example")
                 .header("x-forwarded-prefix", "/komga")
                 .body(Body::empty())
                 .unwrap(),
-        )
+        ))
         .await
         .unwrap();
     assert_eq!(login.status(), StatusCode::OK);
@@ -179,14 +179,14 @@ async fn authentication_cookies_follow_forwarded_https_and_prefix() {
 
     let cookie = set_cookie.split(';').next().unwrap();
     let logout = app
-        .oneshot(
+        .oneshot(through_trusted_proxy(
             Request::post("/api/logout")
                 .header(header::COOKIE, cookie)
                 .header("x-forwarded-proto", "https")
                 .header("x-forwarded-prefix", "/komga")
                 .body(Body::empty())
                 .unwrap(),
-        )
+        ))
         .await
         .unwrap();
     assert_eq!(logout.status(), StatusCode::NO_CONTENT);
@@ -197,6 +197,41 @@ async fn authentication_cookies_follow_forwarded_https_and_prefix() {
             .contains("Path=/komga")
             && value.to_str().unwrap().contains("Secure"))
     );
+}
+
+#[tokio::test]
+async fn untrusted_peers_cannot_spoof_forwarded_cookie_or_audit_metadata() {
+    let storage = Storage::connect_memory().await.unwrap();
+    let app = app_with_storage(storage.clone()).await;
+    claim(&app).await;
+
+    let login = app
+        .oneshot(through_trusted_proxy(
+            Request::get("/api/v2/users/me")
+                .header(header::AUTHORIZATION, basic("admin@example.org", "password"))
+                .header("forwarded", "for=198.51.100.9;proto=https;host=attacker.example")
+                .header("x-forwarded-prefix", "/spoofed")
+                .body(Body::empty())
+                .unwrap(),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(login.status(), StatusCode::OK);
+    let cookie = login
+        .headers()
+        .get_all(header::SET_COOKIE)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .find(|value| value.starts_with(komga_server::SESSION_COOKIE))
+        .unwrap();
+    assert!(cookie.contains("Path=/;"));
+    assert!(!cookie.contains("Secure"));
+    let activity = storage
+        .list_authentication_activity(None, &komga_core::PageRequest::default())
+        .await
+        .unwrap();
+    assert_eq!(activity.content[0].ip.as_deref(), Some("127.0.0.1"));
 }
 
 #[tokio::test]
@@ -266,6 +301,98 @@ async fn header_sessions_can_be_exchanged_for_cookies_and_logged_out() {
         .await
         .unwrap();
     assert_eq!(expired.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn remember_me_cookie_survives_application_state_recreation() {
+    let storage = Storage::connect_memory().await.unwrap();
+    let first_app = app_with_storage(storage.clone()).await;
+    assert_eq!(claim(&first_app).await.status(), StatusCode::OK);
+    let login = first_app
+        .oneshot(
+            Request::get("/api/v2/users/me?remember-me=true")
+                .header(header::AUTHORIZATION, basic("admin@example.org", "password"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let remember_cookie = login
+        .headers()
+        .get_all(header::SET_COOKIE)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .find(|value| value.starts_with(REMEMBER_ME_COOKIE))
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_owned();
+
+    let restarted_app = app_with_storage(storage).await;
+    let remembered = restarted_app
+        .oneshot(
+            Request::get("/api/v2/users/me")
+                .header(header::COOKIE, remember_cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(remembered.status(), StatusCode::OK);
+    assert!(
+        remembered
+            .headers()
+            .get_all(header::SET_COOKIE)
+            .iter()
+            .filter_map(|value| value.to_str().ok())
+            .any(|value| value.starts_with(komga_server::SESSION_COOKIE))
+    );
+    assert_eq!(body_json(remembered).await["email"], "admin@example.org");
+}
+
+#[tokio::test]
+async fn repeated_password_failures_are_rate_limited_without_blocking_other_accounts() {
+    let app = test_app().await;
+    claim(&app).await;
+    for _ in 0..5 {
+        let failed = app
+            .clone()
+            .oneshot(
+                Request::get("/api/v2/users/me")
+                    .header(header::AUTHORIZATION, basic("missing@example.org", "wrong"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(failed.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    let limited = app
+        .clone()
+        .oneshot(
+            Request::get("/api/v2/users/me")
+                .header(header::AUTHORIZATION, basic("missing@example.org", "wrong"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(limited.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(limited.headers()[header::RETRY_AFTER], "300");
+
+    let valid = app
+        .oneshot(
+            Request::get("/api/v2/users/me")
+                .header(header::AUTHORIZATION, basic("admin@example.org", "password"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(valid.status(), StatusCode::OK);
 }
 
 #[tokio::test]
@@ -394,7 +521,7 @@ async fn basic_auth_accepts_spring_bcrypt_2a_hashes() {
 #[tokio::test]
 async fn authentication_activity_records_attempts_without_recounting_ordinary_sessions() {
     let storage = Storage::connect_memory().await.unwrap();
-    let app = app_with_storage(storage.clone()).await;
+    let app = app_with_storage_trusting_loopback(storage.clone()).await;
     let admin_id = body_json(claim(&app).await).await["id"].as_str().unwrap().to_owned();
 
     let missing = app
@@ -414,14 +541,14 @@ async fn authentication_activity_records_attempts_without_recounting_ordinary_se
 
     let failed = app
         .clone()
-        .oneshot(
+        .oneshot(through_trusted_proxy(
             Request::get("/api/v2/users/me")
                 .header(header::AUTHORIZATION, basic("ADMIN@example.org", "wrong-secret"))
                 .header("forwarded", "for=198.51.100.7;proto=https")
                 .header(header::USER_AGENT, "activity-test")
                 .body(Body::empty())
                 .unwrap(),
-        )
+        ))
         .await
         .unwrap();
     assert_eq!(failed.status(), StatusCode::UNAUTHORIZED);

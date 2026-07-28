@@ -1,7 +1,7 @@
 # API compatibility surface
 
 The canonical machine-readable inventory is [`api-parity.json`](api-parity.json). It is pinned to
-the Kotlin baseline at commit `4ef86df` and currently contains 203 registered route templates. A
+the Kotlin baseline at commit `4ef86df` and currently contains 204 registered route templates. A
 template with multiple HTTP methods is one manifest entry.
 
 The inventory covers the core protocols used by Komga clients:

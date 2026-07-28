@@ -35,6 +35,7 @@ mod opds_v2;
 mod operations_routes;
 mod page_hash_routes;
 mod pagination;
+mod proxy;
 mod read_list_file_routes;
 mod read_list_match_routes;
 mod read_progress_routes;
@@ -70,8 +71,9 @@ use std::{
 
 const SOURCE_MUTATION_LOCK_COUNT: usize = 64;
 
-use auth::SessionStore;
+use auth::{AuthenticationLimiter, SessionStore};
 use axum::Router;
+use ipnet::IpNet;
 use komga_core::DomainEvent;
 use komga_search::{IndexState, SearchIndex};
 use komga_storage::{ServerSettings, Storage, StorageError, TaskRecord, TaskStorage};
@@ -81,14 +83,16 @@ use tokio_util::sync::CancellationToken;
 /// Shared dependencies used by the HTTP router.
 ///
 /// Construct this state with [`AppState::new`] and pass it to [`build_app`].
-/// Session state is intentionally process-local, matching the current Kotlin
-/// Caffeine session repository: restarting the process expires active sessions.
+/// Ordinary session state is process-local, matching Kotlin's Caffeine session
+/// repository. Signed remember-me cookies use the persisted server key and
+/// remain valid across restarts until expiry, password change, or key rotation.
 #[derive(Clone)]
 pub struct AppState {
     storage: Storage,
     search: SearchIndex,
     tasks: TaskStorage,
     sessions: SessionStore,
+    authentication_limiter: AuthenticationLimiter,
     claim_lock: Arc<Mutex<()>>,
     source_mutation_locks: Arc<[Mutex<()>; SOURCE_MUTATION_LOCK_COUNT]>,
     task_notify: Arc<Notify>,
@@ -115,6 +119,7 @@ pub struct AppState {
     configuration_kobo_proxy: bool,
     configuration_kepubify_path: Option<PathBuf>,
     cors_allowed_origins: Arc<[http::HeaderValue]>,
+    trusted_proxies: Arc<[IpNet]>,
 }
 
 /// Configuration-source and effective HTTP binding values exposed by the
@@ -175,7 +180,11 @@ impl AppState {
             storage,
             search,
             tasks,
-            sessions: SessionStore::new(server_settings.remember_me_duration_days),
+            sessions: SessionStore::new(
+                server_settings.remember_me_duration_days,
+                server_settings.remember_me_key.clone(),
+            ),
+            authentication_limiter: AuthenticationLimiter::default(),
             claim_lock: Arc::new(Mutex::new(())),
             source_mutation_locks: Arc::new(std::array::from_fn(|_| Mutex::new(()))),
             task_notify: Arc::new(Notify::new()),
@@ -203,6 +212,7 @@ impl AppState {
             configuration_kobo_proxy: false,
             configuration_kepubify_path: None,
             cors_allowed_origins: Arc::from([]),
+            trusted_proxies: Arc::from([]),
         })
     }
 
@@ -277,6 +287,14 @@ impl AppState {
         self
     }
 
+    /// Trusts proxy metadata only when the immediate TCP peer belongs to one
+    /// of the supplied IP networks.
+    #[must_use]
+    pub fn with_trusted_proxies(mut self, proxies: Vec<IpNet>) -> Self {
+        self.trusted_proxies = proxies.into();
+        self
+    }
+
     /// Loads optional OAuth2/OIDC configuration and performs OIDC discovery.
     ///
     /// A missing default `oauth2.json` disables OAuth. A missing explicit path,
@@ -286,12 +304,9 @@ impl AppState {
         Ok(self)
     }
 
-    async fn apply_server_settings(&self, settings: &ServerSettings, remember_me_key_renewed: bool) {
+    async fn apply_server_settings(&self, settings: &ServerSettings) {
         self.sessions
-            .set_remember_me_duration_days(settings.remember_me_duration_days);
-        if remember_me_key_renewed {
-            self.sessions.remove_remembered();
-        }
+            .set_remember_me_policy(settings.remember_me_duration_days, settings.remember_me_key.clone());
         self.task_pool_size.send_replace(settings.task_pool_size);
         self.task_notify.notify_waiters();
         self.kobo_proxy

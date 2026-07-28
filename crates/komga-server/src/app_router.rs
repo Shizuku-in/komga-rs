@@ -1,9 +1,11 @@
 //! Top-level REST router and middleware composition.
 
+use std::net::SocketAddr;
+
 use axum::{
     Router,
     body::Body,
-    extract::{DefaultBodyLimit, State},
+    extract::{ConnectInfo, DefaultBodyLimit, State},
     http::{HeaderMap, HeaderValue, Request, StatusCode, Uri, header, uri::Authority},
     middleware::{self, Next},
     response::Response,
@@ -20,9 +22,10 @@ use crate::webui_routes;
 use crate::{
     AppState, auth, authentication_activity_routes, book_file_routes, container_routes, content_routes,
     filesystem_routes, font_routes, history_routes, info_routes, kobo, koreader_routes, library_routes, media_routes,
-    metadata_routes, metrics_routes, oauth, opds_router, operations_routes, page_hash_routes, read_list_file_routes,
-    read_list_match_routes, read_progress_routes, referential_routes, routes, series_file_routes, settings_routes,
-    source_file_routes, source_import_routes, sse_routes, thumbnail_routes, transient_book_routes, webpub_routes,
+    metadata_routes, metrics_routes, oauth, opds_router, operations_routes, page_hash_routes, proxy,
+    read_list_file_routes, read_list_match_routes, read_progress_routes, referential_routes, routes,
+    series_file_routes, settings_routes, source_file_routes, source_import_routes, sse_routes, thumbnail_routes,
+    transient_book_routes, webpub_routes,
 };
 
 pub(crate) fn build(state: AppState) -> Router {
@@ -107,6 +110,10 @@ async fn apply_server_request_settings(
     mut request: Request<Body>,
     next: Next,
 ) -> Response {
+    let peer = request.extensions().get::<ConnectInfo<SocketAddr>>().copied();
+    if let Some(client) = proxy::prepare_request(request.headers_mut(), peer, &state.trusted_proxies) {
+        request.extensions_mut().insert(client);
+    }
     let has_forwarded_header = has_forwarded_header(request.headers());
     if !state.effective_server_context_path.is_empty()
         && !request.headers().contains_key("x-forwarded-prefix")
@@ -137,17 +144,7 @@ async fn apply_server_request_settings(
 }
 
 fn has_forwarded_header(headers: &axum::http::HeaderMap) -> bool {
-    [
-        "forwarded",
-        "x-forwarded-host",
-        "x-forwarded-port",
-        "x-forwarded-proto",
-        "x-forwarded-prefix",
-        "x-forwarded-ssl",
-        "x-forwarded-for",
-    ]
-    .iter()
-    .any(|name| headers.contains_key(*name))
+    proxy::FORWARDED_HEADERS.iter().any(|name| headers.contains_key(*name))
 }
 
 fn make_http_span(request: &Request<Body>) -> tracing::Span {

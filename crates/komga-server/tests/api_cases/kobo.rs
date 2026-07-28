@@ -77,7 +77,8 @@ async fn kobo_core_sync_progress_and_resources_form_a_complete_device_loop() {
     let state = AppState::new(storage.clone(), tasks)
         .await
         .unwrap()
-        .with_kobo_sync_item_limit(NonZeroUsize::new(1).unwrap());
+        .with_kobo_sync_item_limit(NonZeroUsize::new(1).unwrap())
+        .with_trusted_proxies(vec!["127.0.0.0/8".parse().unwrap()]);
     let app = build_app(state);
 
     assert_eq!(
@@ -130,13 +131,13 @@ async fn kobo_core_sync_progress_and_resources_form_a_complete_device_loop() {
 
     let initialization = app
         .clone()
-        .oneshot(
+        .oneshot(through_trusted_proxy(
             Request::get(format!("/kobo/{key}/v1/initialization"))
                 .header("forwarded", "for=192.0.2.1;proto=https;host=reader.example")
                 .header("x-forwarded-prefix", "/komga")
                 .body(Body::empty())
                 .unwrap(),
-        )
+        ))
         .await
         .unwrap();
     assert_eq!(initialization.status(), StatusCode::OK);

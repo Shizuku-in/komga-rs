@@ -332,7 +332,8 @@ async fn context_path_and_kobo_public_port_apply_without_overriding_forwarded_or
             configuration_context_path: None,
             effective_port: Some(25_601),
             effective_context_path: "/komga".into(),
-        });
+        })
+        .with_trusted_proxies(vec!["127.0.0.0/8".parse().unwrap()]);
     let app = build_app(state);
     assert_eq!(
         app.clone()
@@ -384,14 +385,14 @@ async fn context_path_and_kobo_public_port_apply_without_overriding_forwarded_or
 
     let forwarded = app
         .clone()
-        .oneshot(
+        .oneshot(through_trusted_proxy(
             Request::get(format!("/komga/kobo/{key}/v1/initialization"))
                 .header(header::HOST, "internal.example:25601")
                 .header("forwarded", "for=192.0.2.1;proto=https;host=public.example")
                 .header("x-forwarded-prefix", "/reader")
                 .body(Body::empty())
                 .unwrap(),
-        )
+        ))
         .await
         .unwrap();
     assert_eq!(forwarded.status(), StatusCode::OK);
