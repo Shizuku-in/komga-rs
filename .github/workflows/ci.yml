@@ -121,12 +121,13 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-          cache: npm
-          cache-dependency-path: webui/package-lock.json
-      - run: npm ci
-      - run: npm run lint
-      - run: npm run test:unit -- --runInBand
-      - run: npm run build
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - run: bun install --frozen-lockfile
+      - run: bun run lint
+      - run: bun run test:unit -- --runInBand
+      - run: bun run build
       - uses: actions/upload-artifact@v4
         with:
           name: webui-dist
@@ -255,15 +256,16 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-          cache: npm
-          cache-dependency-path: webui/package-lock.json
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: npm ci
+      - run: bun install --frozen-lockfile
         working-directory: webui
-      - run: npx playwright install --with-deps chromium
+      - run: bun x playwright install --with-deps chromium
         working-directory: webui
-      - run: npm run test:e2e
+      - run: bun run test:e2e
         working-directory: webui
       - uses: actions/upload-artifact@v4
         if: failure()

@@ -44,7 +44,7 @@ The mounted directories must be accessible to UID/GID 1000. The library mount is
 
 ### From Source
 
-Rust 1.96.1 or newer and Node.js 22.11 ~ 24 are required. Cargo builds and embeds the Web UI automatically.
+Rust 1.96.1 or newer, Node.js 22.11 ~ 24, and Bun 1.3.14 or newer in the 1.x series are required. Cargo builds and embeds the Web UI automatically.
 
 ```bash
 cargo run --release -p komga-server -- --config-dir ./config
@@ -95,18 +95,18 @@ Run the Web UI checks:
 
 ```bash
 cd webui
-npm ci
-npm run lint
-npm run test:unit -- --runInBand
-npm run build
+bun install --frozen-lockfile
+bun run lint
+bun run test:unit -- --runInBand
+bun run build
 ```
 
 Browser tests additionally require Playwright Chromium:
 
 ```bash
 cd webui
-npx playwright install chromium
-npm run test:e2e
+bun x playwright install chromium
+bun run test:e2e
 ```
 
 Production code lives in the root Rust workspace and `webui/`; the `komga/` submodule is the behavioral reference. See [AGENTS.md](AGENTS.md) for repository conventions.

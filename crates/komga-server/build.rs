@@ -104,17 +104,18 @@ fn package_webui() -> Result<(), String> {
         let webui_dir = workspace_dir.join("webui");
         watch_webui_inputs(&webui_dir);
         validate_node(&webui_dir)?;
+        validate_bun(&webui_dir)?;
         install_dependencies(&webui_dir)?;
         remove_directory(&output_dir).map_err(|error| format!("could not clear {}: {error}", output_dir.display()))?;
         run(
-            Command::new(npm_command())
+            Command::new(bun_command())
                 .current_dir(&webui_dir)
                 .arg("run")
                 .arg("build")
                 .arg("--")
                 .arg("--dest")
                 .arg(&output_dir),
-            "npm run build",
+            "bun run build",
         )?;
     }
 
@@ -126,7 +127,7 @@ fn watch_webui_inputs(webui_dir: &Path) {
         ".browserslistrc",
         ".env",
         "babel.config.js",
-        "package-lock.json",
+        "bun.lock",
         "package.json",
         "postcss.config.js",
         "public",
@@ -167,20 +168,59 @@ fn validate_node(webui_dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
+fn validate_bun(webui_dir: &Path) -> Result<(), String> {
+    let output = Command::new(bun_command())
+        .arg("--version")
+        .current_dir(webui_dir)
+        .output()
+        .map_err(|error| format!("Bun 1.3.14 or newer in the 1.x series is required: {error}"))?;
+    if !output.status.success() {
+        return Err(format!("Bun version check failed with {}", output.status));
+    }
+    let version =
+        String::from_utf8(output.stdout).map_err(|error| format!("Bun returned a non-UTF-8 version: {error}"))?;
+    let version = version.trim();
+    let mut components = version.split('.');
+    let major = components
+        .next()
+        .and_then(|value| value.parse::<u32>().ok())
+        .ok_or_else(|| format!("could not parse Bun version {version:?}"))?;
+    let minor = components
+        .next()
+        .and_then(|value| value.parse::<u32>().ok())
+        .ok_or_else(|| format!("could not parse Bun version {version:?}"))?;
+    let patch = components
+        .next()
+        .and_then(|value| value.split('-').next())
+        .and_then(|value| value.parse::<u32>().ok())
+        .ok_or_else(|| format!("could not parse Bun version {version:?}"))?;
+    if major != 1 || (minor, patch) < (3, 14) {
+        return Err(format!(
+            "Bun {version} is unsupported; install a version in the range >=1.3.14 <2"
+        ));
+    }
+    Ok(())
+}
+
 fn install_dependencies(webui_dir: &Path) -> Result<(), String> {
-    let lock = fs::read(webui_dir.join("package-lock.json"))
-        .map_err(|error| format!("could not read package-lock.json: {error}"))?;
-    let stamp = webui_dir.join("node_modules/.komga-package-lock");
+    let lock = fs::read(webui_dir.join("bun.lock")).map_err(|error| format!("could not read bun.lock: {error}"))?;
+    let stamp = webui_dir.join("node_modules/.komga-bun-lock");
     if fs::read(&stamp).ok().as_deref() == Some(lock.as_slice()) {
         return Ok(());
     }
 
-    run(Command::new(npm_command()).current_dir(webui_dir).arg("ci"), "npm ci")?;
+    run(
+        Command::new(bun_command())
+            .current_dir(webui_dir)
+            .arg("install")
+            .arg("--frozen-lockfile"),
+        "bun install --frozen-lockfile",
+    )?;
     fs::write(&stamp, lock).map_err(|error| format!("could not write dependency stamp {}: {error}", stamp.display()))
 }
 
-fn npm_command() -> &'static str {
-    if cfg!(windows) { "npm.cmd" } else { "npm" }
+fn bun_command() -> &'static str {
+    if cfg!(windows) { "bun.exe" } else { "bun" }
 }
 
 fn run(command: &mut Command, description: &str) -> Result<(), String> {

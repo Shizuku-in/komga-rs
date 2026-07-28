@@ -8,19 +8,19 @@ Production builds must use this root copy. The `komga/` submodule remains the
 read-only behavioral reference and is not the source for packaged Web UI
 assets.
 
-Node.js 24 is the default toolchain. Install dependencies and run the explicit
-quality gates with:
+Node.js 24 and Bun 1.3.14 are the default toolchain. Install dependencies and
+run the explicit quality gates with:
 
 ```bash
-npm ci
-npm run lint
-npm run test:unit -- --runInBand
-npm run build
+bun install --frozen-lockfile
+bun run lint
+bun run test:unit -- --runInBand
+bun run build
 ```
 
 Production builds transpile TypeScript without running the memory-intensive
 Vue CLI type-checking plugin. Sass is compiled with Sass Embedded's shared
-modern compiler; dependency versions are pinned by `package-lock.json`.
+modern compiler; dependency versions are pinned by `bun.lock`.
 
 The default `komga-server` Cargo feature builds this directory and embeds the
 result in the binary. Set `KOMGA_WEBUI_DIST_DIR` to reuse a production `dist`

@@ -1,7 +1,10 @@
 # syntax=docker/dockerfile:1.7
 
 ARG NODE_IMAGE=node:24-bookworm-slim
+ARG BUN_IMAGE=oven/bun:1.3.14
 ARG UBUNTU_IMAGE=ubuntu:24.04
+
+FROM --platform=$BUILDPLATFORM ${BUN_IMAGE} AS bun
 
 FROM --platform=$BUILDPLATFORM ${NODE_IMAGE} AS webui
 
@@ -9,11 +12,13 @@ RUN apt-get update \
     && apt-get install --yes --no-install-recommends ca-certificates git \
     && rm -rf /var/lib/apt/lists/*
 
+COPY --from=bun /usr/local/bin/bun /usr/local/bin/bun
+
 WORKDIR /build/webui
-COPY webui/package.json webui/package-lock.json ./
-RUN --mount=type=cache,target=/root/.npm npm ci
+COPY webui/package.json webui/bun.lock ./
+RUN --mount=type=cache,target=/root/.bun/install/cache bun install --frozen-lockfile
 COPY webui/ ./
-RUN npm run build
+RUN bun run build
 
 FROM ${UBUNTU_IMAGE} AS builder
 

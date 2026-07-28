@@ -16,7 +16,7 @@ export default async function globalSetup(): Promise<void> {
   const repositoryRoot = path.resolve(webuiRoot, '..')
   const dist = path.join(webuiRoot, 'dist')
   if (!fs.existsSync(path.join(dist, 'index.html'))) {
-    throw new Error('webui/dist is missing; run npm run build before npm run test:e2e')
+    throw new Error('webui/dist is missing; run bun run build before bun run test:e2e')
   }
   const build = spawnSync('cargo', ['build', '--locked', '-p', 'komga-server'], {
     cwd: repositoryRoot,
