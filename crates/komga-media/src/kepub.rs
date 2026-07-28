@@ -37,7 +37,7 @@ use ego_tree::NodeId;
 use html5ever::{Attribute, LocalName, Namespace, QualName};
 use percent_encoding::percent_decode_str;
 use quick_xml::{
-    Reader, Writer,
+    Reader, Writer, XmlVersion,
     events::{BytesEnd, BytesStart, Event},
 };
 use roxmltree::Node as XmlNode;
@@ -702,7 +702,7 @@ fn transform_cover_item(
         }
         let key = String::from_utf8_lossy(attribute.key.as_ref()).into_owned();
         let value = attribute
-            .decode_and_unescape_value(reader.decoder())
+            .decoded_and_normalized_value(XmlVersion::Implicit1_0, reader.decoder())
             .map_err(|error| KepubConversionError::ContentConversion(format!("invalid OPF attribute: {error}")))?;
         let escaped = quick_xml::escape::escape(value);
         transformed.push_attribute((key.as_str(), escaped.as_ref()));
@@ -721,7 +721,7 @@ fn attribute_value(
             .map_err(|error| KepubConversionError::ContentConversion(format!("invalid XML attribute: {error}")))?;
         if local_bytes_name(attribute.key.as_ref()) == name.as_bytes() {
             return attribute
-                .decode_and_unescape_value(reader.decoder())
+                .decoded_and_normalized_value(XmlVersion::Implicit1_0, reader.decoder())
                 .map(|value| Some(value.into_owned()))
                 .map_err(|error| {
                     KepubConversionError::ContentConversion(format!("invalid XML attribute value: {error}"))

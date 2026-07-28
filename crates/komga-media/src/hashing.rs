@@ -126,7 +126,7 @@ pub fn hash_file_koreader(path: &Path, cancelled: impl Fn() -> bool) -> Result<S
             digest.update(&buffer[..count]);
         }
     }
-    Ok(format!("{:x}", digest.finalize()))
+    Ok(hex::encode(digest.finalize()))
 }
 
 /// Computes a deterministic page-content hash.
@@ -288,7 +288,7 @@ mod tests {
         expected.update(&content[4_096..]);
         assert_eq!(
             hash_file_koreader(&path, || false).unwrap(),
-            format!("{:x}", expected.finalize())
+            hex::encode(expected.finalize())
         );
     }
 

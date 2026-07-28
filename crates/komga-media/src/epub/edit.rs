@@ -8,7 +8,7 @@ use std::{
 
 use komga_core::{Book, EPUB_MEDIA_TYPE, HashedPageTarget, Media, MediaStatus};
 use quick_xml::{
-    Reader, Writer,
+    Reader, Writer, XmlVersion,
     events::{BytesStart, Event},
 };
 use roxmltree::Document;
@@ -604,7 +604,7 @@ fn collect_element_references(
             continue;
         }
         let value = attribute
-            .decode_and_unescape_value(reader.decoder())
+            .decoded_and_normalized_value(XmlVersion::Implicit1_0, reader.decoder())
             .map_err(|error| PageRemovalError::Unsupported(format!("invalid EPUB resource URL: {error}")))?;
         if let Some(path) = normalized_local_reference(base_dir, &value)? {
             references.insert(path);
@@ -1012,7 +1012,7 @@ fn attribute_value(
             .map_err(|error| PageRemovalError::Unsupported(format!("invalid EPUB package attribute: {error}")))?;
         if local_bytes_name(attribute.key.as_ref()) == name {
             return attribute
-                .decode_and_unescape_value(reader.decoder())
+                .decoded_and_normalized_value(XmlVersion::Implicit1_0, reader.decoder())
                 .map(|value| Some(value.into_owned()))
                 .map_err(|error| PageRemovalError::Unsupported(format!("invalid EPUB package attribute: {error}")));
         }

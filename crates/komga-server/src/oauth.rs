@@ -31,7 +31,7 @@ use openidconnect::{
     RedirectUrl as OidcRedirectUrl, Scope as OidcScope, SignatureVerificationError, TokenResponse as OidcTokenResponse,
     core::{CoreAuthenticationFlow, CoreClient, CoreProviderMetadata, CoreUserInfoClaims},
 };
-use rand::RngCore;
+use rand::Rng;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use thiserror::Error;

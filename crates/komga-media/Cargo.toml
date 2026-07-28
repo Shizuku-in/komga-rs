@@ -15,6 +15,7 @@ ego-tree.workspace = true
 hayro.workspace = true
 hayro-jpeg2000.workspace = true
 hayro-write.workspace = true
+hex.workspace = true
 html5ever.workspace = true
 image.workspace = true
 infer.workspace = true

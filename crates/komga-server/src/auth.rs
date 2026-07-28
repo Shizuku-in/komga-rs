@@ -24,7 +24,7 @@ use axum::{
 use base64::{Engine, engine::general_purpose::STANDARD};
 use komga_core::{ApiKey, AuthenticationActivity, User, UserRole};
 use moka::{Expiry, policy::EvictionPolicy, sync::Cache};
-use rand::RngCore;
+use rand::Rng;
 use sha2::{Digest, Sha256, Sha512};
 use tokio::sync::Semaphore;
 use url::Url;
