@@ -39,7 +39,7 @@ pub struct Config {
     #[arg(long, env = "KOMGA_OAUTH2_CONFIG_FILE")]
     pub oauth2_config_file: Option<PathBuf>,
 
-    /// Number of pages hashed from both the start and end of ZIP books.
+    /// Number of pages hashed from both ends of each hashable book.
     #[arg(long, env = "KOMGA_PAGE_HASHING", default_value = "3")]
     pub page_hashing: NonZeroUsize,
 

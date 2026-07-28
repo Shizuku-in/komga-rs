@@ -28,8 +28,8 @@ pub use barcode::extract_isbn_barcode;
 pub use comicrack::{ComicRackListError, parse_read_list};
 pub use epub::rewrite_hashed_epub_pages;
 pub use hashing::{
-    ComputedPageHash, FileHashError, PageHashError, RAW_PAGE_HASH_ALGORITHM, RGB_PAGE_HASH_ALGORITHM, hash_file,
-    hash_file_koreader, hash_page, reconcile_scan_hashes,
+    ComputedPageHash, FileHashError, PDF_PAGE_HASH_ALGORITHM, PageHashError, RAW_PAGE_HASH_ALGORITHM,
+    RGB_PAGE_HASH_ALGORITHM, hash_file, hash_file_koreader, hash_page, reconcile_scan_hashes,
 };
 pub use kepub::{KepubConversionError, convert_epub_to_kepub, validate_kepub_conversion};
 pub use metadata::{
@@ -37,7 +37,7 @@ pub use metadata::{
     extract_comic_info_metadata, extract_epub_metadata, extract_mylar_metadata,
 };
 pub use page_removal::{PageRemovalError, PageRemovalRewrite};
-pub use pdf::{HashedPdfPage, PdfPageRenderer};
+pub use pdf::PdfPageRenderer;
 pub use pdf_edit::rewrite_hashed_pdf_pages;
 pub use rar_conversion::{RarToCbzConversion, RarToCbzError, convert_rar_to_cbz, rewrite_hashed_rar_pages_to_cbz};
 pub use zip_edit::rewrite_hashed_zip_pages;

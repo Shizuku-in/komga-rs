@@ -1063,7 +1063,7 @@ mod tests {
 
     use chrono::Utc;
     use komga_core::{Library, PageHashAction, User, page_progress, scan_library_files};
-    use komga_media::{analyze_book, extract_page, hash_page};
+    use komga_media::{PdfPageRenderer, analyze_book, extract_page, hash_page};
     use komga_search::{EntityKind, SearchMutation};
     use komga_storage::{PageHashUpdate, Storage, TaskStorage};
     use pdf_writer::{Content, Finish, Rect, Ref};
@@ -1643,13 +1643,13 @@ mod tests {
         storage.replace_media_analysis(&analyzed).await.unwrap();
         let book = storage.find_book_by_id(&book.id).await.unwrap().unwrap();
         let media = storage.find_media_by_book_id(&book.id).await.unwrap().unwrap();
+        let renderer = PdfPageRenderer::open(&path).unwrap();
         let updates = media
             .pages
             .iter()
             .enumerate()
             .map(|(index, page)| {
-                let content = extract_page(&book, &media, i32::try_from(index + 1).unwrap()).unwrap();
-                let computed = hash_page(&content.bytes, &content.media_type).unwrap();
+                let computed = renderer.hash_page(index).unwrap().0;
                 PageHashUpdate {
                     number: i32::try_from(index).unwrap(),
                     file_name: page.file_name.clone(),

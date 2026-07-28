@@ -435,9 +435,44 @@ mod tests {
     use std::fs;
 
     use komga_core::{Library, PageHashAction, PageRequest, SortDirection, SortOrder, scan_library_files};
+    use sqlx::Row;
     use url::Url;
 
     use super::*;
+
+    #[tokio::test]
+    async fn duplicate_hash_queries_use_the_media_page_hash_index() {
+        let storage = Storage::connect_memory().await.unwrap();
+        let grouped_plan = sqlx::query(
+            r#"EXPLAIN QUERY PLAN
+               SELECT mp.FILE_HASH
+                 FROM MEDIA_PAGE mp
+                WHERE mp.FILE_HASH <> ''
+                  AND NOT EXISTS (SELECT 1 FROM PAGE_HASH ph WHERE ph.HASH = mp.FILE_HASH)
+                GROUP BY mp.FILE_HASH HAVING COUNT(*) > 1"#,
+        )
+        .fetch_all(&storage.pool)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|row| row.get::<String, _>("detail"))
+        .collect::<Vec<_>>();
+        let match_plan = sqlx::query("EXPLAIN QUERY PLAN SELECT COUNT(*) FROM MEDIA_PAGE WHERE FILE_HASH = ?")
+            .bind("hash")
+            .fetch_all(&storage.pool)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|row| row.get::<String, _>("detail"))
+            .collect::<Vec<_>>();
+
+        for plan in [grouped_plan, match_plan] {
+            assert!(
+                plan.iter().any(|detail| detail.contains("idx__media_page__file_hash")),
+                "query plan did not use the page hash index: {plan:?}"
+            );
+        }
+    }
 
     #[tokio::test]
     async fn known_unknown_matches_and_updates_follow_kotlin_contract() {

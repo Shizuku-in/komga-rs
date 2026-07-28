@@ -103,8 +103,8 @@ pub fn rewrite_hashed_pdf_pages(
             return Err(PageRemovalError::Cancelled);
         }
         let index = usize::try_from(target.page_number - 1).expect("validated positive page number");
-        let rendered = source_renderer.render_page_with_hash(index).map_err(media_error)?;
-        if rendered.hash.hash != target.file_hash {
+        let (hash, _) = source_renderer.hash_page(index).map_err(media_error)?;
+        if hash.hash != target.file_hash {
             return Err(PageRemovalError::Stale(format!(
                 "rendered hash changed for page {}",
                 target.page_number
@@ -155,10 +155,12 @@ pub fn rewrite_hashed_pdf_pages(
                 return Err(PageRemovalError::Cancelled);
             }
             let source_render = source_renderer
-                .render_page_with_hash(original_index)
+                .render_page_validation_hash(original_index)
                 .map_err(media_error)?;
-            let output_render = output_renderer.render_page_with_hash(new_index).map_err(media_error)?;
-            if source_render.hash != output_render.hash || source_render.dimension != output_render.dimension {
+            let output_render = output_renderer
+                .render_page_validation_hash(new_index)
+                .map_err(media_error)?;
+            if source_render != output_render {
                 return Err(PageRemovalError::Validation(format!(
                     "rewritten page {} does not render like original page {}",
                     new_index + 1,
@@ -244,8 +246,8 @@ mod tests {
     use url::Url;
 
     use super::*;
-    use crate::{analyze_book, extract_page, hash_page};
-    use komga_core::{Dimension, new_id};
+    use crate::analyze_book;
+    use komga_core::new_id;
 
     #[test]
     fn removes_pdf_pages_in_order_and_preserves_rendered_content() {
@@ -259,6 +261,7 @@ mod tests {
         pdf::reset_pdf_counters();
         let rewrite = rewrite_hashed_pdf_pages(&book, &media, &[target(&media, 2)], &output, true, || false).unwrap();
         assert_eq!(pdf::pdf_counters(), (2, 5));
+        assert_eq!(pdf::pdf_jpeg_encode_count(), 0);
 
         assert_eq!(fs::read(&source).unwrap(), original_bytes);
         assert_eq!(rewrite.retained_original_indices, [0, 2]);
@@ -347,7 +350,7 @@ mod tests {
     }
 
     #[test]
-    fn reused_pdf_renderer_preserves_jpeg_hash_dimensions_and_bounds() {
+    fn reused_pdf_renderer_separates_output_hash_and_validation_renders() {
         let temporary = tempfile::tempdir().unwrap();
         let source = temporary.path().join("book.pdf");
         fs::write(&source, colored_pdf()).unwrap();
@@ -355,25 +358,23 @@ mod tests {
         pdf::reset_pdf_counters();
         let renderer = PdfPageRenderer::open(&source).unwrap();
         let ordinary = renderer.render_page(0).unwrap();
-        let hashed = renderer.render_page_with_hash(0).unwrap();
-        let later_page = renderer.render_page_with_hash(2).unwrap();
+        let hashed = renderer.hash_page(0).unwrap();
+        let later_page = renderer.hash_page(2).unwrap();
+        let validation = renderer.render_page_validation_hash(0).unwrap();
 
-        assert_eq!(ordinary, hashed.content);
-        assert_eq!(hashed.hash, hash_page(&ordinary.bytes, &ordinary.media_type).unwrap());
         let decoded = image::load_from_memory(&ordinary.bytes).unwrap();
-        assert_eq!(
-            hashed.dimension,
-            Dimension {
-                width: i32::try_from(decoded.width()).unwrap(),
-                height: i32::try_from(decoded.height()).unwrap(),
-            }
-        );
-        assert_ne!(hashed.hash.hash, later_page.hash.hash);
+        assert_eq!(decoded.width().min(decoded.height()), 3200);
+        assert_eq!(hashed.1.width.min(hashed.1.height), 1024);
+        assert_eq!(hashed.0.algorithm, crate::PDF_PAGE_HASH_ALGORITHM);
+        assert_ne!(hashed.0.hash, later_page.0.hash);
+        assert_eq!(validation.1.width.min(validation.1.height), 512);
+        assert_ne!(validation.1, hashed.1);
         assert!(matches!(
             renderer.render_page(renderer.page_count()),
             Err(crate::MediaOperationError::PageOutOfBounds)
         ));
-        assert_eq!(pdf::pdf_counters(), (1, 3));
+        assert_eq!(pdf::pdf_counters(), (1, 4));
+        assert_eq!(pdf::pdf_jpeg_encode_count(), 1);
     }
 
     #[test]
@@ -387,7 +388,7 @@ mod tests {
         let renderer = PdfPageRenderer::open(&path).unwrap();
         let page_count = renderer.page_count();
         for index in 0..page_count {
-            renderer.render_page_with_hash(index).unwrap();
+            renderer.hash_page(index).unwrap();
         }
         let (parse_count, render_count) = pdf::pdf_counters();
         eprintln!(
@@ -442,9 +443,9 @@ mod tests {
             last_modified_date: None,
         };
         let mut media = analyze_book(&book, true, || false).unwrap();
+        let renderer = PdfPageRenderer::open(path).unwrap();
         for index in 0..media.pages.len() {
-            let content = extract_page(&book, &media, i32::try_from(index + 1).unwrap()).unwrap();
-            media.pages[index].file_hash = hash_page(&content.bytes, &content.media_type).unwrap().hash;
+            media.pages[index].file_hash = renderer.hash_page(index).unwrap().0.hash;
         }
         (book, media)
     }

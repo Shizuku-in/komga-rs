@@ -1,7 +1,8 @@
 use chrono::{DateTime, Local};
 use komga_core::{EPUB_MEDIA_TYPE, MediaStatus, PDF_MEDIA_TYPE, RAR4_MEDIA_TYPE, RAR5_MEDIA_TYPE, ZIP_MEDIA_TYPE};
 use komga_media::{
-    MediaOperationError, PageHashError, PdfPageRenderer, RGB_PAGE_HASH_ALGORITHM, extract_page, hash_page,
+    MediaOperationError, PDF_PAGE_HASH_ALGORITHM, PageHashError, PdfPageRenderer, RGB_PAGE_HASH_ALGORITHM,
+    extract_page, hash_page,
 };
 use komga_storage::PageHashUpdate;
 
@@ -41,7 +42,12 @@ pub(super) async fn process_find_missing_page_hashes_task(state: &AppState, task
     }
     let targets = match state
         .storage
-        .list_books_with_incomplete_page_hashes(&library.id, state.page_hashing.get(), RGB_PAGE_HASH_ALGORITHM)
+        .list_books_with_incomplete_page_hashes(
+            &library.id,
+            state.page_hashing.get(),
+            RGB_PAGE_HASH_ALGORITHM,
+            PDF_PAGE_HASH_ALGORITHM,
+        )
         .await
     {
         Ok(targets) => targets,
@@ -109,7 +115,12 @@ pub(super) async fn process_hash_book_pages_task(state: &AppState, task: &TaskRe
     }
     let targets = match state
         .storage
-        .list_page_hash_targets(&book.id, state.page_hashing.get(), RGB_PAGE_HASH_ALGORITHM)
+        .list_page_hash_targets(
+            &book.id,
+            state.page_hashing.get(),
+            RGB_PAGE_HASH_ALGORITHM,
+            PDF_PAGE_HASH_ALGORITHM,
+        )
         .await
     {
         Ok(targets) if targets.is_empty() => {
@@ -157,10 +168,7 @@ pub(super) async fn process_hash_book_pages_task(state: &AppState, task: &TaskRe
                 return Err(PageHashWorkError::StaleSnapshot);
             }
             let computed = if let Some(renderer) = &pdf_renderer {
-                renderer
-                    .render_page_with_hash(index)
-                    .map_err(PageHashWorkError::Media)?
-                    .hash
+                renderer.hash_page(index).map_err(PageHashWorkError::Media)?.0
             } else {
                 let content = extract_page(&hashing_book, &hashing_media, target.number.saturating_add(1))
                     .map_err(PageHashWorkError::Media)?;
@@ -335,7 +343,7 @@ mod tests {
         assert!(persisted.pages[6..].iter().all(|page| !page.file_hash.is_empty()));
         assert!(
             storage
-                .list_page_hash_targets(&book.id, 2, RGB_PAGE_HASH_ALGORITHM)
+                .list_page_hash_targets(&book.id, 2, RGB_PAGE_HASH_ALGORITHM, PDF_PAGE_HASH_ALGORITHM,)
                 .await
                 .unwrap()
                 .is_empty()
@@ -434,7 +442,7 @@ mod tests {
         }
         assert!(
             storage
-                .list_page_hash_targets(&fixed.id, 1, RGB_PAGE_HASH_ALGORITHM)
+                .list_page_hash_targets(&fixed.id, 1, RGB_PAGE_HASH_ALGORITHM, PDF_PAGE_HASH_ALGORITHM,)
                 .await
                 .unwrap()
                 .is_empty()
@@ -485,7 +493,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn pdf_hash_task_hashes_rendered_jpeg_edges_with_rgb_algorithm() {
+    async fn pdf_hash_task_hashes_normalized_rgb_edges_without_jpeg_roundtrip() {
         let storage = Storage::connect_memory().await.unwrap();
         let tasks = TaskStorage::connect_memory().await.unwrap();
         let temporary = tempfile::tempdir().unwrap();
@@ -542,7 +550,7 @@ mod tests {
         assert!(!persisted.pages[2].file_hash.is_empty());
         assert!(
             storage
-                .list_page_hash_targets(&book.id, 1, RGB_PAGE_HASH_ALGORITHM)
+                .list_page_hash_targets(&book.id, 1, RGB_PAGE_HASH_ALGORITHM, PDF_PAGE_HASH_ALGORITHM,)
                 .await
                 .unwrap()
                 .is_empty()

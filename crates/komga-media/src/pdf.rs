@@ -12,21 +12,15 @@ use image::{RgbImage, codecs::jpeg::JpegEncoder};
 use komga_core::{BookPage, Dimension, JPEG_MEDIA_TYPE, Media, MediaStatus, PDF_MEDIA_TYPE};
 use pdf_writer::Ref;
 
-use crate::{ComputedPageHash, MediaOperationError, TypedBytes, hashing::hash_bytes, hashing::hash_jpeg_page};
+use crate::{
+    ComputedPageHash, MediaOperationError, TypedBytes,
+    hashing::{fingerprint_rgb_page, hash_bytes, hash_pdf_page},
+};
 
 const RENDER_SHORT_EDGE: f32 = 3200.0;
+const HASH_SHORT_EDGE: f32 = 1024.0;
+const VALIDATION_SHORT_EDGE: f32 = 512.0;
 const JPEG_QUALITY: u8 = 75;
-
-/// One rendered PDF page together with its canonical V1 hash and output size.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct HashedPdfPage {
-    /// JPEG bytes produced by the ordinary PDF rendering path.
-    pub content: TypedBytes,
-    /// Canonical `RGB24_XXH3_128_V1` hash of the decoded JPEG.
-    pub hash: ComputedPageHash,
-    /// Decoded JPEG dimensions used by the hash.
-    pub dimension: Dimension,
-}
 
 self_cell::self_cell! {
     struct PdfRenderSession {
@@ -90,20 +84,33 @@ impl PdfPageRenderer {
         })
     }
 
-    /// Renders one page and computes its V1 hash and dimensions with one JPEG decode.
+    pub(crate) fn render_page_validation_hash(&self, index: usize) -> Result<(String, Dimension), MediaOperationError> {
+        self.session.with_dependent(|document, cache| {
+            let page = document
+                .pages()
+                .get(index)
+                .ok_or(MediaOperationError::PageOutOfBounds)?;
+            let image = render_page_rgb_with_cache(page, cache, VALIDATION_SHORT_EDGE)?;
+            record_pdf_render();
+            Ok(fingerprint_rgb_page(&image))
+        })
+    }
+
+    /// Computes a normalized PDF page hash without JPEG encoding or decoding.
     ///
     /// # Errors
     ///
-    /// Returns the same rendering errors as [`Self::render_page`] or an image
-    /// error if the generated JPEG cannot be decoded.
-    pub fn render_page_with_hash(&self, index: usize) -> Result<HashedPdfPage, MediaOperationError> {
-        let content = self.render_page(index)?;
-        let (hash, dimension) =
-            hash_jpeg_page(&content.bytes).map_err(|error| MediaOperationError::Image(error.to_string()))?;
-        Ok(HashedPdfPage {
-            content,
-            hash,
-            dimension,
+    /// Returns [`MediaOperationError::PageOutOfBounds`] for an invalid index or
+    /// an image error for unsupported dimensions.
+    pub fn hash_page(&self, index: usize) -> Result<(ComputedPageHash, Dimension), MediaOperationError> {
+        self.session.with_dependent(|document, cache| {
+            let page = document
+                .pages()
+                .get(index)
+                .ok_or(MediaOperationError::PageOutOfBounds)?;
+            let image = render_page_rgb_with_cache(page, cache, HASH_SHORT_EDGE)?;
+            record_pdf_render();
+            Ok(hash_pdf_page(&image))
         })
     }
 
@@ -185,7 +192,25 @@ pub(crate) fn render_page(path: &Path, index: usize) -> Result<TypedBytes, Media
 }
 
 fn render_page_with_cache<'a>(page: &'a Page<'a>, cache: &RenderCache<'a>) -> Result<TypedBytes, MediaOperationError> {
-    let scale = render_scale(page)
+    let image = render_page_rgb_with_cache(page, cache, RENDER_SHORT_EDGE)?;
+    let mut bytes = Vec::new();
+    JpegEncoder::new_with_quality(&mut bytes, JPEG_QUALITY)
+        .encode_image(&image)
+        .map_err(|error| MediaOperationError::Image(error.to_string()))?;
+    record_pdf_render();
+    record_pdf_jpeg_encode();
+    Ok(TypedBytes {
+        bytes,
+        media_type: JPEG_MEDIA_TYPE.to_owned(),
+    })
+}
+
+fn render_page_rgb_with_cache<'a>(
+    page: &'a Page<'a>,
+    cache: &RenderCache<'a>,
+    short_edge: f32,
+) -> Result<RgbImage, MediaOperationError> {
+    let scale = render_scale(page, short_edge)
         .ok_or_else(|| MediaOperationError::Image("PDF page has invalid or unsupported dimensions".to_owned()))?;
     let pixmap = render(
         page,
@@ -205,17 +230,8 @@ fn render_page_with_cache<'a>(page: &'a Page<'a>, cache: &RenderCache<'a>) -> Re
     for pixel in rgba {
         rgb.extend_from_slice(&[pixel.r, pixel.g, pixel.b]);
     }
-    let image = RgbImage::from_raw(width, height, rgb)
-        .ok_or_else(|| MediaOperationError::Image("PDF renderer returned invalid pixel data".to_owned()))?;
-    let mut bytes = Vec::new();
-    JpegEncoder::new_with_quality(&mut bytes, JPEG_QUALITY)
-        .encode_image(&image)
-        .map_err(|error| MediaOperationError::Image(error.to_string()))?;
-    record_pdf_render();
-    Ok(TypedBytes {
-        bytes,
-        media_type: JPEG_MEDIA_TYPE.to_owned(),
-    })
+    RgbImage::from_raw(width, height, rgb)
+        .ok_or_else(|| MediaOperationError::Image("PDF renderer returned invalid pixel data".to_owned()))
 }
 
 pub(crate) fn extract_page(path: &Path, index: usize) -> Result<TypedBytes, MediaOperationError> {
@@ -230,7 +246,7 @@ pub(crate) fn extract_page(path: &Path, index: usize) -> Result<TypedBytes, Medi
 pub(crate) fn output_dimension(dimension: Dimension) -> Option<Dimension> {
     let width = dimension.width as f32;
     let height = dimension.height as f32;
-    let scale = scale(width, height, width, height)?;
+    let scale = scale(width, height, width, height, RENDER_SHORT_EDGE)?;
     Some(Dimension {
         width: rounded_i32(f64::from(width * scale))?,
         height: rounded_i32(f64::from(height * scale))?,
@@ -248,6 +264,7 @@ fn load(path: &Path) -> Result<Pdf, MediaOperationError> {
 thread_local! {
     static PDF_PARSE_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static PDF_RENDER_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static PDF_JPEG_ENCODE_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 fn record_pdf_parse() {
@@ -260,15 +277,26 @@ fn record_pdf_render() {
     PDF_RENDER_COUNT.set(PDF_RENDER_COUNT.get() + 1);
 }
 
+fn record_pdf_jpeg_encode() {
+    #[cfg(test)]
+    PDF_JPEG_ENCODE_COUNT.set(PDF_JPEG_ENCODE_COUNT.get() + 1);
+}
+
 #[cfg(test)]
 pub(crate) fn reset_pdf_counters() {
     PDF_PARSE_COUNT.set(0);
     PDF_RENDER_COUNT.set(0);
+    PDF_JPEG_ENCODE_COUNT.set(0);
 }
 
 #[cfg(test)]
 pub(crate) fn pdf_counters() -> (usize, usize) {
     (PDF_PARSE_COUNT.get(), PDF_RENDER_COUNT.get())
+}
+
+#[cfg(test)]
+pub(crate) fn pdf_jpeg_encode_count() -> usize {
+    PDF_JPEG_ENCODE_COUNT.get()
 }
 
 fn dimension_from_page(page: &Page<'_>) -> Option<Dimension> {
@@ -284,20 +312,20 @@ fn rounded_i32(value: f64) -> Option<i32> {
     (rounded.is_finite() && rounded >= f64::from(i32::MIN) && rounded <= f64::from(i32::MAX)).then_some(rounded as i32)
 }
 
-fn render_scale(page: &Page<'_>) -> Option<f32> {
+fn render_scale(page: &Page<'_>, short_edge: f32) -> Option<f32> {
     let crop_box = page.crop_box();
     let crop_width = crop_box.width() as f32;
     let crop_height = crop_box.height() as f32;
     let (render_width, render_height) = page.render_dimensions();
-    scale(crop_width, crop_height, render_width, render_height)
+    scale(crop_width, crop_height, render_width, render_height, short_edge)
 }
 
-fn scale(crop_width: f32, crop_height: f32, render_width: f32, render_height: f32) -> Option<f32> {
-    let values = [crop_width, crop_height, render_width, render_height];
+fn scale(crop_width: f32, crop_height: f32, render_width: f32, render_height: f32, short_edge: f32) -> Option<f32> {
+    let values = [crop_width, crop_height, render_width, render_height, short_edge];
     if values.iter().any(|value| !value.is_finite() || *value <= 0.0) {
         return None;
     }
-    let requested = RENDER_SHORT_EDGE / crop_width.min(crop_height);
+    let requested = short_edge / crop_width.min(crop_height);
     let viewport_limit = f32::from(u16::MAX) / render_width.max(render_height);
     Some(requested.min(viewport_limit))
 }

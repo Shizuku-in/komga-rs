@@ -335,11 +335,11 @@ async fn fresh_and_kotlin_databases_share_the_supported_schema_contract() {
     );
     assert_eq!(
         scalar_i64(&fresh_main, "SELECT COUNT(*) FROM _sqlx_migrations WHERE success=1").await,
-        15
+        16
     );
     assert_eq!(
         scalar_i64(&kotlin_main, "SELECT COUNT(*) FROM _sqlx_migrations WHERE success=1").await,
-        15
+        16
     );
     assert_eq!(
         scalar_i64(&fresh_tasks, "SELECT COUNT(*) FROM _sqlx_migrations WHERE success=1").await,
@@ -717,7 +717,7 @@ async fn kotlin_database_round_trips_every_supported_storage_domain() {
 }
 
 #[tokio::test]
-async fn page_hash_migration_resets_kotlin_jpeg_hashes_and_rules() {
+async fn page_hash_migrations_reset_versioned_hashes_and_rules() {
     let temporary = tempfile::tempdir().unwrap();
     let main_database = temporary.path().join("database.sqlite");
     std::fs::copy(fixture("database.sqlite"), &main_database).unwrap();
@@ -741,6 +741,18 @@ async fn page_hash_migration_resets_kotlin_jpeg_hashes_and_rules() {
         .unwrap();
     sqlx::query(
         "INSERT INTO MEDIA_PAGE (BOOK_ID,NUMBER,FILE_NAME,MEDIA_TYPE,FILE_HASH) VALUES ('orphan',0,'page.jpg','image/jpeg','legacy')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO MEDIA (BOOK_ID,STATUS,MEDIA_TYPE,PAGE_COUNT) VALUES ('pdf', 'READY', 'application/pdf', 1), ('zip', 'READY', 'application/zip', 1)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO MEDIA_PAGE (BOOK_ID,NUMBER,FILE_NAME,MEDIA_TYPE,FILE_HASH) VALUES ('pdf',0,'1','','old-pdf'), ('zip',0,'1.png','image/png','raw-zip')",
     )
     .execute(&pool)
     .await
@@ -771,6 +783,24 @@ async fn page_hash_migration_resets_kotlin_jpeg_hashes_and_rules() {
         .await
         .unwrap(),
         (String::new(), None)
+    );
+    assert_eq!(
+        sqlx::query_as::<_, (String, String)>(
+            "SELECT BOOK_ID,FILE_HASH FROM MEDIA_PAGE WHERE BOOK_ID IN ('pdf','zip') ORDER BY BOOK_ID",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap(),
+        [("pdf".into(), String::new()), ("zip".into(), "raw-zip".into())]
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='idx__media_page__file_hash'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        1
     );
 }
 

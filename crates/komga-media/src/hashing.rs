@@ -29,12 +29,17 @@ const KOREADER_SAMPLE_OFFSETS: [u64; 12] = [
     1_073_741_824,
 ];
 const RGB_PAGE_HASH_HEADER: &[u8] = b"KOMGA_PAGE_RGB24_V1\0";
+const PDF_PAGE_HASH_HEADER: &[u8] = b"KOMGA_PAGE_PDF_RGB24_V1\0";
+const VALIDATION_HASH_HEADER: &[u8] = b"KOMGA_PAGE_VALIDATION_RGB24_V1\0";
 
 /// Algorithm marker persisted beside raw page-content hashes.
 pub const RAW_PAGE_HASH_ALGORITHM: &str = "RAW_XXH3_128_V1";
 
 /// Algorithm marker persisted beside canonical JPEG pixel hashes.
 pub const RGB_PAGE_HASH_ALGORITHM: &str = "RGB24_XXH3_128_V1";
+
+/// Algorithm marker persisted beside normalized PDF render hashes.
+pub const PDF_PAGE_HASH_ALGORITHM: &str = "PDF_RGB24_XXH3_128_V1";
 
 /// A page hash paired with the algorithm needed to interpret it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -158,7 +163,8 @@ pub fn hash_page(content: &[u8], media_type: &str) -> Result<ComputedPageHash, P
     })
 }
 
-pub(crate) fn hash_jpeg_page(content: &[u8]) -> Result<(ComputedPageHash, Dimension), PageHashError> {
+#[cfg(test)]
+fn hash_jpeg_page(content: &[u8]) -> Result<(ComputedPageHash, Dimension), PageHashError> {
     let image = ImageReader::with_format(std::io::Cursor::new(content), ImageFormat::Jpeg)
         .decode()
         .map_err(|error| PageHashError::InvalidJpeg(error.to_string()))?
@@ -167,16 +173,39 @@ pub(crate) fn hash_jpeg_page(content: &[u8]) -> Result<(ComputedPageHash, Dimens
 }
 
 fn hash_rgb_page(image: &RgbImage) -> (ComputedPageHash, Dimension) {
+    let (hash, dimension) = hash_rgb_pixels(image, RGB_PAGE_HASH_HEADER);
+    (
+        ComputedPageHash {
+            hash,
+            algorithm: RGB_PAGE_HASH_ALGORITHM,
+        },
+        dimension,
+    )
+}
+
+pub(crate) fn hash_pdf_page(image: &RgbImage) -> (ComputedPageHash, Dimension) {
+    let (hash, dimension) = hash_rgb_pixels(image, PDF_PAGE_HASH_HEADER);
+    (
+        ComputedPageHash {
+            hash,
+            algorithm: PDF_PAGE_HASH_ALGORITHM,
+        },
+        dimension,
+    )
+}
+
+pub(crate) fn fingerprint_rgb_page(image: &RgbImage) -> (String, Dimension) {
+    hash_rgb_pixels(image, VALIDATION_HASH_HEADER)
+}
+
+fn hash_rgb_pixels(image: &RgbImage, header: &[u8]) -> (String, Dimension) {
     let mut hasher = Xxh3::with_seed(0);
-    hasher.update(RGB_PAGE_HASH_HEADER);
+    hasher.update(header);
     hasher.update(&image.width().to_le_bytes());
     hasher.update(&image.height().to_le_bytes());
     hasher.update(image.as_raw());
     (
-        ComputedPageHash {
-            hash: format!("{:032x}", hasher.digest128()),
-            algorithm: RGB_PAGE_HASH_ALGORITHM,
-        },
+        format!("{:032x}", hasher.digest128()),
         Dimension {
             width: i32::try_from(image.width()).unwrap_or(i32::MAX),
             height: i32::try_from(image.height()).unwrap_or(i32::MAX),

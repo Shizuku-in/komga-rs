@@ -86,3 +86,40 @@ xxhash-rust = { version = "0.8.18", default-features = false, features = ["xxh3"
 [profile.release]
 lto = "thin"
 strip = "symbols"
+
+# Keep full-resolution PDF rendering responsive in local servers and tests.
+[profile.dev.package.komga-media]
+opt-level = 2
+
+[profile.dev.package.hayro]
+opt-level = 2
+
+[profile.dev.package.hayro-interpret]
+opt-level = 2
+
+[profile.dev.package.image]
+opt-level = 2
+
+[profile.dev.package.vello_cpu]
+opt-level = 2
+
+[profile.dev.package.zune-jpeg]
+opt-level = 2
+
+[profile.test.package.komga-media]
+opt-level = 2
+
+[profile.test.package.hayro]
+opt-level = 2
+
+[profile.test.package.hayro-interpret]
+opt-level = 2
+
+[profile.test.package.image]
+opt-level = 2
+
+[profile.test.package.vello_cpu]
+opt-level = 2
+
+[profile.test.package.zune-jpeg]
+opt-level = 2

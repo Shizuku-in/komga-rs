@@ -247,9 +247,8 @@ impl Storage {
     /// Lists active ready ZIP, RAR4, RAR5, PDF, or Divina-compatible EPUB books
     /// whose configured edge pages require hashes.
     ///
-    /// Existing non-JPEG hashes are compatible with Kotlin and remain valid.
-    /// JPEG hashes are valid only when their algorithm marker matches
-    /// `jpeg_algorithm`.
+    /// Existing non-JPEG hashes remain valid. JPEG and PDF hashes are valid
+    /// only when their algorithm markers match the requested versions.
     ///
     /// # Errors
     ///
@@ -259,6 +258,7 @@ impl Storage {
         library_id: &str,
         edge_size: usize,
         jpeg_algorithm: &str,
+        pdf_algorithm: &str,
     ) -> Result<Vec<String>> {
         let edge_size = i64::try_from(edge_size).unwrap_or(i64::MAX);
         Ok(sqlx::query_scalar(
@@ -271,9 +271,11 @@ impl Storage {
                   AND M.MEDIA_TYPE IN (?, ?, ?, ?, ?)
                   AND (M.MEDIA_TYPE <> ? OR M.EPUB_DIVINA_COMPATIBLE = 1)
                   AND (P.NUMBER < ? OR P.NUMBER >= MAX(M.PAGE_COUNT - ?, 0))
-                  AND (P.FILE_HASH = '' OR
-                       ((M.MEDIA_TYPE = 'application/pdf' OR P.MEDIA_TYPE = 'image/jpeg') AND
-                        COALESCE(P.FILE_HASH_ALGORITHM, '') <> ?))
+                  AND (P.FILE_HASH = ''
+                       OR (M.MEDIA_TYPE = 'application/pdf' AND
+                           COALESCE(P.FILE_HASH_ALGORITHM, '') <> ?)
+                       OR (M.MEDIA_TYPE <> 'application/pdf' AND P.MEDIA_TYPE = 'image/jpeg' AND
+                           COALESCE(P.FILE_HASH_ALGORITHM, '') <> ?))
                 ORDER BY B.ID"#,
         )
         .bind(library_id)
@@ -285,6 +287,7 @@ impl Storage {
         .bind(komga_core::EPUB_MEDIA_TYPE)
         .bind(edge_size)
         .bind(edge_size)
+        .bind(pdf_algorithm)
         .bind(jpeg_algorithm)
         .fetch_all(&self.pool)
         .await?)
@@ -301,6 +304,7 @@ impl Storage {
         book_id: &str,
         edge_size: usize,
         jpeg_algorithm: &str,
+        pdf_algorithm: &str,
     ) -> Result<Vec<PageHashTarget>> {
         let edge_size = i64::try_from(edge_size).unwrap_or(i64::MAX);
         Ok(sqlx::query_as(
@@ -311,9 +315,11 @@ impl Storage {
                   AND M.MEDIA_TYPE IN (?, ?, ?, ?, ?)
                   AND (M.MEDIA_TYPE <> ? OR M.EPUB_DIVINA_COMPATIBLE = 1)
                   AND (P.NUMBER < ? OR P.NUMBER >= MAX(M.PAGE_COUNT - ?, 0))
-                  AND (P.FILE_HASH = '' OR
-                       ((M.MEDIA_TYPE = 'application/pdf' OR P.MEDIA_TYPE = 'image/jpeg') AND
-                        COALESCE(P.FILE_HASH_ALGORITHM, '') <> ?))
+                  AND (P.FILE_HASH = ''
+                       OR (M.MEDIA_TYPE = 'application/pdf' AND
+                           COALESCE(P.FILE_HASH_ALGORITHM, '') <> ?)
+                       OR (M.MEDIA_TYPE <> 'application/pdf' AND P.MEDIA_TYPE = 'image/jpeg' AND
+                           COALESCE(P.FILE_HASH_ALGORITHM, '') <> ?))
                 ORDER BY P.NUMBER"#,
         )
         .bind(book_id)
@@ -325,6 +331,7 @@ impl Storage {
         .bind(komga_core::EPUB_MEDIA_TYPE)
         .bind(edge_size)
         .bind(edge_size)
+        .bind(pdf_algorithm)
         .bind(jpeg_algorithm)
         .fetch_all(&self.pool)
         .await?)
@@ -1523,6 +1530,7 @@ mod tests {
     #[tokio::test]
     async fn page_hash_targets_cover_only_missing_or_stale_edge_pages() {
         const RGB_ALGORITHM: &str = "RGB24_XXH3_128_V1";
+        const PDF_ALGORITHM: &str = "PDF_RGB24_XXH3_128_V1";
 
         let storage = Storage::connect_memory().await.unwrap();
         let temporary = tempfile::tempdir().unwrap();
@@ -1552,13 +1560,13 @@ mod tests {
 
         assert_eq!(
             storage
-                .list_books_with_incomplete_page_hashes(&book.library_id, 2, RGB_ALGORITHM)
+                .list_books_with_incomplete_page_hashes(&book.library_id, 2, RGB_ALGORITHM, PDF_ALGORITHM)
                 .await
                 .unwrap(),
             std::slice::from_ref(&book.id)
         );
         let targets = storage
-            .list_page_hash_targets(&book.id, 2, RGB_ALGORITHM)
+            .list_page_hash_targets(&book.id, 2, RGB_ALGORITHM, PDF_ALGORITHM)
             .await
             .unwrap();
         assert_eq!(
@@ -1590,7 +1598,7 @@ mod tests {
         );
         assert!(
             storage
-                .list_page_hash_targets(&book.id, 2, RGB_ALGORITHM)
+                .list_page_hash_targets(&book.id, 2, RGB_ALGORITHM, PDF_ALGORITHM)
                 .await
                 .unwrap()
                 .is_empty()
@@ -1621,7 +1629,7 @@ mod tests {
             .unwrap();
         assert!(
             storage
-                .list_books_with_incomplete_page_hashes(&book.library_id, 2, RGB_ALGORITHM)
+                .list_books_with_incomplete_page_hashes(&book.library_id, 2, RGB_ALGORITHM, PDF_ALGORITHM)
                 .await
                 .unwrap()
                 .is_empty()
@@ -1633,20 +1641,20 @@ mod tests {
             .unwrap();
         assert!(
             !storage
-                .list_books_with_incomplete_page_hashes(&book.library_id, 2, RGB_ALGORITHM)
+                .list_books_with_incomplete_page_hashes(&book.library_id, 2, RGB_ALGORITHM, PDF_ALGORITHM)
                 .await
                 .unwrap()
                 .is_empty()
         );
         assert_eq!(
             storage
-                .list_page_hash_targets(&book.id, 2, RGB_ALGORITHM)
+                .list_page_hash_targets(&book.id, 2, RGB_ALGORITHM, PDF_ALGORITHM)
                 .await
                 .unwrap()
                 .iter()
                 .map(|target| target.number)
                 .collect::<Vec<_>>(),
-            [6]
+            [0, 1, 6, 7]
         );
 
         sqlx::query("UPDATE MEDIA SET MEDIA_TYPE=? WHERE BOOK_ID=?")
@@ -1662,14 +1670,14 @@ mod tests {
             .unwrap();
         assert_eq!(
             storage
-                .list_books_with_incomplete_page_hashes(&book.library_id, 2, RGB_ALGORITHM)
+                .list_books_with_incomplete_page_hashes(&book.library_id, 2, RGB_ALGORITHM, PDF_ALGORITHM)
                 .await
                 .unwrap(),
             std::slice::from_ref(&book.id)
         );
         assert_eq!(
             storage
-                .list_page_hash_targets(&book.id, 2, RGB_ALGORITHM)
+                .list_page_hash_targets(&book.id, 2, RGB_ALGORITHM, PDF_ALGORITHM)
                 .await
                 .unwrap()
                 .iter()
@@ -1686,14 +1694,14 @@ mod tests {
             .unwrap();
         assert!(
             storage
-                .list_books_with_incomplete_page_hashes(&book.library_id, 2, RGB_ALGORITHM)
+                .list_books_with_incomplete_page_hashes(&book.library_id, 2, RGB_ALGORITHM, PDF_ALGORITHM)
                 .await
                 .unwrap()
                 .is_empty()
         );
         assert!(
             storage
-                .list_page_hash_targets(&book.id, 2, RGB_ALGORITHM)
+                .list_page_hash_targets(&book.id, 2, RGB_ALGORITHM, PDF_ALGORITHM)
                 .await
                 .unwrap()
                 .is_empty()
@@ -1706,14 +1714,14 @@ mod tests {
             .unwrap();
         assert_eq!(
             storage
-                .list_books_with_incomplete_page_hashes(&book.library_id, 2, RGB_ALGORITHM)
+                .list_books_with_incomplete_page_hashes(&book.library_id, 2, RGB_ALGORITHM, PDF_ALGORITHM)
                 .await
                 .unwrap(),
             std::slice::from_ref(&book.id)
         );
         assert_eq!(
             storage
-                .list_page_hash_targets(&book.id, 2, RGB_ALGORITHM)
+                .list_page_hash_targets(&book.id, 2, RGB_ALGORITHM, PDF_ALGORITHM)
                 .await
                 .unwrap()
                 .iter()
@@ -1888,7 +1896,7 @@ mod tests {
             .collect();
         media.page_count = 3;
         storage.replace_media_analysis(&media).await.unwrap();
-        sqlx::query("UPDATE MEDIA_PAGE SET FILE_HASH_ALGORITHM='RGB24_XXH3_128_V1' WHERE BOOK_ID=?")
+        sqlx::query("UPDATE MEDIA_PAGE SET FILE_HASH_ALGORITHM='PDF_RGB24_XXH3_128_V1' WHERE BOOK_ID=?")
             .bind(&book.id)
             .execute(&storage.pool)
             .await
@@ -1986,7 +1994,7 @@ mod tests {
                 .fetch_one(&storage.pool)
                 .await
                 .unwrap(),
-            "RGB24_XXH3_128_V1"
+            "PDF_RGB24_XXH3_128_V1"
         );
         assert_eq!(
             storage
