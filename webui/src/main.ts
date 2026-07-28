@@ -45,7 +45,7 @@ Vue.prototype.$eventHub = new Vue()
 
 Chartkick.options = {
   colors: [
-    '#7eb0d5', '#fd7f6f', '#b2e061', '#ffb55a',
+    '#f6b8b8', '#fd7f6f', '#b2e061', '#ffb55a',
     '#8bd3c7', '#ffee65', '#bd7ebe', '#fdcce5',
     '#beb9db', '#ea5545', '#f46a9b', '#ef9b20',
     '#edbf33', '#ede15b', '#bdcf32', '#87bc45',

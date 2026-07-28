@@ -4,7 +4,7 @@
   "start_url": ".",
   "display": "standalone",
   "background_color": "#f6b8b8",
-  "theme_color": "black",
+  "theme_color": "#f6b8b8",
   "description": "Free and open source comics/mangas media server",
   "icons": [{
     "src": "favicon-32x32.png",

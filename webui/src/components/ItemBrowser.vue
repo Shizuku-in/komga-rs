@@ -262,7 +262,7 @@ export default Vue.extend({
 <style scoped>
 .ghost .item-card {
   opacity: 0.5;
-  background: #c8ebfb;
+  background: var(--v-primary-base);
 }
 
 .handle {

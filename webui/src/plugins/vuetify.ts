@@ -35,7 +35,8 @@ export default new Vuetify({
     themes: {
       light: {
         base: colors.shades.white,
-        primary: '#005ed3',
+        primary: '#f6b8b8',
+        info: '#a94f5b',
         secondary: '#fec000',
         accent: '#ff0335',
         'contrast-1': colors.grey.lighten4,
@@ -44,7 +45,8 @@ export default new Vuetify({
       },
       dark: {
         base: colors.shades.black,
-        primary: '#78baec',
+        primary: '#f6b8b8',
+        info: '#f6b8b8',
         secondary: '#fec000',
         accent: '#ff0335',
         'contrast-1': colors.grey.darken4,

@@ -131,6 +131,6 @@ export default Vue.extend({
 
 .ghost {
   opacity: 0.5;
-  background: #c8ebfb;
+  background: var(--v-primary-base);
 }
 </style>
