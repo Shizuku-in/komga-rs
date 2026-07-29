@@ -440,6 +440,16 @@ impl TaskRecord {
         )
     }
 
+    /// Builds a book metadata refresh limited to the source title.
+    pub fn refresh_book_title(book_id: &str, series_id: &str, priority: i32) -> Self {
+        Self::refresh_book_metadata_with_capabilities(book_id, series_id, priority, &["TITLE"])
+    }
+
+    /// Builds a book metadata refresh for an unlocked restored title and natural-sort numbering.
+    pub fn refresh_book_title_and_numbering(book_id: &str, series_id: &str, priority: i32) -> Self {
+        Self::refresh_book_metadata_with_capabilities(book_id, series_id, priority, &["TITLE", "NUMBER", "NUMBER_SORT"])
+    }
+
     /// Builds a book metadata refresh limited to natural-sort numbering.
     pub fn refresh_book_numbering(book_id: &str, series_id: &str, priority: i32) -> Self {
         Self::refresh_book_metadata_with_capabilities(book_id, series_id, priority, &["NUMBER", "NUMBER_SORT"])

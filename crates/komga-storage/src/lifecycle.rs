@@ -179,7 +179,7 @@ impl Storage {
     }
 }
 
-async fn delete_book_dependents(
+pub(crate) async fn delete_book_dependents(
     tx: &mut Transaction<'_, Sqlite>,
     book_subquery: &str,
     bindings: &[&str],
@@ -206,7 +206,7 @@ async fn delete_book_dependents(
     Ok(())
 }
 
-async fn delete_series_dependents(
+pub(crate) async fn delete_series_dependents(
     tx: &mut Transaction<'_, Sqlite>,
     series_subquery: &str,
     bindings: &[&str],

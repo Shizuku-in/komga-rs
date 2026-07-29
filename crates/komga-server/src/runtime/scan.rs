@@ -59,10 +59,14 @@ pub(super) async fn process_scan_task(state: &AppState, task: &TaskRecord) -> Ta
             return TaskOutcome::Retry;
         }
     };
-    let existing_books = match state.storage.list_active_books_by_library_id(&payload.library_id).await {
+    let existing_books = match state
+        .storage
+        .list_books_for_scan_reconciliation(&payload.library_id)
+        .await
+    {
         Ok(books) => books,
         Err(error) => {
-            tracing::error!(%error, library_id = %payload.library_id, "could not load books for scan hash reconciliation");
+            tracing::error!(%error, library_id = %payload.library_id, "could not load books and restore candidates for scan hash reconciliation");
             return TaskOutcome::Retry;
         }
     };
@@ -125,13 +129,64 @@ pub(super) async fn process_scan_task(state: &AppState, task: &TaskRecord) -> Ta
             for event in &stats.book_updated_events {
                 state.publish_domain_event(DomainEvent::BookUpdated(event.clone()));
             }
+            for event in &stats.book_deleted_events {
+                state.publish_domain_event(DomainEvent::BookDeleted(event.clone()));
+            }
+            for event in &stats.series_deleted_events {
+                state.publish_domain_event(DomainEvent::SeriesDeleted(event.clone()));
+            }
+            for event in &stats.collection_updated_events {
+                state.publish_domain_event(DomainEvent::CollectionUpdated(event.clone()));
+            }
+            for event in &stats.read_list_updated_events {
+                state.publish_domain_event(DomainEvent::ReadListUpdated(event.clone()));
+            }
             let book_ids = stats.book_ids.iter().cloned().collect::<Vec<_>>();
             let series_ids = stats.series_ids.iter().cloned().collect::<Vec<_>>();
-            if !state.sync_series(&series_ids).await || !state.sync_books(&book_ids).await {
+            let collection_ids = stats.collection_ids.iter().cloned().collect::<Vec<_>>();
+            let read_list_ids = stats.read_list_ids.iter().cloned().collect::<Vec<_>>();
+            if !state.sync_series(&series_ids).await
+                || !state.sync_books(&book_ids).await
+                || !state.sync_collections(&collection_ids).await
+                || !state.sync_read_lists(&read_list_ids).await
+            {
                 state.recover_search_after_http_failure().await;
                 return TaskOutcome::Retry;
             }
-            for series_id in stats.sidecars_changed {
+            let mut book_metadata_refreshes = std::collections::BTreeMap::new();
+            for event in stats.book_title_refresh_events {
+                let book_id = event.book_id.clone();
+                book_metadata_refreshes
+                    .entry(book_id)
+                    .or_insert((event, false, false))
+                    .1 = true;
+            }
+            for event in stats.book_numbering_refresh_events {
+                let book_id = event.book_id.clone();
+                book_metadata_refreshes
+                    .entry(book_id)
+                    .or_insert((event, false, false))
+                    .2 = true;
+            }
+            for (_, (event, refresh_title, refresh_numbering)) in book_metadata_refreshes {
+                let refresh = match (refresh_title, refresh_numbering) {
+                    (true, true) => {
+                        TaskRecord::refresh_book_title_and_numbering(&event.book_id, &event.series_id, task.priority)
+                    }
+                    (true, false) => TaskRecord::refresh_book_title(&event.book_id, &event.series_id, task.priority),
+                    (false, true) => {
+                        TaskRecord::refresh_book_numbering(&event.book_id, &event.series_id, task.priority)
+                    }
+                    (false, false) => continue,
+                };
+                if let Err(error) = state.enqueue_task(&refresh).await {
+                    tracing::error!(%error, book_id = %event.book_id, "could not enqueue restored book metadata refresh");
+                    return TaskOutcome::Retry;
+                }
+            }
+            let mut series_metadata_refresh_ids = stats.series_metadata_refresh_ids;
+            series_metadata_refresh_ids.extend(stats.sidecars_changed);
+            for series_id in series_metadata_refresh_ids {
                 if let Err(error) = state
                     .enqueue_task(&TaskRecord::refresh_series_metadata(&series_id, task.priority))
                     .await
@@ -281,7 +336,8 @@ pub(super) async fn process_scan_task(state: &AppState, task: &TaskRecord) -> Ta
 mod tests {
     use std::fs;
 
-    use komga_core::{Library, ScanInterval};
+    use komga_core::{Library, ReadListCreation, ScanInterval, User};
+    use komga_search::EntityKind;
     use komga_storage::{Storage, TaskStorage};
     use url::Url;
 
@@ -400,5 +456,154 @@ mod tests {
         let saved = storage.find_book_by_id(&book.id).await.unwrap().unwrap();
         assert_eq!(saved.file_size, book.file_size);
         assert!(journal.exists());
+    }
+
+    #[tokio::test]
+    async fn scan_restores_renamed_book_relations_before_automatic_trash_cleanup() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("library");
+        let series = root.join("Series");
+        fs::create_dir_all(&series).unwrap();
+        let source = series.join("Original.cbz");
+        fs::write(&source, b"stable book content").unwrap();
+
+        let mut library = Library::new("Rename restore".into(), Url::from_directory_path(&root).unwrap());
+        library.scan_interval = ScanInterval::Disabled;
+        library.empty_trash_after_scan = true;
+        library.hash_files = false;
+        library.hash_koreader = false;
+        let storage = Storage::connect_memory().await.unwrap();
+        let tasks = TaskStorage::connect_memory().await.unwrap();
+        storage.create_library(&library).await.unwrap();
+        let state = AppState::new(storage.clone(), tasks).await.unwrap();
+
+        assert_eq!(
+            process_scan_task(&state, &TaskRecord::scan_library(&library.id, false, 0)).await,
+            TaskOutcome::Completed
+        );
+        let original = storage
+            .list_active_books_by_library_id(&library.id)
+            .await
+            .unwrap()
+            .remove(0);
+        let expected_hash = hash_file(&source, || false).unwrap();
+        assert!(
+            storage
+                .update_book_file_hash_if_current(&original, &expected_hash)
+                .await
+                .unwrap()
+        );
+        let mut original_metadata = storage.find_book_metadata(&original.id).await.unwrap().unwrap();
+        original_metadata.number = "99".into();
+        original_metadata.number_sort = 99.0;
+        storage.save_book_metadata(&original_metadata).await.unwrap();
+        assert_eq!(
+            state
+                .search
+                .search(EntityKind::Book, "Original")
+                .into_iter()
+                .map(|hit| hit.id)
+                .collect::<Vec<_>>(),
+            std::slice::from_ref(&original.id)
+        );
+
+        let reader = User::new("rename-reader@example.org".into(), "unused".into());
+        storage.create_user(&reader).await.unwrap();
+        storage
+            .create_read_list(
+                "rename-read-list",
+                &ReadListCreation {
+                    name: "Rename continuity".into(),
+                    summary: String::new(),
+                    ordered: true,
+                    book_ids: vec![original.id.clone()],
+                },
+            )
+            .await
+            .unwrap();
+
+        let mut events = state.subscribe_domain_events();
+        let renamed = series.join("Renamed.cbz");
+        fs::rename(&source, &renamed).unwrap();
+        assert_eq!(
+            process_scan_task(&state, &TaskRecord::scan_library(&library.id, false, 0)).await,
+            TaskOutcome::Completed
+        );
+
+        let active = storage.list_active_books_by_library_id(&library.id).await.unwrap();
+        assert_eq!(active.len(), 1);
+        let restored = &active[0];
+        assert_ne!(restored.id, original.id);
+        assert_eq!(restored.name, "Renamed");
+        assert_eq!(restored.file_hash, expected_hash);
+        assert!(storage.find_book_by_id(&original.id).await.unwrap().is_none());
+        let read_list = storage
+            .find_read_list("rename-read-list", &reader)
+            .await
+            .unwrap()
+            .expect("automatic trash cleanup must retain the restored read list");
+        assert_eq!(read_list.book_ids, vec![restored.id.clone()]);
+
+        let events = std::iter::from_fn(|| events.try_recv().ok()).collect::<Vec<_>>();
+        assert!(events.iter().any(|event| {
+            matches!(
+                event.as_ref(),
+                DomainEvent::BookAdded(event)
+                    if event.book_id == restored.id && event.series_id == restored.series_id
+            )
+        }));
+        assert!(events.iter().any(|event| {
+            matches!(
+                event.as_ref(),
+                DomainEvent::BookDeleted(event) if event.book_id == original.id
+            )
+        }));
+        assert!(events.iter().any(|event| {
+            matches!(
+                event.as_ref(),
+                DomainEvent::ReadListUpdated(event)
+                    if event.container_id == "rename-read-list"
+                        && event.item_ids == [restored.id.clone()]
+            )
+        }));
+
+        assert!(
+            state
+                .search
+                .search(EntityKind::Book, "Original")
+                .into_iter()
+                .all(|hit| hit.id != original.id)
+        );
+        assert_eq!(
+            state
+                .search
+                .search(EntityKind::Book, "Renamed")
+                .into_iter()
+                .map(|hit| hit.id)
+                .collect::<Vec<_>>(),
+            std::slice::from_ref(&restored.id)
+        );
+        assert_eq!(
+            state
+                .search
+                .search(EntityKind::ReadList, "Rename continuity")
+                .into_iter()
+                .map(|hit| hit.id)
+                .collect::<Vec<_>>(),
+            ["rename-read-list"]
+        );
+        let metadata_task = state
+            .tasks
+            .list()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|task| task.id == format!("REFRESH_BOOK_METADATA_{}", restored.id))
+            .expect("restored book metadata refresh must be durable");
+        let payload = serde_json::from_str::<serde_json::Value>(&metadata_task.payload).unwrap();
+        assert_eq!(
+            payload["capabilities"],
+            serde_json::json!(["TITLE", "NUMBER", "NUMBER_SORT"])
+        );
     }
 }

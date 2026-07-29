@@ -300,58 +300,68 @@ impl Storage {
     /// Returns an error when source metadata is invalid or the transaction fails.
     pub async fn rebuild_book_metadata_aggregation(&self, series_id: &str) -> Result<bool> {
         let mut tx = self.pool.begin().await?;
-        let exists = sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM SERIES WHERE ID = ?)")
-            .bind(series_id)
-            .fetch_one(&mut *tx)
-            .await?;
-        if !exists {
+        if !rebuild_book_metadata_aggregation_in(&mut tx, series_id).await? {
             tx.rollback().await?;
             return Ok(false);
-        }
-        let metadatas = load_series_book_metadata(&mut tx, series_id).await?;
-        let aggregation = aggregate_book_metadata(series_id, &metadatas);
-        sqlx::query(
-            r#"INSERT INTO BOOK_METADATA_AGGREGATION
-                 (SERIES_ID, RELEASE_DATE, SUMMARY, SUMMARY_NUMBER)
-               VALUES (?, ?, ?, ?)
-               ON CONFLICT(SERIES_ID) DO UPDATE SET
-                 RELEASE_DATE = excluded.RELEASE_DATE,
-                 SUMMARY = excluded.SUMMARY,
-                 SUMMARY_NUMBER = excluded.SUMMARY_NUMBER,
-                 LAST_MODIFIED_DATE = CURRENT_TIMESTAMP"#,
-        )
-        .bind(series_id)
-        .bind(aggregation.release_date)
-        .bind(&aggregation.summary)
-        .bind(&aggregation.summary_number)
-        .execute(&mut *tx)
-        .await?;
-        sqlx::query("DELETE FROM BOOK_METADATA_AGGREGATION_AUTHOR WHERE SERIES_ID = ?")
-            .bind(series_id)
-            .execute(&mut *tx)
-            .await?;
-        sqlx::query("DELETE FROM BOOK_METADATA_AGGREGATION_TAG WHERE SERIES_ID = ?")
-            .bind(series_id)
-            .execute(&mut *tx)
-            .await?;
-        for author in &aggregation.authors {
-            sqlx::query("INSERT INTO BOOK_METADATA_AGGREGATION_AUTHOR (SERIES_ID, NAME, ROLE) VALUES (?, ?, ?)")
-                .bind(series_id)
-                .bind(&author.name)
-                .bind(&author.role)
-                .execute(&mut *tx)
-                .await?;
-        }
-        for tag in &aggregation.tags {
-            sqlx::query("INSERT INTO BOOK_METADATA_AGGREGATION_TAG (SERIES_ID, TAG) VALUES (?, ?)")
-                .bind(series_id)
-                .bind(tag)
-                .execute(&mut *tx)
-                .await?;
         }
         tx.commit().await?;
         Ok(true)
     }
+}
+
+pub(crate) async fn rebuild_book_metadata_aggregation_in(
+    connection: &mut SqliteConnection,
+    series_id: &str,
+) -> Result<bool> {
+    let exists = sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM SERIES WHERE ID = ?)")
+        .bind(series_id)
+        .fetch_one(&mut *connection)
+        .await?;
+    if !exists {
+        return Ok(false);
+    }
+    let metadatas = load_series_book_metadata(connection, series_id).await?;
+    let aggregation = aggregate_book_metadata(series_id, &metadatas);
+    sqlx::query(
+        r#"INSERT INTO BOOK_METADATA_AGGREGATION
+             (SERIES_ID, RELEASE_DATE, SUMMARY, SUMMARY_NUMBER)
+           VALUES (?, ?, ?, ?)
+           ON CONFLICT(SERIES_ID) DO UPDATE SET
+             RELEASE_DATE = excluded.RELEASE_DATE,
+             SUMMARY = excluded.SUMMARY,
+             SUMMARY_NUMBER = excluded.SUMMARY_NUMBER,
+             LAST_MODIFIED_DATE = CURRENT_TIMESTAMP"#,
+    )
+    .bind(series_id)
+    .bind(aggregation.release_date)
+    .bind(&aggregation.summary)
+    .bind(&aggregation.summary_number)
+    .execute(&mut *connection)
+    .await?;
+    sqlx::query("DELETE FROM BOOK_METADATA_AGGREGATION_AUTHOR WHERE SERIES_ID = ?")
+        .bind(series_id)
+        .execute(&mut *connection)
+        .await?;
+    sqlx::query("DELETE FROM BOOK_METADATA_AGGREGATION_TAG WHERE SERIES_ID = ?")
+        .bind(series_id)
+        .execute(&mut *connection)
+        .await?;
+    for author in &aggregation.authors {
+        sqlx::query("INSERT INTO BOOK_METADATA_AGGREGATION_AUTHOR (SERIES_ID, NAME, ROLE) VALUES (?, ?, ?)")
+            .bind(series_id)
+            .bind(&author.name)
+            .bind(&author.role)
+            .execute(&mut *connection)
+            .await?;
+    }
+    for tag in &aggregation.tags {
+        sqlx::query("INSERT INTO BOOK_METADATA_AGGREGATION_TAG (SERIES_ID, TAG) VALUES (?, ?)")
+            .bind(series_id)
+            .bind(tag)
+            .execute(&mut *connection)
+            .await?;
+    }
+    Ok(true)
 }
 
 async fn load_book_metadata(connection: &mut SqliteConnection, book_id: &str) -> Result<Option<BookMetadata>> {

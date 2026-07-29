@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fs::File,
     io::{self, BufReader, Read, Seek, SeekFrom},
     path::Path,
@@ -217,11 +217,14 @@ pub(crate) fn hash_bytes(content: &[u8]) -> String {
     format!("{:032x}", xxhash_rust::xxh3::xxh3_128_with_seed(content, 0))
 }
 
-/// Recomputes hashes needed to distinguish timestamp-only scan changes.
+/// Recomputes hashes needed to distinguish changes and restore moved content.
 ///
-/// Only same-sized files with an existing hash are read. The resulting hash is
-/// attached to the scan snapshot so persistence can preserve ready media when
-/// the bytes are unchanged.
+/// Same-URL files are read only for timestamp-only changes with a prior hash.
+/// A newly discovered URL is also read when a same-sized hashed book was
+/// deleted previously or disappeared from this snapshot. The resulting hash is
+/// attached to the scan so persistence can restore Kotlin's soft-deleted
+/// metadata and user relations without performing filesystem I/O in a database
+/// transaction.
 ///
 /// # Errors
 ///
@@ -232,20 +235,34 @@ pub fn reconcile_scan_hashes(
     existing_books: &[Book],
     cancelled: impl Fn() -> bool,
 ) -> Result<(), FileHashError> {
+    let scanned_urls = scan
+        .series
+        .iter()
+        .flat_map(|series| series.books.iter())
+        .map(|book| book.url.as_str())
+        .collect::<HashSet<_>>();
     let existing = existing_books
         .iter()
         .filter(|book| book.deleted_date.is_none())
         .map(|book| (book.url.as_str(), book))
         .collect::<HashMap<_, _>>();
+    let restore_candidate_sizes = existing_books
+        .iter()
+        .filter(|book| {
+            !book.file_hash.is_empty() && (book.deleted_date.is_some() || !scanned_urls.contains(book.url.as_str()))
+        })
+        .map(|book| book.file_size)
+        .collect::<HashSet<_>>();
     for scanned in &mut scan.series {
         for book in &mut scanned.books {
-            let Some(previous) = existing.get(book.url.as_str()) else {
-                continue;
-            };
-            if previous.file_hash.is_empty()
-                || previous.file_size != book.file_size
-                || previous.file_last_modified == book.file_last_modified
-            {
+            if let Some(previous) = existing.get(book.url.as_str()) {
+                if previous.file_hash.is_empty()
+                    || previous.file_size != book.file_size
+                    || previous.file_last_modified == book.file_last_modified
+                {
+                    continue;
+                }
+            } else if !restore_candidate_sizes.contains(&book.file_size) {
                 continue;
             }
             let path = book
@@ -436,5 +453,61 @@ mod tests {
         reconcile_scan_hashes(&mut scan, &[existing], || false).unwrap();
 
         assert_eq!(scan.series[0].books[0].file_hash, "b5e9c1ad071b3e7fc779cfaa5e523818");
+    }
+
+    #[test]
+    fn scan_reconciliation_hashes_same_sized_book_when_previous_url_disappears() {
+        use komga_core::{Library, scan_library_files};
+        use url::Url;
+
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("library");
+        let series = root.join("Series");
+        fs::create_dir_all(&series).unwrap();
+        let previous_path = series.join("Previous.cbz");
+        fs::write(&previous_path, b"hello").unwrap();
+        let library = Library::new("Library".into(), Url::from_directory_path(&root).unwrap());
+        let previous_scan = scan_library_files(&library, || false).unwrap();
+        let mut previous = previous_scan.series[0].books[0].clone();
+        previous.file_hash = hash_file(&previous_path, || false).unwrap();
+
+        let moved_path = series.join("Moved.cbz");
+        fs::rename(&previous_path, &moved_path).unwrap();
+        let mut scan = scan_library_files(&library, || false).unwrap();
+
+        reconcile_scan_hashes(&mut scan, std::slice::from_ref(&previous), || false).unwrap();
+
+        assert_eq!(scan.series[0].books[0].url, Url::from_file_path(moved_path).unwrap());
+        assert_eq!(scan.series[0].books[0].file_hash, previous.file_hash);
+    }
+
+    #[test]
+    fn scan_reconciliation_hashes_same_sized_replacement_for_soft_deleted_candidate() {
+        use chrono::Local;
+        use komga_core::{Library, scan_library_files};
+        use url::Url;
+
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("library");
+        let series = root.join("Series");
+        fs::create_dir_all(&series).unwrap();
+        let deleted_path = series.join("Deleted.cbz");
+        fs::write(&deleted_path, b"hello").unwrap();
+        let library = Library::new("Library".into(), Url::from_directory_path(&root).unwrap());
+        let deleted_scan = scan_library_files(&library, || false).unwrap();
+        let mut deleted = deleted_scan.series[0].books[0].clone();
+        deleted.file_hash = hash_file(&deleted_path, || false).unwrap();
+        deleted.deleted_date = Some(Local::now().naive_local());
+
+        fs::remove_file(&deleted_path).unwrap();
+        let replacement_path = series.join("Replacement.cbz");
+        fs::write(&replacement_path, b"world").unwrap();
+        let mut scan = scan_library_files(&library, || false).unwrap();
+
+        reconcile_scan_hashes(&mut scan, std::slice::from_ref(&deleted), || false).unwrap();
+
+        let replacement = &scan.series[0].books[0];
+        assert_eq!(replacement.file_hash, hash_file(&replacement_path, || false).unwrap());
+        assert_ne!(replacement.file_hash, deleted.file_hash);
     }
 }

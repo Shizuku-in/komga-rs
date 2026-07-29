@@ -593,12 +593,27 @@ mod tests {
     use std::fs;
 
     use super::*;
+    use chrono::Local;
     use komga_core::{
-        ALL_ROLES, AgeRestriction, AllowExclude, BookCondition, BookSearch, CollectionCreation, ContentRestrictions,
-        EqualityOperator, Library, MediaStatus, PageRequest, ReadListCreation, ReadStatus, ScanInterval, SeriesSearch,
-        SortDirection, SortOrder, new_id, scan_library_files,
+        ALL_ROLES, AgeRestriction, AllowExclude, BookCondition, BookPage, BookSearch, CollectionCreation,
+        ContentRestrictions, Dimension, EqualityOperator, Library, Media, MediaFile, MediaStatus, PageRequest,
+        ReadListCreation, ReadProgress, ReadStatus, ScanInterval, ScanResult, SeriesSearch, SortDirection, SortOrder,
+        ThumbnailBook, ThumbnailSeries, new_id, scan_library_files,
     };
     use url::Url;
+
+    fn set_scanned_book_hash(scan: &mut ScanResult, book_name: &str, hash: &str) {
+        let mut matches = scan
+            .series
+            .iter_mut()
+            .flat_map(|series| series.books.iter_mut())
+            .filter(|book| book.name == book_name);
+        matches.next().unwrap().file_hash = hash.into();
+        assert!(
+            matches.next().is_none(),
+            "book name must identify exactly one scan entry"
+        );
+    }
 
     #[tokio::test]
     async fn users_round_trip_with_komga_relations() {
@@ -1473,6 +1488,797 @@ mod tests {
             storage.list_books_by_series_id(&original_series.id).await.unwrap()[0]
                 .deleted_date
                 .is_some()
+        );
+    }
+
+    #[tokio::test]
+    async fn scan_restores_soft_deleted_book_relations_after_rename() {
+        let storage = Storage::connect_memory().await.unwrap();
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("library");
+        let series_directory = root.join("Series");
+        fs::create_dir_all(&series_directory).unwrap();
+        fs::write(series_directory.join("Keep.cbz"), b"keep").unwrap();
+        let old_path = series_directory.join("Old.cbz");
+        fs::write(&old_path, b"renamed-content").unwrap();
+        let locked_old_path = series_directory.join("Locked Old.cbz");
+        fs::write(&locked_old_path, b"locked-renamed-content").unwrap();
+        let library = Library::new("Restore book".into(), Url::from_directory_path(&root).unwrap());
+        storage.create_library(&library).await.unwrap();
+
+        let mut initial = scan_library_files(&library, || false).unwrap();
+        set_scanned_book_hash(&mut initial, "Old", "same-book-hash");
+        set_scanned_book_hash(&mut initial, "Locked Old", "same-locked-book-hash");
+        storage.apply_library_scan(&library.id, &initial, false).await.unwrap();
+        let series = storage.list_series_by_library_id(&library.id).await.unwrap().remove(0);
+        let books = storage.list_books_by_series_id(&series.id).await.unwrap();
+        let keep = books.iter().find(|book| book.name == "Keep").unwrap().clone();
+        let old = books.iter().find(|book| book.name == "Old").unwrap().clone();
+        let locked_old = books.iter().find(|book| book.name == "Locked Old").unwrap().clone();
+
+        let expected_pages = vec![
+            BookPage {
+                file_name: "001.jpg".into(),
+                media_type: "image/jpeg".into(),
+                dimension: Some(Dimension {
+                    width: 1200,
+                    height: 1800,
+                }),
+                file_hash: "page-hash-1".into(),
+                file_size: Some(101),
+            },
+            BookPage {
+                file_name: "002.png".into(),
+                media_type: "image/png".into(),
+                dimension: None,
+                file_hash: "page-hash-2".into(),
+                file_size: None,
+            },
+        ];
+        let expected_files = vec![
+            MediaFile {
+                file_name: "ComicInfo.xml".into(),
+                media_type: Some("application/xml".into()),
+                sub_type: Some("METADATA".into()),
+                file_size: Some(42),
+            },
+            MediaFile {
+                file_name: "notes.txt".into(),
+                media_type: None,
+                sub_type: None,
+                file_size: None,
+            },
+        ];
+        storage
+            .replace_media_analysis(&Media {
+                status: MediaStatus::Ready,
+                media_type: Some("application/zip".into()),
+                pages: expected_pages.clone(),
+                page_count: 2,
+                files: expected_files.clone(),
+                comment: Some("analysis warning".into()),
+                extension: None,
+                book_id: old.id.clone(),
+                epub_divina_compatible: true,
+                epub_is_kepub: false,
+                created_date: None,
+                last_modified_date: None,
+            })
+            .await
+            .unwrap();
+        sqlx::query(
+            "UPDATE MEDIA_PAGE SET FILE_HASH_ALGORITHM = CASE NUMBER \
+             WHEN 0 THEN 'RAW_XXH3_128_V1' ELSE 'PDF_RGB24_XXH3_128_V1' END \
+             WHERE BOOK_ID = ?",
+        )
+        .bind(&old.id)
+        .execute(storage.pool())
+        .await
+        .unwrap();
+        let mut metadata = storage.find_book_metadata(&old.id).await.unwrap().unwrap();
+        metadata.title = "Stale unlocked title".into();
+        metadata.title_lock = false;
+        metadata.number = "99".into();
+        metadata.number_lock = false;
+        metadata.number_sort = 99.0;
+        metadata.number_sort_lock = false;
+        metadata.summary = "Restored summary".into();
+        metadata.summary_lock = true;
+        metadata.tags.insert("restored-tag".into());
+        metadata.tags_lock = true;
+        storage.save_book_metadata(&metadata).await.unwrap();
+        let mut locked_metadata = storage.find_book_metadata(&locked_old.id).await.unwrap().unwrap();
+        locked_metadata.title = "Locked book title".into();
+        locked_metadata.title_lock = true;
+        storage.save_book_metadata(&locked_metadata).await.unwrap();
+
+        for (thumbnail_type, value) in [("GENERATED", 1_u8), ("USER_UPLOADED", 2)] {
+            storage
+                .insert_book_thumbnail(
+                    &ThumbnailBook {
+                        id: new_id(),
+                        thumbnail: Some(vec![value]),
+                        url: None,
+                        selected: false,
+                        thumbnail_type: thumbnail_type.into(),
+                        media_type: "image/jpeg".into(),
+                        file_size: 1,
+                        dimension: Dimension { width: 1, height: 1 },
+                        book_id: old.id.clone(),
+                    },
+                    thumbnail_type == "USER_UPLOADED",
+                )
+                .await
+                .unwrap();
+        }
+        storage
+            .upsert_book_sidecar_thumbnail(
+                &ThumbnailBook {
+                    id: new_id(),
+                    thumbnail: None,
+                    url: Some("file:///old-sidecar.jpg".into()),
+                    selected: false,
+                    thumbnail_type: "SIDECAR".into(),
+                    media_type: "image/jpeg".into(),
+                    file_size: 1,
+                    dimension: Dimension { width: 1, height: 1 },
+                    book_id: old.id.clone(),
+                },
+                false,
+            )
+            .await
+            .unwrap();
+
+        let reader = User::new("restore-book@example.org".into(), "unused".into());
+        storage.create_user(&reader).await.unwrap();
+        storage
+            .save_read_progress(&ReadProgress {
+                book_id: old.id.clone(),
+                user_id: reader.id.clone(),
+                page: 4,
+                completed: false,
+                read_date: Local::now().naive_local(),
+                device_id: "device".into(),
+                device_name: "Reader".into(),
+                locator: None,
+            })
+            .await
+            .unwrap();
+        storage
+            .create_read_list(
+                "restore-read-list",
+                &ReadListCreation {
+                    name: "Restore read list".into(),
+                    summary: String::new(),
+                    ordered: true,
+                    book_ids: vec![keep.id.clone(), old.id.clone()],
+                },
+            )
+            .await
+            .unwrap();
+
+        fs::remove_file(&old_path).unwrap();
+        fs::remove_file(&locked_old_path).unwrap();
+        let missing = scan_library_files(&library, || false).unwrap();
+        let missing_stats = storage.apply_library_scan(&library.id, &missing, false).await.unwrap();
+        assert_eq!(missing_stats.books_deleted, 2);
+        assert_eq!(
+            missing_stats.book_ids,
+            BTreeSet::from([old.id.clone(), locked_old.id.clone()])
+        );
+        assert_eq!(
+            missing_stats
+                .book_updated_events
+                .iter()
+                .map(|event| (event.book_id.clone(), event.series_id.clone(), event.library_id.clone()))
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([
+                (old.id.clone(), series.id.clone(), library.id.clone()),
+                (locked_old.id.clone(), series.id.clone(), library.id.clone()),
+            ])
+        );
+        for deleted in [&old, &locked_old] {
+            assert!(
+                storage
+                    .find_book_by_id(&deleted.id)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .deleted_date
+                    .is_some()
+            );
+        }
+
+        fs::write(series_directory.join("Renamed.cbz"), b"renamed-content").unwrap();
+        fs::write(series_directory.join("Locked Renamed.cbz"), b"locked-renamed-content").unwrap();
+        let mut restored_scan = scan_library_files(&library, || false).unwrap();
+        set_scanned_book_hash(&mut restored_scan, "Renamed", "same-book-hash");
+        set_scanned_book_hash(&mut restored_scan, "Locked Renamed", "same-locked-book-hash");
+        let restored_stats = storage
+            .apply_library_scan(&library.id, &restored_scan, false)
+            .await
+            .unwrap();
+
+        let active = storage.list_active_books_by_library_id(&library.id).await.unwrap();
+        let restored = active.iter().find(|book| book.name == "Renamed").unwrap();
+        let locked_restored = active.iter().find(|book| book.name == "Locked Renamed").unwrap();
+        assert_ne!(restored.id, old.id);
+        assert_ne!(locked_restored.id, locked_old.id);
+        assert_eq!(restored.series_id, series.id);
+        assert_eq!(locked_restored.series_id, series.id);
+        assert_eq!(restored_stats.books_added, 2);
+        assert_eq!(restored_stats.books_restored, 2);
+        assert_eq!(restored_stats.series_restored, 0);
+        assert_eq!(
+            restored_stats.book_ids,
+            BTreeSet::from([
+                old.id.clone(),
+                locked_old.id.clone(),
+                restored.id.clone(),
+                locked_restored.id.clone(),
+            ])
+        );
+        assert_eq!(restored_stats.series_ids, BTreeSet::from([series.id.clone()]));
+        assert_eq!(
+            restored_stats
+                .book_added_events
+                .iter()
+                .map(|event| (event.book_id.clone(), event.series_id.clone(), event.library_id.clone()))
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([
+                (restored.id.clone(), series.id.clone(), library.id.clone()),
+                (locked_restored.id.clone(), series.id.clone(), library.id.clone()),
+            ])
+        );
+        assert_eq!(
+            restored_stats
+                .book_deleted_events
+                .iter()
+                .map(|event| (event.book_id.clone(), event.series_id.clone(), event.library_id.clone()))
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([
+                (old.id.clone(), series.id.clone(), library.id.clone()),
+                (locked_old.id.clone(), series.id.clone(), library.id.clone()),
+            ])
+        );
+        assert!(restored_stats.book_updated_events.is_empty());
+        assert!(restored_stats.series_added_events.is_empty());
+        assert!(restored_stats.series_deleted_events.is_empty());
+        assert_eq!(
+            restored_stats.read_list_ids,
+            BTreeSet::from(["restore-read-list".into()])
+        );
+        assert!(restored_stats.collection_ids.is_empty());
+        assert_eq!(restored_stats.book_title_refresh_events.len(), 1);
+        assert_eq!(restored_stats.book_title_refresh_events[0].book_id, restored.id);
+        assert_eq!(restored_stats.book_title_refresh_events[0].series_id, series.id);
+        assert_eq!(restored_stats.book_title_refresh_events[0].library_id, library.id);
+        assert_eq!(restored_stats.book_numbering_refresh_events.len(), 1);
+        assert_eq!(restored_stats.book_numbering_refresh_events[0].book_id, restored.id);
+        assert_eq!(
+            restored_stats.series_metadata_refresh_ids,
+            BTreeSet::from([series.id.clone()])
+        );
+        assert!(storage.find_book_by_id(&old.id).await.unwrap().is_none());
+        assert!(storage.find_book_by_id(&locked_old.id).await.unwrap().is_none());
+        assert_eq!(storage.list_books_by_library_id(&library.id).await.unwrap().len(), 3);
+        let restored_media = storage.find_media_by_book_id(&restored.id).await.unwrap().unwrap();
+        assert_eq!(restored_media.status, MediaStatus::Ready);
+        assert_eq!(restored_media.media_type.as_deref(), Some("application/zip"));
+        assert_eq!(restored_media.pages, expected_pages);
+        assert_eq!(restored_media.page_count, 2);
+        assert_eq!(restored_media.files, expected_files);
+        assert_eq!(restored_media.comment.as_deref(), Some("analysis warning"));
+        assert!(restored_media.extension.is_none());
+        assert!(restored_media.epub_divina_compatible);
+        assert!(!restored_media.epub_is_kepub);
+        assert_eq!(restored_media.book_id, restored.id);
+        assert_eq!(
+            sqlx::query_as::<
+                _,
+                (
+                    String,
+                    String,
+                    i32,
+                    Option<i32>,
+                    Option<i32>,
+                    String,
+                    Option<i64>,
+                    String,
+                ),
+            >(
+                r#"SELECT FILE_NAME, MEDIA_TYPE, NUMBER, WIDTH, HEIGHT,
+                          FILE_HASH, FILE_SIZE, FILE_HASH_ALGORITHM
+                     FROM MEDIA_PAGE WHERE BOOK_ID = ? ORDER BY NUMBER"#,
+            )
+            .bind(&restored.id)
+            .fetch_all(storage.pool())
+            .await
+            .unwrap(),
+            vec![
+                (
+                    "001.jpg".into(),
+                    "image/jpeg".into(),
+                    0,
+                    Some(1200),
+                    Some(1800),
+                    "page-hash-1".into(),
+                    Some(101),
+                    "RAW_XXH3_128_V1".into(),
+                ),
+                (
+                    "002.png".into(),
+                    "image/png".into(),
+                    1,
+                    None,
+                    None,
+                    "page-hash-2".into(),
+                    None,
+                    "PDF_RGB24_XXH3_128_V1".into(),
+                ),
+            ]
+        );
+        let restored_metadata = storage.find_book_metadata(&restored.id).await.unwrap().unwrap();
+        assert_eq!(restored_metadata.title, "Renamed");
+        assert!(!restored_metadata.title_lock);
+        assert_eq!(restored_metadata.number, restored.number.to_string());
+        assert_eq!(restored_metadata.number_sort, f64::from(restored.number));
+        assert_eq!(restored_metadata.summary, "Restored summary");
+        assert!(restored_metadata.tags.contains("restored-tag"));
+        let locked_restored_metadata = storage.find_book_metadata(&locked_restored.id).await.unwrap().unwrap();
+        assert_eq!(locked_restored_metadata.title, "Locked book title");
+        assert!(locked_restored_metadata.title_lock);
+        let thumbnail_types = storage
+            .list_book_thumbnails(&restored.id)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|thumbnail| thumbnail.thumbnail_type)
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            thumbnail_types,
+            BTreeSet::from(["GENERATED".into(), "USER_UPLOADED".into()])
+        );
+        assert_eq!(
+            storage
+                .find_read_progress(&restored.id, &reader.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .page,
+            4
+        );
+        assert!(storage.find_read_progress(&old.id, &reader.id).await.unwrap().is_none());
+        let read_list = storage
+            .find_read_list("restore-read-list", &reader)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(read_list.book_ids, [keep.id.clone(), restored.id.clone()]);
+        assert_eq!(restored_stats.read_list_updated_events.len(), 1);
+        assert_eq!(
+            restored_stats.read_list_updated_events[0].container_id,
+            "restore-read-list"
+        );
+        assert_eq!(
+            restored_stats.read_list_updated_events[0].item_ids,
+            [keep.id.clone(), restored.id.clone()]
+        );
+        assert!(restored_stats.collection_updated_events.is_empty());
+        assert!(
+            sqlx::query("PRAGMA foreign_key_check")
+                .fetch_all(storage.pool())
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn scan_restores_series_relations_after_directory_move() {
+        let storage = Storage::connect_memory().await.unwrap();
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("library");
+        let before_directory = root.join("Before Series");
+        let old_directory = root.join("Old Series");
+        let after_directory = root.join("After Series");
+        fs::create_dir_all(&before_directory).unwrap();
+        fs::create_dir_all(&old_directory).unwrap();
+        fs::create_dir_all(&after_directory).unwrap();
+        fs::write(before_directory.join("Before.cbz"), b"before").unwrap();
+        fs::write(old_directory.join("Book 1.cbz"), b"one").unwrap();
+        fs::write(old_directory.join("Book 2.cbz"), b"two-two").unwrap();
+        fs::write(after_directory.join("After.cbz"), b"after").unwrap();
+        let library = Library::new("Restore series".into(), Url::from_directory_path(&root).unwrap());
+        storage.create_library(&library).await.unwrap();
+
+        let mut initial = scan_library_files(&library, || false).unwrap();
+        set_scanned_book_hash(&mut initial, "Book 1", "book-one-hash");
+        set_scanned_book_hash(&mut initial, "Book 2", "book-two-hash");
+        storage.apply_library_scan(&library.id, &initial, false).await.unwrap();
+        let initial_series = storage.list_series_by_library_id(&library.id).await.unwrap();
+        let before_series = initial_series
+            .iter()
+            .find(|series| series.name == "Before Series")
+            .unwrap()
+            .clone();
+        let old_series = initial_series
+            .iter()
+            .find(|series| series.name == "Old Series")
+            .unwrap()
+            .clone();
+        let after_series = initial_series
+            .iter()
+            .find(|series| series.name == "After Series")
+            .unwrap()
+            .clone();
+        let old_books = storage.list_books_by_series_id(&old_series.id).await.unwrap();
+        for book in &old_books {
+            storage
+                .replace_media_analysis(&Media::result(
+                    &book.id,
+                    MediaStatus::Ready,
+                    Some("application/zip".into()),
+                    None,
+                ))
+                .await
+                .unwrap();
+        }
+        let mut metadata = storage.find_series_metadata(&old_series.id).await.unwrap().unwrap();
+        metadata.title = "Locked series title".into();
+        metadata.title_lock = true;
+        metadata.title_sort = "Stale unlocked series sort".into();
+        metadata.title_sort_lock = false;
+        metadata.summary = "Series summary".into();
+        metadata.summary_lock = true;
+        metadata.language = "en".into();
+        metadata.language_lock = true;
+        storage.save_series_metadata(&metadata).await.unwrap();
+        storage
+            .insert_series_thumbnail(
+                &ThumbnailSeries {
+                    id: new_id(),
+                    thumbnail: Some(vec![3]),
+                    url: None,
+                    selected: false,
+                    thumbnail_type: "USER_UPLOADED".into(),
+                    media_type: "image/jpeg".into(),
+                    file_size: 1,
+                    dimension: Dimension { width: 1, height: 1 },
+                    series_id: old_series.id.clone(),
+                },
+                true,
+            )
+            .await
+            .unwrap();
+        storage
+            .upsert_series_sidecar_thumbnail(
+                &ThumbnailSeries {
+                    id: new_id(),
+                    thumbnail: None,
+                    url: Some("file:///old-series-sidecar.jpg".into()),
+                    selected: false,
+                    thumbnail_type: "SIDECAR".into(),
+                    media_type: "image/jpeg".into(),
+                    file_size: 1,
+                    dimension: Dimension { width: 1, height: 1 },
+                    series_id: old_series.id.clone(),
+                },
+                false,
+            )
+            .await
+            .unwrap();
+
+        let reader = User::new("restore-series@example.org".into(), "unused".into());
+        storage.create_user(&reader).await.unwrap();
+        let progressed_book = old_books.iter().find(|book| book.name == "Book 1").unwrap();
+        storage
+            .save_read_progress(&ReadProgress {
+                book_id: progressed_book.id.clone(),
+                user_id: reader.id.clone(),
+                page: 1,
+                completed: true,
+                read_date: Local::now().naive_local(),
+                device_id: "series-device".into(),
+                device_name: "Series reader".into(),
+                locator: None,
+            })
+            .await
+            .unwrap();
+        let expected_progress = storage
+            .find_series_read_progress(&old_series.id, &reader.id)
+            .await
+            .unwrap();
+        assert_eq!(expected_progress.books_count, 2);
+        assert_eq!(expected_progress.books_read_count, 1);
+        assert_eq!(expected_progress.books_unread_count, 1);
+        assert_eq!(expected_progress.books_in_progress_count, 0);
+        assert_eq!(expected_progress.last_read_continuous_number_sort, 1.0);
+        assert_eq!(expected_progress.max_number_sort, 2.0);
+        assert_eq!(
+            sqlx::query_as::<_, (i32, i32)>(
+                "SELECT READ_COUNT, IN_PROGRESS_COUNT FROM READ_PROGRESS_SERIES \
+                 WHERE SERIES_ID = ? AND USER_ID = ?",
+            )
+            .bind(&old_series.id)
+            .bind(&reader.id)
+            .fetch_one(storage.pool())
+            .await
+            .unwrap(),
+            (1, 0)
+        );
+        storage
+            .create_collection(
+                "restore-collection",
+                &CollectionCreation {
+                    name: "Restore collection".into(),
+                    ordered: true,
+                    series_ids: vec![before_series.id.clone(), old_series.id.clone(), after_series.id.clone()],
+                },
+            )
+            .await
+            .unwrap();
+
+        let staged_directory = temporary.path().join("staged-series");
+        fs::rename(&old_directory, &staged_directory).unwrap();
+        let missing_scan = scan_library_files(&library, || false).unwrap();
+        let missing_stats = storage
+            .apply_library_scan(&library.id, &missing_scan, false)
+            .await
+            .unwrap();
+        assert_eq!(missing_stats.series_deleted, 1);
+        assert_eq!(missing_stats.books_deleted, 2);
+        assert_eq!(missing_stats.series_ids, BTreeSet::from([old_series.id.clone()]));
+        assert_eq!(
+            missing_stats.book_ids,
+            old_books.iter().map(|book| book.id.clone()).collect()
+        );
+        assert_eq!(
+            missing_stats
+                .series_updated_events
+                .iter()
+                .map(|event| (event.series_id.clone(), event.library_id.clone()))
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([(old_series.id.clone(), library.id.clone())])
+        );
+        assert_eq!(
+            missing_stats
+                .book_updated_events
+                .iter()
+                .map(|event| (event.book_id.clone(), event.series_id.clone(), event.library_id.clone()))
+                .collect::<BTreeSet<_>>(),
+            old_books
+                .iter()
+                .map(|book| (book.id.clone(), old_series.id.clone(), library.id.clone()))
+                .collect()
+        );
+        assert!(
+            storage
+                .find_series_by_id(&old_series.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .deleted_date
+                .is_some()
+        );
+        for book in &old_books {
+            assert!(
+                storage
+                    .find_book_by_id(&book.id)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .deleted_date
+                    .is_some()
+            );
+        }
+        assert_eq!(
+            sqlx::query_as::<_, (i32, i32)>(
+                "SELECT READ_COUNT, IN_PROGRESS_COUNT FROM READ_PROGRESS_SERIES \
+                 WHERE SERIES_ID = ? AND USER_ID = ?",
+            )
+            .bind(&old_series.id)
+            .bind(&reader.id)
+            .fetch_one(storage.pool())
+            .await
+            .unwrap(),
+            (1, 0)
+        );
+
+        let new_directory = root.join("New Series");
+        fs::rename(&staged_directory, &new_directory).unwrap();
+        let mut moved_scan = scan_library_files(&library, || false).unwrap();
+        set_scanned_book_hash(&mut moved_scan, "Book 1", "book-one-hash");
+        set_scanned_book_hash(&mut moved_scan, "Book 2", "book-two-hash");
+        let restored_stats = storage
+            .apply_library_scan(&library.id, &moved_scan, false)
+            .await
+            .unwrap();
+
+        let series = storage.list_series_by_library_id(&library.id).await.unwrap();
+        assert_eq!(series.len(), 3);
+        let restored_series = series.iter().find(|series| series.name == "New Series").unwrap();
+        assert_eq!(restored_series.name, "New Series");
+        assert_ne!(restored_series.id, old_series.id);
+        assert_eq!(restored_stats.series_added, 1);
+        assert_eq!(restored_stats.series_restored, 1);
+        assert_eq!(restored_stats.books_added, 2);
+        assert_eq!(restored_stats.books_restored, 2);
+        assert_eq!(
+            restored_stats.series_ids,
+            BTreeSet::from([old_series.id.clone(), restored_series.id.clone()])
+        );
+        assert_eq!(
+            restored_stats.collection_ids,
+            BTreeSet::from(["restore-collection".into()])
+        );
+        assert_eq!(
+            restored_stats.series_metadata_refresh_ids,
+            BTreeSet::from([restored_series.id.clone()])
+        );
+        assert!(restored_stats.read_list_ids.is_empty());
+        assert!(storage.find_series_by_id(&old_series.id).await.unwrap().is_none());
+        for old_book in &old_books {
+            assert!(storage.find_book_by_id(&old_book.id).await.unwrap().is_none());
+        }
+        let restored_books = storage.list_books_by_series_id(&restored_series.id).await.unwrap();
+        assert_eq!(restored_books.len(), 2);
+        assert!(restored_books.iter().all(|book| book.deleted_date.is_none()));
+        assert_eq!(
+            restored_stats.book_ids,
+            old_books
+                .iter()
+                .map(|book| book.id.clone())
+                .chain(restored_books.iter().map(|book| book.id.clone()))
+                .collect()
+        );
+        assert_eq!(
+            restored_stats
+                .series_added_events
+                .iter()
+                .map(|event| (event.series_id.clone(), event.library_id.clone()))
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([(restored_series.id.clone(), library.id.clone())])
+        );
+        assert_eq!(
+            restored_stats
+                .series_deleted_events
+                .iter()
+                .map(|event| (event.series_id.clone(), event.library_id.clone()))
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([(old_series.id.clone(), library.id.clone())])
+        );
+        assert_eq!(
+            restored_stats
+                .book_added_events
+                .iter()
+                .map(|event| (event.book_id.clone(), event.series_id.clone(), event.library_id.clone()))
+                .collect::<BTreeSet<_>>(),
+            restored_books
+                .iter()
+                .map(|book| { (book.id.clone(), restored_series.id.clone(), library.id.clone(),) })
+                .collect()
+        );
+        assert_eq!(
+            restored_stats
+                .book_deleted_events
+                .iter()
+                .map(|event| (event.book_id.clone(), event.series_id.clone(), event.library_id.clone()))
+                .collect::<BTreeSet<_>>(),
+            old_books
+                .iter()
+                .map(|book| (book.id.clone(), old_series.id.clone(), library.id.clone()))
+                .collect()
+        );
+        assert!(restored_stats.book_updated_events.is_empty());
+        assert!(restored_stats.series_updated_events.is_empty());
+        assert_eq!(
+            restored_stats
+                .book_title_refresh_events
+                .iter()
+                .map(|event| (event.book_id.clone(), event.series_id.clone(), event.library_id.clone()))
+                .collect::<BTreeSet<_>>(),
+            restored_books
+                .iter()
+                .map(|book| { (book.id.clone(), restored_series.id.clone(), library.id.clone(),) })
+                .collect()
+        );
+        for book in &restored_books {
+            assert_eq!(
+                storage.find_media_by_book_id(&book.id).await.unwrap().unwrap().status,
+                MediaStatus::Ready
+            );
+        }
+        let restored_metadata = storage
+            .find_series_metadata(&restored_series.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(restored_metadata.title, "Locked series title");
+        assert!(restored_metadata.title_lock);
+        assert_eq!(restored_metadata.title_sort, "New Series");
+        assert!(!restored_metadata.title_sort_lock);
+        assert_eq!(restored_metadata.summary, "Series summary");
+        assert_eq!(restored_metadata.language, "en");
+        let thumbnail_types = storage
+            .list_series_thumbnails(&restored_series.id)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|thumbnail| thumbnail.thumbnail_type)
+            .collect::<BTreeSet<_>>();
+        assert_eq!(thumbnail_types, BTreeSet::from(["USER_UPLOADED".into()]));
+        let collection = storage
+            .find_collection("restore-collection", &reader)
+            .await
+            .unwrap()
+            .unwrap();
+        let expected_collection_ids = vec![
+            before_series.id.clone(),
+            restored_series.id.clone(),
+            after_series.id.clone(),
+        ];
+        assert_eq!(collection.series_ids, expected_collection_ids);
+        assert_eq!(restored_stats.collection_updated_events.len(), 1);
+        assert_eq!(
+            restored_stats.collection_updated_events[0].container_id,
+            "restore-collection"
+        );
+        assert_eq!(
+            restored_stats.collection_updated_events[0].item_ids,
+            expected_collection_ids
+        );
+        assert!(restored_stats.read_list_updated_events.is_empty());
+
+        let restored_progress = storage
+            .find_series_read_progress(&restored_series.id, &reader.id)
+            .await
+            .unwrap();
+        assert_eq!(restored_progress, expected_progress);
+        assert_eq!(
+            sqlx::query_as::<_, (i32, i32)>(
+                "SELECT READ_COUNT, IN_PROGRESS_COUNT FROM READ_PROGRESS_SERIES \
+                 WHERE SERIES_ID = ? AND USER_ID = ?",
+            )
+            .bind(&restored_series.id)
+            .bind(&reader.id)
+            .fetch_one(storage.pool())
+            .await
+            .unwrap(),
+            (1, 0)
+        );
+        assert!(
+            sqlx::query_scalar::<_, String>(
+                "SELECT SERIES_ID FROM READ_PROGRESS_SERIES WHERE SERIES_ID = ? AND USER_ID = ?",
+            )
+            .bind(&old_series.id)
+            .bind(&reader.id)
+            .fetch_optional(storage.pool())
+            .await
+            .unwrap()
+            .is_none()
+        );
+        let restored_progress_book = restored_books.iter().find(|book| book.name == "Book 1").unwrap();
+        let progress = storage
+            .find_read_progress(&restored_progress_book.id, &reader.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(progress.page, 1);
+        assert!(progress.completed);
+        assert!(
+            storage
+                .find_read_progress(&progressed_book.id, &reader.id)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            sqlx::query("PRAGMA foreign_key_check")
+                .fetch_all(storage.pool())
+                .await
+                .unwrap()
+                .is_empty()
         );
     }
 
