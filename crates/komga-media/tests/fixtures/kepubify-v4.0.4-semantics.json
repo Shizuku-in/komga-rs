@@ -1,0 +1,229 @@
+{
+  "generator": "kepubify v4.0.4",
+  "binarySha256": "37d7628d26c5c906f607f24b36f781f306075e7073a6fe7820a751bb60431fc5",
+  "cases": [
+    {
+      "name": "synthetic-nested-dom",
+      "entries": [
+        "META-INF/container.xml",
+        "OEBPS/chapter.xhtml",
+        "OEBPS/content.opf",
+        "OEBPS/cover.jpg",
+        "mimetype"
+      ],
+      "package": {
+        "path": "OEBPS/content.opf",
+        "elementCount": 8,
+        "semanticHash": "0022aa46b5cdbfe039c4098fa5395b1b",
+        "manifest": [
+          "cover|cover.jpg|image/jpeg|cover-image",
+          "chapter|chapter.xhtml|application/xhtml+xml|"
+        ],
+        "spine": [
+          "chapter|"
+        ]
+      },
+      "documents": [
+        {
+          "path": "OEBPS/chapter.xhtml",
+          "elementCount": 19,
+          "attributeCount": 18,
+          "spanCount": 5,
+          "semanticHash": "bf3e4af5b7dda3eaf562ae98d218bb83",
+          "firstSpans": [
+            "kobo.1.1=Heading.",
+            "kobo.2.1=One sentence.",
+            "kobo.2.2=Nested sentence!"
+          ],
+          "lastSpans": [
+            "kobo.2.2=Nested sentence!",
+            "kobo.2.3=Final?",
+            "kobo.3.1="
+          ]
+        }
+      ]
+    },
+    {
+      "name": "kotlin-reflowable-navigation",
+      "entries": [
+        "META-INF/container.xml",
+        "OEBPS/@public@vhost@g@gutenberg@html@files@65659@65659-h@65659-h-0.htm_split_000.html",
+        "OEBPS/@public@vhost@g@gutenberg@html@files@65659@65659-h@65659-h-0.htm_split_001.html",
+        "OEBPS/@public@vhost@g@gutenberg@html@files@65659@65659-h@65659-h-0.htm_split_002.html",
+        "content.opf",
+        "cover.jpeg",
+        "mimetype",
+        "nav.xhtml",
+        "page_styles.css",
+        "stylesheet.css",
+        "titlepage.xhtml"
+      ],
+      "package": {
+        "path": "content.opf",
+        "elementCount": 33,
+        "semanticHash": "11214719c3e5ec48b6dee14e8de79a6a",
+        "manifest": [
+          "titlepage|titlepage.xhtml|application/xhtml+xml|svg calibre:title-page",
+          "item53|OEBPS/@public@vhost@g@gutenberg@html@files@65659@65659-h@65659-h-0.htm_split_000.html|application/xhtml+xml|",
+          "item52|OEBPS/@public@vhost@g@gutenberg@html@files@65659@65659-h@65659-h-0.htm_split_001.html|application/xhtml+xml|",
+          "item51|OEBPS/@public@vhost@g@gutenberg@html@files@65659@65659-h@65659-h-0.htm_split_002.html|application/xhtml+xml|",
+          "page_css|page_styles.css|text/css|",
+          "css|stylesheet.css|text/css|",
+          "cover|cover.jpeg|image/jpeg|cover-image",
+          "nav|nav.xhtml|application/xhtml+xml|nav"
+        ],
+        "spine": [
+          "titlepage|",
+          "item53|",
+          "item52|",
+          "item51|"
+        ]
+      },
+      "documents": [
+        {
+          "path": "OEBPS/@public@vhost@g@gutenberg@html@files@65659@65659-h@65659-h-0.htm_split_000.html",
+          "elementCount": 37,
+          "attributeCount": 59,
+          "spanCount": 13,
+          "semanticHash": "1ba08b78e8d71fd293d5c4f3601008c8",
+          "firstSpans": [
+            "kobo.0.1=The Project Gutenberg eBook of The Incomplete Theft, by Ralph Burke",
+            "kobo.0.2=This eBook is for the use of anyone anywhere in the United States and most other parts of the world at no cost and with almost no restrictions whatsoever.",
+            "kobo.0.3=You may copy it, give it away or re-use it under the terms of the Project Gutenberg License included with this eBook or online at"
+          ],
+          "lastSpans": [
+            "kobo.1.5=Character set encoding: UTF-8",
+            "kobo.1.6=Produced by: Greg Weeks, Mary Meehan and the Online Distributed Proofreading Team at http://www.pgdp.net",
+            "kobo.1.7=*** START OF THE PROJECT GUTENBERG EBOOK THE INCOMPLETE THEFT ***"
+          ]
+        },
+        {
+          "path": "OEBPS/@public@vhost@g@gutenberg@html@files@65659@65659-h@65659-h-0.htm_split_001.html",
+          "elementCount": 17,
+          "attributeCount": 28,
+          "spanCount": 1,
+          "semanticHash": "021bbac261c2aa68cb785c673c1776ce",
+          "firstSpans": [
+            "kobo.1.1=The Incomplete Theft"
+          ],
+          "lastSpans": [
+            "kobo.1.1=The Incomplete Theft"
+          ]
+        },
+        {
+          "path": "OEBPS/@public@vhost@g@gutenberg@html@files@65659@65659-h@65659-h-0.htm_split_002.html",
+          "elementCount": 436,
+          "attributeCount": 738,
+          "spanCount": 291,
+          "semanticHash": "bf2927291884f15ef8e839f44a1dc9f7",
+          "firstSpans": [
+            "kobo.1.1=By Ralph Burke",
+            "kobo.2.1=Stealing a new space ship principle from",
+            "kobo.2.2=Earth seemed like an easy enough task for the"
+          ],
+          "lastSpans": [
+            "kobo.50.146=www.gutenberg.org",
+            "kobo.50.147=.",
+            "kobo.50.148=This website includes information about Project Gutenberg\u2122, including how to make donations to the Project Gutenberg Literary Archive Foundation, how to help produce our new eBooks, and how to subscribe to our email newsletter to hear about new eBooks."
+          ]
+        },
+        {
+          "path": "nav.xhtml",
+          "elementCount": 18,
+          "attributeCount": 20,
+          "spanCount": 2,
+          "semanticHash": "675a7539798f5f3412d552e4316d1913",
+          "firstSpans": [
+            "kobo.1.1=The Incomplete Theft",
+            "kobo.2.1=Cover"
+          ],
+          "lastSpans": [
+            "kobo.1.1=The Incomplete Theft",
+            "kobo.2.1=Cover"
+          ]
+        },
+        {
+          "path": "titlepage.xhtml",
+          "elementCount": 13,
+          "attributeCount": 23,
+          "spanCount": 0,
+          "semanticHash": "070f1853ce9cd967ebb1f84b033adef3",
+          "firstSpans": [],
+          "lastSpans": []
+        }
+      ]
+    },
+    {
+      "name": "kotlin-fixed-layout",
+      "entries": [
+        "0_0.png",
+        "META-INF/container.xml",
+        "content.opf",
+        "cover.jpeg",
+        "mimetype",
+        "nav.xhtml",
+        "page_1.xhtml",
+        "page_styles.css",
+        "stylesheet.css",
+        "titlepage.xhtml"
+      ],
+      "package": {
+        "path": "content.opf",
+        "elementCount": 27,
+        "semanticHash": "60dd19ae4f2a6fc73e205a57252d7df3",
+        "manifest": [
+          "titlepage|titlepage.xhtml|application/xhtml+xml|svg calibre:title-page",
+          "id1|page_1.xhtml|application/xhtml+xml|",
+          "page_css|page_styles.css|text/css|",
+          "css|stylesheet.css|text/css|",
+          "id2|0_0.png|image/png|",
+          "cover|cover.jpeg|image/jpeg|cover-image",
+          "nav|nav.xhtml|application/xhtml+xml|nav"
+        ],
+        "spine": [
+          "titlepage|",
+          "id1|"
+        ]
+      },
+      "documents": [
+        {
+          "path": "nav.xhtml",
+          "elementCount": 18,
+          "attributeCount": 20,
+          "spanCount": 2,
+          "semanticHash": "e60068596eefdde98bc9d739bf2ab289",
+          "firstSpans": [
+            "kobo.1.1=Page 1",
+            "kobo.2.1=Cover"
+          ],
+          "lastSpans": [
+            "kobo.1.1=Page 1",
+            "kobo.2.1=Cover"
+          ]
+        },
+        {
+          "path": "page_1.xhtml",
+          "elementCount": 13,
+          "attributeCount": 21,
+          "spanCount": 1,
+          "semanticHash": "6974c01dbd61fd0408c726b3e3bc188e",
+          "firstSpans": [
+            "kobo.1.1="
+          ],
+          "lastSpans": [
+            "kobo.1.1="
+          ]
+        },
+        {
+          "path": "titlepage.xhtml",
+          "elementCount": 13,
+          "attributeCount": 23,
+          "spanCount": 0,
+          "semanticHash": "8261565402f0fa3b501c551820547093",
+          "firstSpans": [],
+          "lastSpans": []
+        }
+      ]
+    }
+  ]
+}

@@ -1146,22 +1146,20 @@ fn serialize_node(
             let name = element.name();
             output.push(b'<');
             write_qualified_name(&element.name, output);
-            let has_xmlns = element.attrs.iter().any(|(name, _)| {
-                name.local.as_ref() == "xmlns" || name.prefix.as_ref().is_some_and(|prefix| prefix.as_ref() == "xmlns")
+            let has_default_xmlns = element.attrs.iter().any(|(name, _)| {
+                name.local.as_ref() == "xmlns" && name.prefix.as_ref().is_none_or(|prefix| prefix.as_ref().is_empty())
+            });
+            let has_xlink_xmlns = element.attrs.iter().any(|(name, _)| {
+                name.local.as_ref() == "xlink" && name.prefix.as_ref().is_some_and(|prefix| prefix.as_ref() == "xmlns")
             });
             for (attribute, value) in &element.attrs {
                 output.push(b' ');
                 write_qualified_name(attribute, output);
                 output.extend_from_slice(b"=\"");
-                let rendered = if is_boolean_attribute(attribute.local.as_ref()) && value.is_empty() {
-                    attribute.local.as_ref()
-                } else {
-                    value
-                };
-                escape_attribute(rendered, output);
+                escape_attribute(value, output);
                 output.push(b'"');
             }
-            if !has_xmlns {
+            if !has_default_xmlns {
                 let namespace = element.name.ns.as_ref();
                 let required = match name {
                     "html" => Some(XHTML_NAMESPACE),
@@ -1176,6 +1174,9 @@ fn serialize_node(
                     output.extend_from_slice(namespace.as_bytes());
                     output.push(b'"');
                 }
+            }
+            if name == "svg" && !has_xlink_xmlns {
+                output.extend_from_slice(b" xmlns:xlink=\"http://www.w3.org/1999/xlink\"");
             }
             if matches!(name, "script" | "style") && element_attr(element, "type").is_none() {
                 let media_type = if name == "style" { "text/css" } else { "text/javascript" };
@@ -1230,7 +1231,9 @@ fn escape_attribute(value: &str, output: &mut Vec<u8>) {
 }
 
 fn write_qualified_name(name: &QualName, output: &mut Vec<u8>) {
-    if let Some(prefix) = &name.prefix {
+    if let Some(prefix) = &name.prefix
+        && !prefix.as_ref().is_empty()
+    {
         output.extend_from_slice(prefix.as_bytes());
         output.push(b':');
     }
@@ -1311,36 +1314,6 @@ fn is_void_element(name: &str) -> bool {
             | "source"
             | "track"
             | "wbr"
-    )
-}
-
-fn is_boolean_attribute(name: &str) -> bool {
-    matches!(
-        name,
-        "allowfullscreen"
-            | "async"
-            | "autofocus"
-            | "autoplay"
-            | "checked"
-            | "controls"
-            | "default"
-            | "defer"
-            | "disabled"
-            | "formnovalidate"
-            | "hidden"
-            | "ismap"
-            | "itemscope"
-            | "loop"
-            | "multiple"
-            | "muted"
-            | "nomodule"
-            | "novalidate"
-            | "open"
-            | "playsinline"
-            | "readonly"
-            | "required"
-            | "reversed"
-            | "selected"
     )
 }
 
@@ -1509,8 +1482,13 @@ fn write_zip(error: ZipError) -> KepubConversionError {
 
 #[cfg(test)]
 mod tests {
-    use std::{fs::File, io::Cursor};
+    use std::{
+        io::Cursor,
+        path::{Path, PathBuf},
+        process::Command,
+    };
 
+    use serde::{Deserialize, Serialize};
     use zip::write::{FullFileOptions, SimpleFileOptions};
 
     use super::*;
@@ -1725,52 +1703,285 @@ mod tests {
         assert!(matches!(error, KepubConversionError::Cancelled));
     }
 
-    #[test]
-    #[ignore = "requires KEPUBIFY_BIN pointing to kepubify v4.0.4"]
-    fn differential_entry_and_span_ids_match_kepubify_v4_0_4() {
-        let executable = std::env::var_os("KEPUBIFY_BIN").expect("KEPUBIFY_BIN is required");
-        let temporary = tempfile::tempdir().unwrap();
-        let source_path = temporary.path().join("source.epub");
-        let internal_path = temporary.path().join("internal.kepub.epub");
-        let external_path = temporary.path().join("external.kepub.epub");
-        let source = epub(
-            r#"<?xml version="1.0"?><!DOCTYPE html><html xmlns="http://www.w3.org/1999/xhtml"><head><title>Test</title></head><body><h1>Heading.</h1><p>One sentence. <em>Nested sentence!</em> Final?</p><img src="cover.jpg"/><pre>Do not split. This.</pre></body></html>"#,
-            "",
-        )
-        .into_inner();
-        std::fs::write(&source_path, &source).unwrap();
-        convert_epub_to_kepub(Cursor::new(source), File::create(&internal_path).unwrap(), || false).unwrap();
-        let status = std::process::Command::new(executable)
-            .arg(&source_path)
-            .arg("-o")
-            .arg(&external_path)
-            .status()
-            .unwrap();
-        assert!(status.success());
+    const KEPUBIFY_GOLDEN: &str = include_str!("../tests/fixtures/kepubify-v4.0.4-semantics.json");
+    const KEPUBIFY_V4_0_4_SHA256: &str = "37d7628d26c5c906f607f24b36f781f306075e7073a6fe7820a751bb60431fc5";
 
-        fn semantics(path: &std::path::Path) -> (Vec<String>, Vec<String>) {
-            let mut archive = ZipArchive::new(File::open(path).unwrap()).unwrap();
-            let mut names = Vec::new();
-            let mut spans = Vec::new();
-            let selector = scraper::Selector::parse(".koboSpan[id]").unwrap();
-            for index in 0..archive.len() {
-                let mut entry = archive.by_index(index).unwrap();
-                names.push(entry.name().to_owned());
-                if entry.name().ends_with(".xhtml") || entry.name().ends_with(".html") {
-                    let mut content = String::new();
-                    entry.read_to_string(&mut content).unwrap();
-                    spans.extend(
-                        Html::parse_document(&content)
-                            .select(&selector)
-                            .filter_map(|element| element.value().attr("id").map(str::to_owned)),
-                    );
-                }
-            }
-            names.sort();
-            spans.sort();
-            (names, spans)
+    #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+    #[serde(rename_all = "camelCase")]
+    struct KepubGoldenCorpus {
+        generator: String,
+        binary_sha256: String,
+        cases: Vec<KepubGoldenCase>,
+    }
+
+    #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+    struct KepubGoldenCase {
+        name: String,
+        entries: Vec<String>,
+        package: PackageSemantics,
+        documents: Vec<DocumentSemantics>,
+    }
+
+    #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+    #[serde(rename_all = "camelCase")]
+    struct PackageSemantics {
+        path: String,
+        element_count: usize,
+        semantic_hash: String,
+        manifest: Vec<String>,
+        spine: Vec<String>,
+    }
+
+    #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+    #[serde(rename_all = "camelCase")]
+    struct DocumentSemantics {
+        path: String,
+        element_count: usize,
+        attribute_count: usize,
+        span_count: usize,
+        semantic_hash: String,
+        first_spans: Vec<String>,
+        last_spans: Vec<String>,
+    }
+
+    #[test]
+    fn semantic_corpus_matches_kepubify_v4_0_4_golden() {
+        if std::env::var_os("PRINT_KEPUBIFY_GOLDEN").is_some() {
+            let executable = std::env::var_os("KEPUBIFY_BIN").expect("PRINT_KEPUBIFY_GOLDEN requires KEPUBIFY_BIN");
+            let upstream = summarize_corpus(Some(PathBuf::from(executable)));
+            println!("{}", serde_json::to_string_pretty(&upstream).unwrap());
+            return;
         }
 
-        assert_eq!(semantics(&internal_path), semantics(&external_path));
+        let expected: KepubGoldenCorpus = serde_json::from_str(KEPUBIFY_GOLDEN).unwrap();
+        assert_eq!(expected.generator, "kepubify v4.0.4");
+        assert_eq!(expected.binary_sha256, KEPUBIFY_V4_0_4_SHA256);
+
+        let internal = summarize_corpus(None);
+        assert_eq!(
+            internal, expected,
+            "in-process KEPUB semantics drifted from the v4.0.4 golden"
+        );
+
+        if let Some(executable) = std::env::var_os("KEPUBIFY_BIN") {
+            let upstream = summarize_corpus(Some(PathBuf::from(executable)));
+            assert_eq!(
+                upstream, expected,
+                "checked-in golden does not match the configured kepubify binary"
+            );
+        }
+    }
+
+    fn summarize_corpus(executable: Option<PathBuf>) -> KepubGoldenCorpus {
+        let cases = kepub_corpus_sources()
+            .into_iter()
+            .map(|(name, source)| {
+                let output = match executable.as_ref() {
+                    Some(executable) => convert_with_kepubify(executable, name, &source),
+                    None => {
+                        let mut output = Cursor::new(Vec::new());
+                        convert_epub_to_kepub(Cursor::new(source), &mut output, || false).unwrap();
+                        output.into_inner()
+                    }
+                };
+                summarize_kepub(name, output)
+            })
+            .collect();
+        KepubGoldenCorpus {
+            generator: "kepubify v4.0.4".into(),
+            binary_sha256: KEPUBIFY_V4_0_4_SHA256.into(),
+            cases,
+        }
+    }
+
+    fn kepub_corpus_sources() -> Vec<(&'static str, Vec<u8>)> {
+        let fixture = |path: &str| {
+            std::fs::read(
+                PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../komga/komga/src/test/resources")
+                    .join(path),
+            )
+            .unwrap()
+        };
+        vec![
+            (
+                "synthetic-nested-dom",
+                epub(
+                    r#"<?xml version="1.0"?><!DOCTYPE html><html xmlns="http://www.w3.org/1999/xhtml"><head><title>Test</title></head><body><h1>Heading.</h1><p>One sentence. <em>Nested sentence!</em> Final?</p><img src="cover.jpg"/><pre>Do not split. This.</pre><svg><text>Vector.</text></svg></body></html>"#,
+                    "",
+                )
+                .into_inner(),
+            ),
+            (
+                "kotlin-reflowable-navigation",
+                fixture("epub/The Incomplete Theft - Ralph Burke.epub"),
+            ),
+            ("kotlin-fixed-layout", fixture("archives/epub3.epub")),
+        ]
+    }
+
+    fn convert_with_kepubify(executable: &Path, name: &str, source: &[u8]) -> Vec<u8> {
+        let temporary = tempfile::tempdir().unwrap();
+        let source_path = temporary.path().join(format!("{name}.epub"));
+        let output_path = temporary.path().join(format!("{name}.kepub.epub"));
+        std::fs::write(&source_path, source).unwrap();
+        let output = Command::new(executable)
+            .arg(&source_path)
+            .arg("-o")
+            .arg(&output_path)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "kepubify failed for {name}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        std::fs::read(output_path).unwrap()
+    }
+
+    fn summarize_kepub(name: &str, bytes: Vec<u8>) -> KepubGoldenCase {
+        let mut archive = ZipArchive::new(Cursor::new(bytes)).unwrap();
+        let index = inspect_archive(&mut archive, &|| false).unwrap();
+        let package = read_package(&mut archive, &index, &|| false).unwrap();
+        let mut entries = index.names.clone();
+        entries.sort();
+
+        let mut opf = String::new();
+        archive
+            .by_name(&package.path)
+            .unwrap()
+            .read_to_string(&mut opf)
+            .unwrap();
+        let package_semantics = summarize_package(&package.path, &opf);
+        let mut documents = package
+            .content_paths
+            .iter()
+            .map(|path| {
+                let mut content = String::new();
+                archive.by_name(path).unwrap().read_to_string(&mut content).unwrap();
+                summarize_document(path, &content)
+            })
+            .collect::<Vec<_>>();
+        documents.sort_by(|left, right| left.path.cmp(&right.path));
+        KepubGoldenCase {
+            name: name.into(),
+            entries,
+            package: package_semantics,
+            documents,
+        }
+    }
+
+    fn summarize_package(path: &str, content: &str) -> PackageSemantics {
+        let document = epub_package::parse_xml(content).unwrap();
+        let manifest = document
+            .descendants()
+            .filter(|node| local_name(*node, "item"))
+            .filter(|node| node.ancestors().any(|ancestor| local_name(ancestor, "manifest")))
+            .map(|node| {
+                ["id", "href", "media-type", "properties"]
+                    .map(|attribute| node.attribute(attribute).unwrap_or_default())
+                    .join("|")
+            })
+            .collect();
+        let spine = document
+            .descendants()
+            .filter(|node| local_name(*node, "itemref"))
+            .filter(|node| node.ancestors().any(|ancestor| local_name(ancestor, "spine")))
+            .map(|node| {
+                ["idref", "linear"]
+                    .map(|attribute| node.attribute(attribute).unwrap_or_default())
+                    .join("|")
+            })
+            .collect();
+        let mut projection = String::new();
+        let mut element_count = 0;
+        for node in document.descendants() {
+            if node.is_element() {
+                element_count += 1;
+                let mut attributes = node
+                    .attributes()
+                    .map(|attribute| format!("{}={}", attribute.name(), attribute.value()))
+                    .collect::<Vec<_>>();
+                attributes.sort();
+                projection.push_str(&format!(
+                    "{}|E|{}|{}\n",
+                    node.ancestors().count(),
+                    node.tag_name().name(),
+                    attributes.join("|")
+                ));
+            } else if node.is_text() {
+                let text = normalized_semantic_text(node.text().unwrap_or_default());
+                if !text.is_empty() {
+                    projection.push_str(&format!("{}|T|{text}\n", node.ancestors().count()));
+                }
+            }
+        }
+        PackageSemantics {
+            path: path.into(),
+            element_count,
+            semantic_hash: semantic_hash(&projection),
+            manifest,
+            spine,
+        }
+    }
+
+    fn summarize_document(path: &str, content: &str) -> DocumentSemantics {
+        let document = Html::parse_document(content);
+        let mut projection = String::new();
+        let mut element_count = 0;
+        let mut attribute_count = 0;
+        for node in document.tree.root().descendants() {
+            if let Some(element) = node.value().as_element() {
+                element_count += 1;
+                attribute_count += element.attrs.len();
+                let mut attributes = element
+                    .attrs
+                    .iter()
+                    .map(|(attribute, value)| format!("{}={value}", attribute.local))
+                    .collect::<Vec<_>>();
+                attributes.sort();
+                projection.push_str(&format!(
+                    "{}|E|{}|{}\n",
+                    node.ancestors().count(),
+                    element.name.local,
+                    attributes.join("|")
+                ));
+            } else if let Some(text) = node.value().as_text() {
+                let text = normalized_semantic_text(&text.text);
+                if !text.is_empty() {
+                    projection.push_str(&format!("{}|T|{text}\n", node.ancestors().count()));
+                }
+            }
+        }
+        let selector = scraper::Selector::parse(".koboSpan[id]").unwrap();
+        let spans = document
+            .select(&selector)
+            .map(|element| {
+                format!(
+                    "{}={}",
+                    element.value().attr("id").unwrap_or_default(),
+                    normalized_semantic_text(&element.text().collect::<String>())
+                )
+            })
+            .collect::<Vec<_>>();
+        let first_spans = spans.iter().take(3).cloned().collect();
+        let last_spans = spans.iter().rev().take(3).cloned().rev().collect();
+        DocumentSemantics {
+            path: path.into(),
+            element_count,
+            attribute_count,
+            span_count: spans.len(),
+            semantic_hash: semantic_hash(&projection),
+            first_spans,
+            last_spans,
+        }
+    }
+
+    fn normalized_semantic_text(value: &str) -> String {
+        value.split_whitespace().collect::<Vec<_>>().join(" ")
+    }
+
+    fn semantic_hash(value: &str) -> String {
+        format!("{:032x}", xxhash_rust::xxh3::xxh3_128(value.as_bytes()))
     }
 }

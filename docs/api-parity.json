@@ -495,7 +495,7 @@
     {
       "area": "books",
       "kotlinSource": "BookController / CommonBookController",
-      "access": "public",
+      "access": "conditional",
       "behavior": "implemented",
       "routes": [
         {
@@ -1436,7 +1436,15 @@
             "GET"
           ],
           "path": "/opds/v2/auth"
-        },
+        }
+      ]
+    },
+    {
+      "area": "opds-v2",
+      "kotlinSource": "Opds2Controller / CommonBookController",
+      "access": "conditional",
+      "behavior": "implemented",
+      "routes": [
         {
           "methods": [
             "GET"

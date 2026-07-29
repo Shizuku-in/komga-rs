@@ -23,10 +23,14 @@ truth.
 
 ## Automated guard
 
-The server integration suite validates the manifest structure and probes every non-Kobo route at both
-`/` and `/komga`. A `TRACE` request must expose every declared method in the `Allow` response header;
-a missing path or method fails the test. Kobo is verified through its functional tests because its
-intentional `ANY` Store-proxy fallback consumes unmatched methods.
+The server integration suite parses the pinned Kotlin `komga/docs/openapi.json` and requires every one
+of its 165 REST operations to appear in the manifest after normalizing path-parameter names. It then
+probes every non-Kobo route at both `/` and `/komga`: a `TRACE` request must expose exactly the declared
+methods in the `Allow` response header. Every template is also called without credentials to lock its
+public, protected, conditionally public, OPDS Basic, Kobo-key, or KOReader-key boundary. DTOs and
+successful side effects are covered by the domain HTTP scenarios rather than synthetic manifest requests.
+Kobo methods are verified through those functional scenarios because its intentional `ANY` Store-proxy
+fallback consumes unmatched methods.
 
 ## Search contract
 
