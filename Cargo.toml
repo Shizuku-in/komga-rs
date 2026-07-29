@@ -21,10 +21,12 @@ async-trait = "0.1"
 axum = { version = "0.8", features = ["multipart"] }
 base64 = "0.23"
 bcrypt = "0.19"
+boko = { version = "=0.2.0", default-features = false }
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4.5", features = ["derive", "env"] }
 cookie = "0.18"
 ego-tree = "0.11"
+encoding_rs = "0.8"
 futures-core = "0.3"
 futures-util = "0.3"
 flate2 = "1.1"

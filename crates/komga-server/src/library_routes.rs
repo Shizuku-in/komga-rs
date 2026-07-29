@@ -41,6 +41,7 @@ pub(crate) struct LibraryDto {
     scan_cbx: bool,
     scan_pdf: bool,
     scan_epub: bool,
+    scan_mobi: bool,
     scan_directory_exclusions: BTreeSet<String>,
     repair_extensions: bool,
     convert_to_cbz: bool,
@@ -84,6 +85,7 @@ impl LibraryDto {
             scan_cbx: library.scan_cbx,
             scan_pdf: library.scan_pdf,
             scan_epub: library.scan_epub,
+            scan_mobi: library.scan_mobi,
             scan_directory_exclusions: library.scan_directory_exclusions,
             repair_extensions: library.repair_extensions,
             convert_to_cbz: library.convert_to_cbz,
@@ -155,6 +157,7 @@ pub(crate) async fn create_library(
     library.scan_cbx = payload.scan_cbx;
     library.scan_pdf = payload.scan_pdf;
     library.scan_epub = payload.scan_epub;
+    library.scan_mobi = payload.scan_mobi;
     library.scan_directory_exclusions = payload.scan_directory_exclusions;
     library.repair_extensions = payload.repair_extensions;
     library.convert_to_cbz = payload.convert_to_cbz;
@@ -224,6 +227,7 @@ pub(crate) async fn update_library(
     apply_value(&mut updated.scan_cbx, patch.scan_cbx);
     apply_value(&mut updated.scan_pdf, patch.scan_pdf);
     apply_value(&mut updated.scan_epub, patch.scan_epub);
+    apply_value(&mut updated.scan_mobi, patch.scan_mobi);
     match patch.scan_directory_exclusions {
         Patch::Missing => {}
         Patch::Null => updated.scan_directory_exclusions.clear(),

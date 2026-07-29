@@ -4,13 +4,13 @@ use std::time::Duration;
 
 use komga_core::{
     BookEvent, BookMetadataPatch, BookThumbnailEvent, ContainerEvent, DomainEvent, HashedPageTarget, LibraryEvent,
-    MediaStatus, MetadataUpdate, ScanError, SeriesEvent, SeriesMetadataPatch, ThumbnailBook, new_id,
-    oneshot_series_metadata_patch, scan_library_files,
+    MOBI_MEDIA_TYPE, Media, MediaStatus, MetadataUpdate, ScanError, SeriesEvent, SeriesMetadataPatch, ThumbnailBook,
+    new_id, oneshot_series_metadata_patch, scan_library_files,
 };
 use komga_media::{
-    FileHashError, KepubSpanError, MediaAnalysisError, MediaOperationError, analyze_book, enrich_kobo_spans,
-    extract_comic_info_metadata, extract_epub_metadata, extract_isbn_barcode, extract_mylar_metadata,
-    generate_thumbnail, hash_file, image_dimension, reconcile_scan_hashes,
+    FileHashError, KepubSpanError, MediaAnalysisError, MediaOperationError, analyze_book, analyze_materialized_mobi,
+    enrich_kobo_spans, extract_comic_info_metadata, extract_epub_metadata, extract_isbn_barcode,
+    extract_mylar_metadata, generate_thumbnail, hash_file, image_dimension, reconcile_scan_hashes,
 };
 use komga_search::EntityKind;
 use komga_storage::{RebuildIndexEntity, StorageError, TaskRecord};

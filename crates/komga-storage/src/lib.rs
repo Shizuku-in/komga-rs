@@ -615,9 +615,9 @@ mod tests {
     use chrono::Local;
     use komga_core::{
         ALL_ROLES, AgeRestriction, AllowExclude, BookCondition, BookPage, BookSearch, CollectionCreation,
-        ContentRestrictions, Dimension, EqualityOperator, Library, Media, MediaFile, MediaStatus, PageRequest,
-        ReadListCreation, ReadProgress, ReadStatus, ScanInterval, ScanResult, SeriesSearch, SortDirection, SortOrder,
-        ThumbnailBook, ThumbnailSeries, new_id, scan_library_files,
+        ContentRestrictions, Dimension, EqualityOperator, Library, MOBI_MEDIA_TYPE, Media, MediaFile, MediaProfile,
+        MediaStatus, PageRequest, ReadListCreation, ReadProgress, ReadStatus, ScanInterval, ScanResult, SeriesSearch,
+        SortDirection, SortOrder, ThumbnailBook, ThumbnailSeries, new_id, scan_library_files,
     };
     use url::Url;
 
@@ -3004,6 +3004,52 @@ mod tests {
                 .total_elements,
             2
         );
+    }
+
+    #[tokio::test]
+    async fn epub_profile_search_includes_mobi_media() {
+        let storage = Storage::connect_memory().await.unwrap();
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("library");
+        fs::create_dir_all(root.join("Series")).unwrap();
+        fs::write(root.join("Series/Book.MOBI"), b"mobi").unwrap();
+        let library = Library::new("Library".into(), Url::from_directory_path(&root).unwrap());
+        storage.create_library(&library).await.unwrap();
+        storage
+            .apply_library_scan(&library.id, &scan_library_files(&library, || false).unwrap(), false)
+            .await
+            .unwrap();
+        let book = storage
+            .list_active_books_by_library_id(&library.id)
+            .await
+            .unwrap()
+            .remove(0);
+        sqlx::query("UPDATE MEDIA SET STATUS='READY', MEDIA_TYPE=? WHERE BOOK_ID=?")
+            .bind(MOBI_MEDIA_TYPE)
+            .bind(&book.id)
+            .execute(storage.pool())
+            .await
+            .unwrap();
+        let search = BookSearch {
+            condition: Some(BookCondition::MediaProfile {
+                operator: EqualityOperator::Is {
+                    value: MediaProfile::Epub,
+                },
+            }),
+            full_text_search: None,
+        };
+        let result = storage
+            .query_books(
+                &search,
+                &PageRequest::default(),
+                &User::new("all@example.org".into(), "hash".into()),
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.total_elements, 1);
+        assert_eq!(result.content[0].media.media_type, MOBI_MEDIA_TYPE);
+        assert_eq!(result.content[0].media.media_profile, "EPUB");
     }
 
     #[tokio::test]

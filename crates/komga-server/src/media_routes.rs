@@ -318,13 +318,22 @@ pub(crate) async fn get_epub_resource(
     }
     let source_media = media.clone();
     let source_resource = resource.clone();
-    let content = tokio::task::spawn_blocking(move || extract_resource(&book, &source_media, &source_resource))
+    let materialized = state
+        .mobi
+        .materialize_book(&book, &media, &state.shutdown)
         .await
         .map_err(|error| {
-            tracing::error!(%error, %book_id, "EPUB resource extractor panicked");
+            tracing::warn!(%error, %book_id, "could not materialize EPUB resource source");
             ApiError::internal("Could not read EPUB resource")
-        })?
-        .map_err(map_media_error)?;
+        })?;
+    let content =
+        tokio::task::spawn_blocking(move || extract_resource(&materialized.book, &source_media, &source_resource))
+            .await
+            .map_err(|error| {
+                tracing::error!(%error, %book_id, "EPUB resource extractor panicked");
+                ApiError::internal("Could not read EPUB resource")
+            })?
+            .map_err(map_media_error)?;
     Ok(epub_resource_response(content, &resource, &media))
 }
 

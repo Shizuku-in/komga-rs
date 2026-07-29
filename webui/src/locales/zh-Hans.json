@@ -234,6 +234,7 @@
     "duplicate": "重复",
     "email": "邮箱",
     "epub": "Epub",
+    "mobi": "MOBI",
     "error": "错误",
     "filename": "文件名",
     "filter_no_matches": "筛选器没有匹配的结果",
@@ -491,7 +492,7 @@
       "label_file_management": "文件管理",
       "label_import_barcode_isbn": "从条形码中导入 ISBN",
       "label_import_comicinfo": "导入含有 ComicInfo.xml 的 CBR/CBZ 压缩包",
-      "label_import_epub": "导入 EPUB 文件的元数据",
+      "label_import_epub": "从 EPUB/MOBI 导入元数据",
       "label_import_local": "导入本地媒体",
       "label_import_mylar": "导入 Mylar 生成的元数据",
       "label_scan_directory_exclusions": "目录排除",
@@ -832,7 +833,9 @@
     "ERR_1036": "获取 EPUB 地标时出错",
     "ERR_1037": "获取 EPUB 页面列表时出错",
     "ERR_1038": "获取 EPUB divina 页面时出错",
-    "ERR_1039": "获取 EPUB 位置时出错"
+    "ERR_1039": "获取 EPUB 位置时出错",
+    "ERR_1040": "不支持受 DRM 保护的 MOBI 文件",
+    "ERR_1041": "MOBI 转换失败"
   },
   "filter": {
     "age_rating": "年龄限制",

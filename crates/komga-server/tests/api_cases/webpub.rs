@@ -1,6 +1,88 @@
 use super::*;
 
 #[tokio::test]
+async fn mobi_uses_epub_webpub_resources_and_preserves_original_download() {
+    let source = minimal_mobi(
+        r##"<html><head><title>MOBI</title></head><body><p id="start">浏览器阅读</p><a filepos=0000010>Jump</a></body></html>"##
+            .as_bytes(),
+        false,
+    );
+    let (_temporary, storage, tasks, book, media) = analyzed_media_bytes_fixture(&source, "Volume.MoBi").await;
+    assert_eq!(media.status, komga_core::MediaStatus::Ready);
+    assert_eq!(media.media_type.as_deref(), Some(komga_core::MOBI_MEDIA_TYPE));
+    assert_eq!(media.profile(), Some(komga_core::MediaProfile::Epub));
+    assert!(!media.epub_divina_compatible);
+    assert!(!media.epub_is_kepub);
+    let html_resource = media
+        .files
+        .iter()
+        .find(|file| file.file_name.ends_with("content.html"))
+        .unwrap()
+        .file_name
+        .clone();
+
+    let app = build_app(AppState::new(storage, tasks).await.unwrap());
+    assert_eq!(claim(&app).await.status(), StatusCode::OK);
+    let admin = basic("admin@example.org", "password");
+    let manifest = app
+        .clone()
+        .oneshot(
+            Request::get(format!("/api/v1/books/{}/manifest/epub", book.id))
+                .header(header::AUTHORIZATION, &admin)
+                .header(header::HOST, "reader.example")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(manifest.status(), StatusCode::OK);
+    let manifest = body_json(manifest).await;
+    assert_eq!(
+        manifest["metadata"]["conformsTo"],
+        "https://readium.org/webpub-manifest/profiles/epub"
+    );
+    assert!(
+        manifest["links"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|link| link["type"] == komga_core::MOBI_MEDIA_TYPE)
+    );
+
+    let resource = app
+        .clone()
+        .oneshot(
+            Request::get(format!("/api/v1/books/{}/resource/{html_resource}", book.id))
+                .header(header::AUTHORIZATION, &admin)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resource.status(), StatusCode::OK);
+    assert_eq!(resource.headers()[header::CONTENT_TYPE], "application/xhtml+xml");
+    assert!(
+        body_bytes(resource)
+            .await
+            .windows("浏览器阅读".len())
+            .any(|bytes| bytes == "浏览器阅读".as_bytes())
+    );
+
+    let download = app
+        .oneshot(
+            Request::get(format!("/api/v1/books/{}/file", book.id))
+                .header(header::AUTHORIZATION, admin)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(download.status(), StatusCode::OK);
+    assert_eq!(download.headers()[header::CONTENT_TYPE], komga_core::MOBI_MEDIA_TYPE);
+    assert_eq!(body_bytes(download).await, source);
+}
+
+#[tokio::test]
 async fn divina_webpub_manifest_matches_kotlin_contract() {
     let (_temporary, storage, tasks, book, _media) = analyzed_media_fixture("archives/zip.zip", "Volume 1.cbz").await;
     let app = build_app(

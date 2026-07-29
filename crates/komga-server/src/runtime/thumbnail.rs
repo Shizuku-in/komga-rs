@@ -34,8 +34,15 @@ pub(super) async fn process_generate_thumbnail_task(state: &AppState, task: &Tas
     if state.shutdown.is_cancelled() {
         return TaskOutcome::Cancelled;
     }
-    let thumbnail_book = book.clone();
-    let generated = tokio::task::spawn_blocking(move || generate_thumbnail(&thumbnail_book, &media, max_edge)).await;
+    let materialized = match state.mobi.materialize_book(&book, &media, &state.shutdown).await {
+        Ok(materialized) => materialized,
+        Err(crate::mobi::MaterializationError::Cancelled) => return TaskOutcome::Cancelled,
+        Err(error) => {
+            tracing::error!(%error, book_id = %book.id, "could not materialize book for thumbnail generation");
+            return TaskOutcome::Completed;
+        }
+    };
+    let generated = tokio::task::spawn_blocking(move || generate_thumbnail(&materialized.book, &media, max_edge)).await;
     let generated = match generated {
         Ok(Ok(generated)) => generated,
         Ok(Err(MediaOperationError::NotReady | MediaOperationError::PageOutOfBounds)) => return TaskOutcome::Completed,

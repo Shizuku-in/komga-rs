@@ -12,7 +12,7 @@ The server includes the Komga Web UI and targets the behavior and SQLite schema 
 
 - Responsive Web UI for desktop, tablet, and mobile
 - Library scanning, metadata import and editing, collections, and read lists
-- CBZ/CBR, PDF, fixed-layout EPUB, and reflowable EPUB reading
+- CBZ/CBR, PDF, fixed-layout/reflowable EPUB, and DRM-free MOBI reading
 - Multiple users with library, age, and sharing-label restrictions
 - Reading progress, downloads, book import, and duplicate management
 - REST API, OAuth2/OIDC, OPDS 1.2 and OPDS 2
@@ -66,6 +66,11 @@ Compatibility is scoped to the pinned Kotlin baseline and is not a universal mig
 - stop Kotlin before opening the databases with komga-rs.
 
 Never run Kotlin Komga and komga-rs against the same SQLite files at the same time. The Rust search index is independent and will be rebuilt from SQLite. Read [MIGRATION.md](docs/MIGRATION.md) before migrating an existing installation.
+
+MOBI support covers DRM-free MOBI6/7 files and hybrid MOBI files containing a
+KF8 section. Only the `.mobi` extension is scanned; `.azw`, `.azw3`, and `.prc`
+are not supported. Browser reading uses a temporary in-process EPUB
+materialization while downloads preserve the original MOBI file.
 
 ## Development
 

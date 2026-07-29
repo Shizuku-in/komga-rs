@@ -216,13 +216,14 @@ async fn transient_cbz_analysis_extracts_metadata_matches_series_and_serves_page
 }
 
 #[tokio::test]
-async fn transient_pdf_and_epub_analysis_render_preview_pages_and_epub_metadata() {
+async fn transient_pdf_epub_and_mobi_analysis_support_preview_and_embedded_metadata() {
     let storage = Storage::connect_memory().await.unwrap();
     let temporary = tempfile::tempdir().unwrap();
     let library_root = temporary.path().join("library");
     fs::create_dir_all(library_root.join("Novel Series")).unwrap();
     write_cbz(&library_root.join("Novel Series/Existing.cbz"), None);
-    let library = Library::new("Library".into(), Url::from_directory_path(&library_root).unwrap());
+    let mut library = Library::new("Library".into(), Url::from_directory_path(&library_root).unwrap());
+    library.scan_mobi = false;
     storage.create_library(&library).await.unwrap();
     storage
         .apply_library_scan(&library.id, &scan_library_files(&library, || false).unwrap(), false)
@@ -234,6 +235,14 @@ async fn transient_pdf_and_epub_analysis_render_preview_pages_and_epub_metadata(
     fs::create_dir_all(&import_root).unwrap();
     fs::write(import_root.join("Document.pdf"), blank_pdf()).unwrap();
     write_epub(&import_root.join("Novel.epub"));
+    fs::write(
+        import_root.join("Mobile.MoBi"),
+        minimal_mobi(
+            "<html><head><title>MOBI</title></head><body>临时导入</body></html>".as_bytes(),
+            false,
+        ),
+    )
+    .unwrap();
     let app = app_with_storage(storage).await;
     assert_eq!(claim(&app).await.status(), StatusCode::OK);
     let admin = basic("admin@example.org", "password");
@@ -251,6 +260,14 @@ async fn transient_pdf_and_epub_analysis_render_preview_pages_and_epub_metadata(
         .unwrap()
         .iter()
         .find(|book| book["name"] == "Novel")
+        .unwrap()["id"]
+        .as_str()
+        .unwrap();
+    let mobi_id = scanned
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|book| book["name"] == "Mobile")
         .unwrap()["id"]
         .as_str()
         .unwrap();
@@ -274,6 +291,18 @@ async fn transient_pdf_and_epub_analysis_render_preview_pages_and_epub_metadata(
     assert_eq!(page.status(), StatusCode::OK);
     assert_eq!(page.headers()[header::CONTENT_TYPE], "image/png");
     assert_eq!(body_bytes(page).await, PNG_1X1);
+
+    let mobi = analyze_transient(&app, &admin, mobi_id).await;
+    assert_eq!(mobi["status"], "READY");
+    assert_eq!(mobi["mediaType"], komga_core::MOBI_MEDIA_TYPE);
+    assert_eq!(mobi["pages"], serde_json::json!([]));
+    assert!(
+        mobi["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|file| file.as_str().is_some_and(|file| file.ends_with("content.html")))
+    );
 }
 
 async fn scan_books(app: &axum::Router, admin: &str, path: &std::path::Path) -> serde_json::Value {

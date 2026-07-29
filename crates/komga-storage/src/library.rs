@@ -43,6 +43,7 @@ struct LibraryRow {
     scan_cbx: bool,
     scan_pdf: bool,
     scan_epub: bool,
+    scan_mobi: bool,
     repair_extensions: bool,
     convert_to_cbz: bool,
     empty_trash_after_scan: bool,
@@ -74,6 +75,7 @@ const SELECT_LIBRARY: &str = r#"
            SCAN_INTERVAL AS scan_interval,
            SCAN_STARTUP AS scan_on_startup,
            SCAN_CBX AS scan_cbx, SCAN_PDF AS scan_pdf, SCAN_EPUB AS scan_epub,
+           SCAN_MOBI AS scan_mobi,
            REPAIR_EXTENSIONS AS repair_extensions,
            CONVERT_TO_CBZ AS convert_to_cbz,
            EMPTY_TRASH_AFTER_SCAN AS empty_trash_after_scan,
@@ -145,11 +147,11 @@ impl Storage {
                 IMPORT_COMICINFO_SERIES_APPEND_VOLUME, IMPORT_EPUB_BOOK,
                 IMPORT_EPUB_SERIES, IMPORT_MYLAR_SERIES, IMPORT_LOCAL_ARTWORK,
                 IMPORT_BARCODE_ISBN, SCAN_FORCE_MODIFIED_TIME, SCAN_INTERVAL,
-                SCAN_STARTUP, SCAN_CBX, SCAN_PDF, SCAN_EPUB, REPAIR_EXTENSIONS,
+                SCAN_STARTUP, SCAN_CBX, SCAN_PDF, SCAN_EPUB, SCAN_MOBI, REPAIR_EXTENSIONS,
                 CONVERT_TO_CBZ, EMPTY_TRASH_AFTER_SCAN, SERIES_COVER, HASH_FILES,
                 HASH_PAGES, HASH_KOREADER, ANALYZE_DIMENSIONS, ONESHOTS_DIRECTORY,
                 UNAVAILABLE_DATE
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
         )
         .bind(&library.id)
         .bind(&library.name)
@@ -170,6 +172,7 @@ impl Storage {
         .bind(library.scan_cbx)
         .bind(library.scan_pdf)
         .bind(library.scan_epub)
+        .bind(library.scan_mobi)
         .bind(library.repair_extensions)
         .bind(library.convert_to_cbz)
         .bind(library.empty_trash_after_scan)
@@ -203,7 +206,7 @@ impl Storage {
                 IMPORT_COMICINFO_SERIES_APPEND_VOLUME = ?, IMPORT_EPUB_BOOK = ?,
                 IMPORT_EPUB_SERIES = ?, IMPORT_MYLAR_SERIES = ?, IMPORT_LOCAL_ARTWORK = ?,
                 IMPORT_BARCODE_ISBN = ?, SCAN_FORCE_MODIFIED_TIME = ?, SCAN_INTERVAL = ?,
-                SCAN_STARTUP = ?, SCAN_CBX = ?, SCAN_PDF = ?, SCAN_EPUB = ?,
+                SCAN_STARTUP = ?, SCAN_CBX = ?, SCAN_PDF = ?, SCAN_EPUB = ?, SCAN_MOBI = ?,
                 REPAIR_EXTENSIONS = ?, CONVERT_TO_CBZ = ?, EMPTY_TRASH_AFTER_SCAN = ?,
                 SERIES_COVER = ?, HASH_FILES = ?, HASH_PAGES = ?, HASH_KOREADER = ?,
                 ANALYZE_DIMENSIONS = ?, ONESHOTS_DIRECTORY = ?, UNAVAILABLE_DATE = ?,
@@ -228,6 +231,7 @@ impl Storage {
         .bind(library.scan_cbx)
         .bind(library.scan_pdf)
         .bind(library.scan_epub)
+        .bind(library.scan_mobi)
         .bind(library.repair_extensions)
         .bind(library.convert_to_cbz)
         .bind(library.empty_trash_after_scan)
@@ -289,6 +293,7 @@ impl LibraryRow {
             scan_cbx: self.scan_cbx,
             scan_pdf: self.scan_pdf,
             scan_epub: self.scan_epub,
+            scan_mobi: self.scan_mobi,
             scan_directory_exclusions,
             repair_extensions: self.repair_extensions,
             convert_to_cbz: self.convert_to_cbz,
@@ -304,5 +309,34 @@ impl LibraryRow {
             created_date: Some(crate::sqlite_datetime_to_utc(self.created_date)),
             last_modified_date: Some(crate::sqlite_datetime_to_utc(self.last_modified_date)),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn mobi_scan_setting_defaults_on_and_round_trips() {
+        let storage = Storage::connect_memory().await.unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let mut library = Library::new("MOBI".to_owned(), Url::from_directory_path(root.path()).unwrap());
+        storage.create_library(&library).await.unwrap();
+
+        let loaded = storage.find_library_by_id(&library.id).await.unwrap().unwrap();
+        assert!(loaded.scan_mobi);
+
+        library.scan_mobi = false;
+        assert!(storage.update_library(&library).await.unwrap());
+        let loaded = storage.find_library_by_id(&library.id).await.unwrap().unwrap();
+        assert!(!loaded.scan_mobi);
+
+        let declaration = sqlx::query_as::<_, (String, bool)>(
+            "SELECT dflt_value, \"notnull\" FROM pragma_table_info('LIBRARY') WHERE upper(name) = 'SCAN_MOBI'",
+        )
+        .fetch_one(storage.pool())
+        .await
+        .unwrap();
+        assert_eq!(declaration, ("1".to_owned(), true));
     }
 }

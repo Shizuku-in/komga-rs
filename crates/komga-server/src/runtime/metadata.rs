@@ -40,7 +40,15 @@ pub(super) async fn process_refresh_book_metadata_task(state: &AppState, task: &
             return TaskOutcome::Retry;
         }
     };
-    let extraction_book = book.clone();
+    let materialized = match state.mobi.materialize_book(&book, &media, &state.shutdown).await {
+        Ok(materialized) => materialized,
+        Err(crate::mobi::MaterializationError::Cancelled) => return TaskOutcome::Cancelled,
+        Err(error) => {
+            tracing::warn!(%error, book_id = %book.id, "could not materialize book for metadata refresh");
+            return TaskOutcome::Completed;
+        }
+    };
+    let extraction_book = materialized.book.clone();
     let extraction_media = media.clone();
     let append_volume = library.import_comic_info_series_append_volume;
     let comic_enabled = has_capability(
@@ -138,7 +146,7 @@ pub(super) async fn process_refresh_book_metadata_task(state: &AppState, task: &
             ],
         )
     {
-        let extraction_book = book.clone();
+        let extraction_book = materialized.book.clone();
         let extraction_media = media.clone();
         let result =
             tokio::task::spawn_blocking(move || extract_epub_metadata(&extraction_book, &extraction_media)).await;
@@ -152,7 +160,7 @@ pub(super) async fn process_refresh_book_metadata_task(state: &AppState, task: &
         }
     }
     if library.import_barcode_isbn && has_capability(&payload.capabilities, &[MetadataCapability::Isbn]) {
-        let extraction_book = book.clone();
+        let extraction_book = materialized.book.clone();
         let extraction_media = media.clone();
         match tokio::task::spawn_blocking(move || extract_isbn_barcode(&extraction_book, &extraction_media)).await {
             Ok(Some(isbn)) => match metadata.apply_provider_patch(BookMetadataPatch {
@@ -241,6 +249,15 @@ pub(super) async fn process_refresh_series_metadata_task(state: &AppState, task:
                 return TaskOutcome::Retry;
             }
         };
+        let materialized = match state.mobi.materialize_book(book, &media, &state.shutdown).await {
+            Ok(materialized) => materialized,
+            Err(crate::mobi::MaterializationError::Cancelled) => return TaskOutcome::Cancelled,
+            Err(error) => {
+                tracing::warn!(%error, book_id=%book.id, "could not materialize book for series metadata");
+                continue;
+            }
+        };
+        let extraction_book = &materialized.book;
         if library.import_comic_info_series
             && has_capability(
                 &payload.capabilities,
@@ -257,7 +274,7 @@ pub(super) async fn process_refresh_series_metadata_task(state: &AppState, task:
                 ],
             )
         {
-            match extract_comic_info_metadata(book, &media, library.import_comic_info_series_append_volume) {
+            match extract_comic_info_metadata(extraction_book, &media, library.import_comic_info_series_append_volume) {
                 Ok(Some(v)) => comic_patches.push(v.series),
                 Err(error) => tracing::warn!(%error, book_id=%book.id, "could not import ComicInfo series metadata"),
                 _ => {}
@@ -275,7 +292,7 @@ pub(super) async fn process_refresh_series_metadata_task(state: &AppState, task:
                 ],
             )
         {
-            match extract_epub_metadata(book, &media) {
+            match extract_epub_metadata(extraction_book, &media) {
                 Ok(Some(v)) => epub_patches.push(v.series),
                 Err(error) => tracing::warn!(%error, book_id=%book.id, "could not import EPUB series metadata"),
                 _ => {}

@@ -4,7 +4,7 @@ use sqlx::{Row, SqlitePool};
 
 use crate::Result;
 
-const LIBRARY_COLUMNS: [(&str, &str); 25] = [
+const LIBRARY_COLUMNS: [(&str, &str); 26] = [
     ("IMPORT_COMICINFO_BOOK", "boolean NOT NULL DEFAULT 1"),
     ("IMPORT_COMICINFO_SERIES", "boolean NOT NULL DEFAULT 1"),
     ("IMPORT_COMICINFO_COLLECTION", "boolean NOT NULL DEFAULT 1"),
@@ -20,6 +20,7 @@ const LIBRARY_COLUMNS: [(&str, &str); 25] = [
     ("SCAN_CBX", "boolean NOT NULL DEFAULT 1"),
     ("SCAN_PDF", "boolean NOT NULL DEFAULT 1"),
     ("SCAN_EPUB", "boolean NOT NULL DEFAULT 1"),
+    ("SCAN_MOBI", "boolean NOT NULL DEFAULT 1"),
     ("SCAN_INTERVAL", "varchar NOT NULL DEFAULT 'EVERY_6H'"),
     ("REPAIR_EXTENSIONS", "boolean NOT NULL DEFAULT 0"),
     ("CONVERT_TO_CBZ", "boolean NOT NULL DEFAULT 0"),

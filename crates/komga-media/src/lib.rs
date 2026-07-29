@@ -6,8 +6,8 @@ use std::{fs::File, io, path::Path};
 use thiserror::Error;
 
 use komga_core::{
-    Book, BookPage, Dimension, EPUB_MEDIA_TYPE, JPEG_MEDIA_TYPE, Media, MediaProfile, MediaStatus, PDF_MEDIA_TYPE,
-    ZIP_MEDIA_TYPE,
+    Book, BookPage, Dimension, EPUB_MEDIA_TYPE, JPEG_MEDIA_TYPE, MOBI_MEDIA_TYPE, Media, MediaProfile, MediaStatus,
+    PDF_MEDIA_TYPE, ZIP_MEDIA_TYPE,
 };
 
 mod archive;
@@ -18,6 +18,7 @@ mod hashing;
 mod image_ops;
 mod kepub;
 mod metadata;
+mod mobi;
 mod page_removal;
 mod pdf;
 mod pdf_edit;
@@ -36,6 +37,7 @@ pub use metadata::{
     ComicInfoContainers, ComicInfoReadList, EmbeddedMetadata, extract_comic_info_containers,
     extract_comic_info_metadata, extract_epub_metadata, extract_mylar_metadata,
 };
+pub use mobi::{MobiConversionError, MobiVariant, convert_mobi_to_epub, is_mobi};
 pub use page_removal::{PageRemovalError, PageRemovalRewrite};
 pub use pdf::PdfPageRenderer;
 pub use pdf_edit::rewrite_hashed_pdf_pages;
@@ -118,7 +120,7 @@ pub enum MediaOperationError {
 
 /// Detects and analyzes a book using Kotlin-compatible media state transitions.
 ///
-/// ZIP/CBZ, RAR/CBR, PDF, and EPUB books are analyzed without external
+/// ZIP/CBZ, RAR/CBR, PDF, EPUB, and unencrypted MOBI books are analyzed without external
 /// commands.
 ///
 /// # Errors
@@ -150,6 +152,48 @@ pub fn analyze_book(
             return Ok(Media::result(&book.id, MediaStatus::Error, None, Some(code)));
         }
     };
+
+    if path
+        .extension()
+        .and_then(|value| value.to_str())
+        .is_some_and(|value| value.eq_ignore_ascii_case("mobi"))
+    {
+        if !mobi::is_mobi(&path) {
+            return Ok(Media::result(
+                &book.id,
+                MediaStatus::Error,
+                Some(MOBI_MEDIA_TYPE.to_owned()),
+                Some("ERR_1041"),
+            ));
+        }
+        let materialized = match tempfile::NamedTempFile::new() {
+            Ok(materialized) => materialized,
+            Err(_) => {
+                return Ok(Media::result(
+                    &book.id,
+                    MediaStatus::Error,
+                    Some(MOBI_MEDIA_TYPE.to_owned()),
+                    Some("ERR_1041"),
+                ));
+            }
+        };
+        return match mobi::convert_mobi_to_epub(&path, materialized.path(), &cancelled) {
+            Ok(_) => analyze_materialized_mobi(materialized.path(), &book.id, analyze_dimensions, cancelled),
+            Err(mobi::MobiConversionError::Cancelled) => Err(MediaAnalysisError::Cancelled),
+            Err(mobi::MobiConversionError::Drm) => Ok(Media::result(
+                &book.id,
+                MediaStatus::Unsupported,
+                Some(MOBI_MEDIA_TYPE.to_owned()),
+                Some("ERR_1040"),
+            )),
+            Err(_) => Ok(Media::result(
+                &book.id,
+                MediaStatus::Error,
+                Some(MOBI_MEDIA_TYPE.to_owned()),
+                Some("ERR_1041"),
+            )),
+        };
+    }
 
     if path
         .extension()
@@ -256,6 +300,42 @@ pub fn analyze_book(
         Some(detected),
         Some("ERR_1001"),
     ))
+}
+
+/// Analyzes a materialized EPUB while preserving MOBI as the persisted source type.
+///
+/// This is used by the server-side MOBI cache after conversion. Generated
+/// resources, navigation, and positions are retained, while fixed-layout EPUB
+/// behavior and KEPUB-specific flags remain disabled for MOBI sources.
+///
+/// # Errors
+///
+/// Returns [`MediaAnalysisError::Cancelled`] when `cancelled` requests stop.
+pub fn analyze_materialized_mobi(
+    epub_path: &Path,
+    book_id: &str,
+    analyze_dimensions: bool,
+    cancelled: impl Fn() -> bool,
+) -> Result<Media, MediaAnalysisError> {
+    match epub::analyze(epub_path, book_id, analyze_dimensions, cancelled) {
+        Ok(mut media) => {
+            media.media_type = Some(MOBI_MEDIA_TYPE.to_owned());
+            media.pages.clear();
+            media.epub_divina_compatible = false;
+            media.epub_is_kepub = false;
+            if let Some(komga_core::MediaExtension::Epub(extension)) = media.extension.as_mut() {
+                extension.is_fixed_layout = false;
+            }
+            Ok(media)
+        }
+        Err(epub::AnalysisError::Cancelled) => Err(MediaAnalysisError::Cancelled),
+        Err(epub::AnalysisError::Invalid) => Ok(Media::result(
+            book_id,
+            MediaStatus::Error,
+            Some(MOBI_MEDIA_TYPE.to_owned()),
+            Some("ERR_1041"),
+        )),
+    }
 }
 
 /// Adds Kobo span identifiers from a converted KEPUB to an ordinary reflowable EPUB analysis.

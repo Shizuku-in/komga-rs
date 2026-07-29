@@ -381,11 +381,11 @@ async fn fresh_and_kotlin_databases_share_the_supported_schema_contract() {
     );
     assert_eq!(
         scalar_i64(&fresh_main, "SELECT COUNT(*) FROM _sqlx_migrations WHERE success=1").await,
-        16
+        17
     );
     assert_eq!(
         scalar_i64(&kotlin_main, "SELECT COUNT(*) FROM _sqlx_migrations WHERE success=1").await,
-        16
+        17
     );
     assert_eq!(
         scalar_i64(&fresh_tasks, "SELECT COUNT(*) FROM _sqlx_migrations WHERE success=1").await,

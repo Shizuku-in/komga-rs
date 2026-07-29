@@ -150,3 +150,50 @@ pub async fn analyzed_media_bytes_fixture(
     storage.replace_media_analysis(&media).await.unwrap();
     (temporary, storage, tasks, book, media)
 }
+
+pub fn minimal_mobi(html: &[u8], encrypted: bool) -> Vec<u8> {
+    let title = "MOBI HTTP 测试".as_bytes();
+    let mut exth = Vec::new();
+    exth.extend_from_slice(b"EXTH");
+    exth.extend_from_slice(&0_u32.to_be_bytes());
+    exth.extend_from_slice(&1_u32.to_be_bytes());
+    exth.extend_from_slice(&503_u32.to_be_bytes());
+    exth.extend_from_slice(&(u32::try_from(title.len() + 8).unwrap()).to_be_bytes());
+    exth.extend_from_slice(title);
+    let exth_len = u32::try_from(exth.len()).unwrap();
+    exth[4..8].copy_from_slice(&exth_len.to_be_bytes());
+
+    let exth_start = 248_usize;
+    let title_offset = exth_start + 20;
+    let mut record_zero = vec![0_u8; exth_start + exth.len()];
+    record_zero[0..2].copy_from_slice(&1_u16.to_be_bytes());
+    record_zero[4..8].copy_from_slice(&(u32::try_from(html.len()).unwrap()).to_be_bytes());
+    record_zero[8..10].copy_from_slice(&1_u16.to_be_bytes());
+    record_zero[10..12].copy_from_slice(&4096_u16.to_be_bytes());
+    record_zero[12..14].copy_from_slice(&(u16::from(encrypted)).to_be_bytes());
+    record_zero[16..20].copy_from_slice(b"MOBI");
+    record_zero[20..24].copy_from_slice(&232_u32.to_be_bytes());
+    record_zero[24..28].copy_from_slice(&2_u32.to_be_bytes());
+    record_zero[28..32].copy_from_slice(&65001_u32.to_be_bytes());
+    record_zero[0x54..0x58].copy_from_slice(&(u32::try_from(title_offset).unwrap()).to_be_bytes());
+    record_zero[0x58..0x5c].copy_from_slice(&(u32::try_from(title.len()).unwrap()).to_be_bytes());
+    record_zero[0x68..0x6c].copy_from_slice(&6_u32.to_be_bytes());
+    for offset in [0x6c, 0x70, 0x74, 0xf4] {
+        record_zero[offset..offset + 4].copy_from_slice(&u32::MAX.to_be_bytes());
+    }
+    record_zero[0x80..0x84].copy_from_slice(&0x40_u32.to_be_bytes());
+    record_zero[exth_start..].copy_from_slice(&exth);
+
+    let record_count = 2_u16;
+    let header_size = 78 + usize::from(record_count) * 8 + 2;
+    let record_one_offset = header_size + record_zero.len();
+    let mut pdb = vec![0_u8; header_size];
+    pdb[..9].copy_from_slice(b"MOBI test");
+    pdb[60..68].copy_from_slice(b"BOOKMOBI");
+    pdb[76..78].copy_from_slice(&record_count.to_be_bytes());
+    pdb[78..82].copy_from_slice(&(u32::try_from(header_size).unwrap()).to_be_bytes());
+    pdb[86..90].copy_from_slice(&(u32::try_from(record_one_offset).unwrap()).to_be_bytes());
+    pdb.extend_from_slice(&record_zero);
+    pdb.extend_from_slice(html);
+    pdb
+}

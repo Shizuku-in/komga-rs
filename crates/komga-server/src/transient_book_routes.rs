@@ -15,10 +15,10 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use chrono::{DateTime, Local, NaiveDateTime};
-use komga_core::{Book, Media, MediaStatus, new_id};
+use komga_core::{Book, MOBI_MEDIA_TYPE, Media, MediaStatus, new_id};
 use komga_media::{
-    MediaAnalysisError, MediaOperationError, analyze_book, extract_comic_info_metadata, extract_epub_metadata,
-    extract_page, page_output_dimension, page_output_media_type,
+    MediaAnalysisError, MediaOperationError, analyze_book, analyze_materialized_mobi, extract_comic_info_metadata,
+    extract_epub_metadata, extract_page, page_output_dimension, page_output_media_type,
 };
 use moka::future::Cache;
 use serde::{Deserialize, Serialize};
@@ -129,18 +129,65 @@ pub(crate) async fn analyze(
         .ok_or_else(|| ApiError::not_found("Transient book not found"))?;
     let book = transient.book.clone();
     ensure_source_file(&book)?;
-    let analyzed_book = book.clone();
-    let (media, metadata) = tokio::task::spawn_blocking(move || {
-        let media = analyze_book(&analyzed_book, true, || false)?;
-        let metadata = embedded_metadata(&analyzed_book, &media);
-        Ok::<_, MediaAnalysisError>((media, metadata))
-    })
-    .await
-    .map_err(|error| {
-        tracing::error!(%error, %id, "transient book analyzer panicked");
-        ApiError::internal("Could not analyze transient book")
-    })?
-    .map_err(|MediaAnalysisError::Cancelled| ApiError::internal("Could not analyze transient book"))?;
+    let (media, metadata) = if has_mobi_extension(&book) {
+        match state.mobi.get_or_convert(&book, &state.shutdown).await {
+            Ok(converted) => {
+                let converted_path = converted.path.clone();
+                let mut materialized_book = book.clone();
+                materialized_book.url = Url::from_file_path(&converted_path)
+                    .map_err(|()| ApiError::internal("Could not analyze transient book"))?;
+                let book_id = book.id.clone();
+                tokio::task::spawn_blocking(move || {
+                    let media = analyze_materialized_mobi(&converted_path, &book_id, true, || false)?;
+                    let metadata = embedded_metadata(&materialized_book, &media);
+                    Ok::<_, MediaAnalysisError>((media, metadata))
+                })
+                .await
+                .map_err(|error| {
+                    tracing::error!(%error, %id, "transient MOBI analyzer panicked");
+                    ApiError::internal("Could not analyze transient book")
+                })?
+                .map_err(|MediaAnalysisError::Cancelled| ApiError::internal("Could not analyze transient book"))?
+            }
+            Err(crate::mobi::MaterializationError::Drm) => (
+                Media::result(
+                    &book.id,
+                    MediaStatus::Unsupported,
+                    Some(MOBI_MEDIA_TYPE.to_owned()),
+                    Some("ERR_1040"),
+                ),
+                CandidateMetadata::default(),
+            ),
+            Err(crate::mobi::MaterializationError::Cancelled) => {
+                return Err(ApiError::internal("Could not analyze transient book"));
+            }
+            Err(error) => {
+                tracing::warn!(%error, %id, "could not materialize transient MOBI");
+                (
+                    Media::result(
+                        &book.id,
+                        MediaStatus::Error,
+                        Some(MOBI_MEDIA_TYPE.to_owned()),
+                        Some("ERR_1041"),
+                    ),
+                    CandidateMetadata::default(),
+                )
+            }
+        }
+    } else {
+        let analyzed_book = book.clone();
+        tokio::task::spawn_blocking(move || {
+            let media = analyze_book(&analyzed_book, true, || false)?;
+            let metadata = embedded_metadata(&analyzed_book, &media);
+            Ok::<_, MediaAnalysisError>((media, metadata))
+        })
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, %id, "transient book analyzer panicked");
+            ApiError::internal("Could not analyze transient book")
+        })?
+        .map_err(|MediaAnalysisError::Cancelled| ApiError::internal("Could not analyze transient book"))?
+    };
     let series_id = match_series(&state, &metadata.series_names).await?;
     let updated = TransientBook {
         book,
@@ -267,8 +314,16 @@ fn is_supported(path: &FilePath) -> bool {
             .unwrap_or_default()
             .to_ascii_lowercase()
             .as_str(),
-        "cbz" | "zip" | "cbr" | "rar" | "pdf" | "epub"
+        "cbz" | "zip" | "cbr" | "rar" | "pdf" | "epub" | "mobi"
     )
+}
+
+fn has_mobi_extension(book: &Book) -> bool {
+    book.url.to_file_path().ok().is_some_and(|path| {
+        path.extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("mobi"))
+    })
 }
 
 fn ensure_source_file(book: &Book) -> Result<(), ApiError> {

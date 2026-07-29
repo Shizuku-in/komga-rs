@@ -10,8 +10,10 @@ default = []
 heif-native = ["dep:libheif-rs"]
 
 [dependencies]
+boko.workspace = true
 chrono.workspace = true
 ego-tree.workspace = true
+encoding_rs.workspace = true
 hayro.workspace = true
 hayro-jpeg2000.workspace = true
 hayro-write.workspace = true
@@ -28,6 +30,7 @@ pdf-writer.workspace = true
 percent-encoding.workspace = true
 quick-xml.workspace = true
 rars.workspace = true
+regex.workspace = true
 roxmltree.workspace = true
 rxing.workspace = true
 scraper.workspace = true

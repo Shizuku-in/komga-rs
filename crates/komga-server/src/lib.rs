@@ -29,6 +29,7 @@ mod management_routes;
 mod media_routes;
 mod metadata_routes;
 mod metrics_routes;
+mod mobi;
 mod oauth;
 mod opds_router;
 mod opds_v1;
@@ -104,6 +105,7 @@ pub struct AppState {
     page_hashing: NonZeroUsize,
     kobo_sync_item_limit: NonZeroUsize,
     kobo_kepub: kobo::kepub::KepubService,
+    mobi: mobi::MobiService,
     kobo_proxy: kobo::proxy::KoboProxy,
     kobo_port: Arc<AtomicU16>,
     task_metrics: metrics_routes::TaskMetrics,
@@ -198,6 +200,7 @@ impl AppState {
             kobo_sync_item_limit: NonZeroUsize::new(100).expect("Kobo sync default is nonzero"),
             kobo_kepub: kobo::kepub::KepubService::configure(server_settings.kepubify_path.as_ref().map(PathBuf::from))
                 .await,
+            mobi: mobi::MobiService::new(),
             kobo_proxy: kobo::proxy::KoboProxy::new(server_settings.kobo_proxy.unwrap_or(false)),
             kobo_port: Arc::new(AtomicU16::new(server_settings.kobo_port.unwrap_or(0))),
             task_metrics: metrics_routes::TaskMetrics::default(),

@@ -51,9 +51,10 @@ pub use events::{
 pub use history::HistoricalEvent;
 pub use media::{
     BookPage, Dimension, EPUB_ASSET_SUBTYPE, EPUB_EXTENSION_CLASS, EPUB_MEDIA_TYPE, EPUB_PAGE_SUBTYPE, EpubTocEntry,
-    JPEG_MEDIA_TYPE, Media, MediaExtension, MediaExtensionEpub, MediaFile, MediaProfile, MediaStatus, PDF_MEDIA_TYPE,
-    R2Location, R2Locator, R2Text, RAR_MEDIA_TYPE, RAR4_MEDIA_TYPE, RAR5_MEDIA_TYPE, ThumbnailBook, ThumbnailBookDto,
-    ThumbnailCollectionDto, ThumbnailReadListDto, ThumbnailSeries, ThumbnailSeriesDto, ZIP_MEDIA_TYPE,
+    JPEG_MEDIA_TYPE, MOBI_MEDIA_TYPE, Media, MediaExtension, MediaExtensionEpub, MediaFile, MediaProfile, MediaStatus,
+    PDF_MEDIA_TYPE, R2Location, R2Locator, R2Text, RAR_MEDIA_TYPE, RAR4_MEDIA_TYPE, RAR5_MEDIA_TYPE, ThumbnailBook,
+    ThumbnailBookDto, ThumbnailCollectionDto, ThumbnailReadListDto, ThumbnailSeries, ThumbnailSeriesDto,
+    ZIP_MEDIA_TYPE,
 };
 pub use metadata::{
     AlternateTitle, Author, BookMetadata, BookMetadataAggregation, BookMetadataPatch, MetadataError, MetadataUpdate,
@@ -500,6 +501,8 @@ pub struct Library {
     pub scan_pdf: bool,
     /// Include EPUB files while scanning.
     pub scan_epub: bool,
+    /// Include MOBI files while scanning.
+    pub scan_mobi: bool,
     /// Directory names excluded from scans.
     pub scan_directory_exclusions: BTreeSet<String>,
     /// Repair extensions that do not match detected media types.
@@ -551,6 +554,7 @@ impl Library {
             scan_cbx: true,
             scan_pdf: true,
             scan_epub: true,
+            scan_mobi: true,
             scan_directory_exclusions: BTreeSet::new(),
             repair_extensions: false,
             convert_to_cbz: false,
@@ -579,6 +583,7 @@ impl Library {
             || self.scan_cbx != updated.scan_cbx
             || self.scan_pdf != updated.scan_pdf
             || self.scan_epub != updated.scan_epub
+            || self.scan_mobi != updated.scan_mobi
             || self.scan_force_modified_time != updated.scan_force_modified_time
             || self.scan_directory_exclusions != updated.scan_directory_exclusions
     }
@@ -639,7 +644,7 @@ mod tests {
         let library = Library::new("Library".into(), root);
 
         assert_eq!(library.scan_interval, ScanInterval::Every6h);
-        assert!(library.scan_cbx && library.scan_pdf && library.scan_epub);
+        assert!(library.scan_cbx && library.scan_pdf && library.scan_epub && library.scan_mobi);
         assert!(library.hash_files && library.analyze_dimensions);
         assert!(!library.should_rescan(&library));
 

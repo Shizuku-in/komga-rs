@@ -17,6 +17,78 @@ use tower::ServiceExt;
 use url::Url;
 use zip::{ZipArchive, ZipWriter, write::SimpleFileOptions};
 
+#[path = "support/mod.rs"]
+#[allow(dead_code)]
+mod support;
+
+#[tokio::test]
+async fn runtime_scans_and_materializes_mobi_to_ready_epub_profile() {
+    let storage = Storage::connect_memory().await.unwrap();
+    let tasks = TaskStorage::connect_memory().await.unwrap();
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path().join("library");
+    fs::create_dir_all(root.join("Series")).unwrap();
+    fs::write(
+        root.join("Series/Volume.MOBI"),
+        support::minimal_mobi(
+            "<html><head><title>运行时</title></head><body><p>内容</p></body></html>".as_bytes(),
+            false,
+        ),
+    )
+    .unwrap();
+    let mut library = Library::new("MOBI".into(), Url::from_directory_path(&root).unwrap());
+    library.import_comic_info_book = false;
+    library.import_comic_info_series = false;
+    library.import_comic_info_collection = false;
+    library.import_comic_info_read_list = false;
+    library.import_epub_book = false;
+    library.import_epub_series = false;
+    library.import_barcode_isbn = false;
+    library.hash_files = false;
+    library.hash_koreader = false;
+    storage.create_library(&library).await.unwrap();
+    storage
+        .apply_library_scan(&library.id, &scan_library_files(&library, || false).unwrap(), false)
+        .await
+        .unwrap();
+    let book = storage
+        .list_active_books_by_library_id(&library.id)
+        .await
+        .unwrap()
+        .remove(0);
+    tasks
+        .save(&TaskRecord::analyze_book(&book.id, &book.series_id, 8))
+        .await
+        .unwrap();
+
+    let runtime = AppState::new(storage.clone(), tasks.clone())
+        .await
+        .unwrap()
+        .start_runtime()
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let media = storage.find_media_by_book_id(&book.id).await.unwrap().unwrap();
+            if media.status == komga_core::MediaStatus::Ready && tasks.list().await.unwrap().is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("MOBI analysis did not complete");
+    runtime.shutdown().await;
+
+    let media = storage.find_media_by_book_id(&book.id).await.unwrap().unwrap();
+    assert_eq!(media.media_type.as_deref(), Some(komga_core::MOBI_MEDIA_TYPE));
+    assert_eq!(media.profile(), Some(komga_core::MediaProfile::Epub));
+    assert!(!media.files.is_empty());
+    assert!(matches!(media.extension, Some(MediaExtension::Epub(_))));
+    assert!(!media.epub_divina_compatible);
+    assert!(!media.epub_is_kepub);
+}
+
 #[tokio::test]
 async fn file_search_startup_enqueues_only_non_current_indexes() {
     let storage = Storage::connect_memory().await.unwrap();

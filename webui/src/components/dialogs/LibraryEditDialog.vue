@@ -520,6 +520,9 @@ export default Vue.extend({
       }, {
         text: this.$t('common.epub').toString(),
         value: 'epub',
+      }, {
+        text: this.$t('common.mobi').toString(),
+        value: 'mobi',
       }]
     },
 
@@ -630,7 +633,8 @@ export default Vue.extend({
       this.form.scanInterval = library ? library.scanInterval : ScanIntervalDto.EVERY_6H
       this.form.scanOnStartup = library ? library.scanOnStartup : false
       this.form.scanTypes = []
-      if (!library) this.form.scanTypes = ['cbx', 'pdf', 'epub']
+      if (!library) this.form.scanTypes = ['cbx', 'pdf', 'epub', 'mobi']
+      if (library?.scanMobi == true) this.form.scanTypes.splice(0, 0, 'mobi')
       if (library?.scanEpub == true) this.form.scanTypes.splice(0, 0, 'epub')
       if (library?.scanPdf == true) this.form.scanTypes.splice(0, 0, 'pdf')
       if (library?.scanCbx == true) this.form.scanTypes.splice(0, 0, 'cbx')
@@ -669,6 +673,7 @@ export default Vue.extend({
           scanCbx: this.form.scanTypes.includes('cbx'),
           scanPdf: this.form.scanTypes.includes('pdf'),
           scanEpub: this.form.scanTypes.includes('epub'),
+          scanMobi: this.form.scanTypes.includes('mobi'),
           scanDirectoryExclusions: this.form.scanDirectoryExclusions,
           repairExtensions: this.form.repairExtensions,
           convertToCbz: this.form.convertToCbz,

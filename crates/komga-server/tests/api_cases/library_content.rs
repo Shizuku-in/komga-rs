@@ -28,6 +28,7 @@ async fn library_management_bootstrap_settings_and_tasks_are_compatible() {
     let library = body_json(created).await;
     let library_id = library["id"].as_str().unwrap();
     assert_eq!(library["scanInterval"], "EVERY_6H");
+    assert_eq!(library["scanMobi"], true);
     assert_eq!(library["root"], root.path().to_string_lossy().as_ref());
     assert_eq!(tasks.list().await.unwrap().len(), 1);
 
@@ -46,6 +47,7 @@ async fn library_management_bootstrap_settings_and_tasks_are_compatible() {
     let loaded = storage.find_library_by_id(library_id).await.unwrap().unwrap();
     assert!(loaded.scan_directory_exclusions.is_empty());
     assert_eq!(loaded.oneshots_directory, None);
+    assert!(loaded.scan_mobi);
 
     let deep_scan = app
         .clone()

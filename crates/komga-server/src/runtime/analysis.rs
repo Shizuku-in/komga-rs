@@ -34,20 +34,60 @@ pub(super) async fn process_analyze_book_task(state: &AppState, task: &TaskRecor
         || library.import_epub_book
         || library.import_epub_series
         || library.import_barcode_isbn;
-    let cancellation = state.shutdown.clone();
-    let analyzed_book = book.clone();
-    let result = tokio::task::spawn_blocking(move || {
-        analyze_book(&analyzed_book, library.analyze_dimensions, || {
-            cancellation.is_cancelled()
+    let mut media = if is_mobi_book(&book) {
+        match state.mobi.get_or_convert(&book, &state.shutdown).await {
+            Ok(converted) => {
+                let cancellation = state.shutdown.clone();
+                let converted_path = converted.path.clone();
+                let book_id = book.id.clone();
+                match tokio::task::spawn_blocking(move || {
+                    analyze_materialized_mobi(&converted_path, &book_id, library.analyze_dimensions, || {
+                        cancellation.is_cancelled()
+                    })
+                })
+                .await
+                {
+                    Ok(Ok(media)) => media,
+                    Ok(Err(MediaAnalysisError::Cancelled)) => return TaskOutcome::Cancelled,
+                    Err(error) => {
+                        tracing::error!(%error, book_id = %book.id, "MOBI analyzer panicked");
+                        return TaskOutcome::Retry;
+                    }
+                }
+            }
+            Err(crate::mobi::MaterializationError::Cancelled) => return TaskOutcome::Cancelled,
+            Err(crate::mobi::MaterializationError::Drm) => Media::result(
+                &book.id,
+                MediaStatus::Unsupported,
+                Some(MOBI_MEDIA_TYPE.to_owned()),
+                Some("ERR_1040"),
+            ),
+            Err(error) => {
+                tracing::warn!(%error, book_id = %book.id, "could not materialize MOBI for analysis");
+                Media::result(
+                    &book.id,
+                    MediaStatus::Error,
+                    Some(MOBI_MEDIA_TYPE.to_owned()),
+                    Some("ERR_1041"),
+                )
+            }
+        }
+    } else {
+        let cancellation = state.shutdown.clone();
+        let analyzed_book = book.clone();
+        match tokio::task::spawn_blocking(move || {
+            analyze_book(&analyzed_book, library.analyze_dimensions, || {
+                cancellation.is_cancelled()
+            })
         })
-    })
-    .await;
-    let mut media = match result {
-        Ok(Ok(media)) => media,
-        Ok(Err(MediaAnalysisError::Cancelled)) => return TaskOutcome::Cancelled,
-        Err(error) => {
-            tracing::error!(%error, book_id = %book.id, "media analyzer panicked");
-            return TaskOutcome::Retry;
+        .await
+        {
+            Ok(Ok(media)) => media,
+            Ok(Err(MediaAnalysisError::Cancelled)) => return TaskOutcome::Cancelled,
+            Err(error) => {
+                tracing::error!(%error, book_id = %book.id, "media analyzer panicked");
+                return TaskOutcome::Retry;
+            }
         }
     };
     if state.shutdown.is_cancelled() {
@@ -127,4 +167,12 @@ fn needs_converted_kobo_spans(media: &komga_core::Media) -> bool {
             media.extension.as_ref(),
             Some(komga_core::MediaExtension::Epub(extension)) if !extension.is_fixed_layout
         )
+}
+
+fn is_mobi_book(book: &komga_core::Book) -> bool {
+    book.url.to_file_path().ok().is_some_and(|path| {
+        path.extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("mobi"))
+    })
 }
