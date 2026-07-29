@@ -24,3 +24,7 @@ and every foreign-key relationship. Separate round-trip coverage exercises all
 supported persistence domains against a copied fixture and verifies that both
 Flyway and SQLx histories survive repeated opening. Historical Flyway upgrade
 paths before this generated baseline are intentionally not part of the fixture.
+Before opening an existing file for writes, Rust fingerprints the complete
+Flyway history against these main and task fixtures. Older, newer, failed, or
+modified histories are rejected before SQLx migrations or WAL configuration can
+change the database.

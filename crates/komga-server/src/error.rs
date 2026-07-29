@@ -145,6 +145,10 @@ impl From<StorageError> for ApiError {
                 tracing::error!(%error, "database migration failed");
                 Self::internal("Database migration failed")
             }
+            StorageError::IncompatibleDatabase { database, reason } => {
+                tracing::error!(database, reason, "database compatibility check failed");
+                Self::internal("Database compatibility check failed")
+            }
         }
     }
 }

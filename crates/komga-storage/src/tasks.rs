@@ -563,12 +563,15 @@ pub struct TaskStorage {
 }
 
 impl TaskStorage {
-    /// Opens a task database file, migrates it, and releases stale owners.
+    /// Opens a supported task database file, migrates it, and releases stale owners.
     ///
     /// # Errors
     ///
-    /// Returns an error when the database cannot be opened or migrated.
+    /// Existing files are checked read-only before migration. Returns an error
+    /// when the database cannot be opened, is not a supported baseline, or cannot
+    /// be migrated.
     pub async fn connect_path(path: &Path) -> Result<Self> {
+        crate::compatibility::verify_database_file(path, crate::compatibility::DatabaseKind::Tasks).await?;
         let options = SqliteConnectOptions::new()
             .filename(path)
             .create_if_missing(true)
@@ -579,7 +582,7 @@ impl TaskStorage {
             .max_connections(4)
             .connect_with(options)
             .await?;
-        sqlx::migrate!("./tasks_migrations").run(&pool).await?;
+        crate::compatibility::TASK_MIGRATOR.run(&pool).await?;
         let storage = Self { pool };
         storage.disown_all().await?;
         Ok(storage)
@@ -598,7 +601,7 @@ impl TaskStorage {
             .max_connections(1)
             .connect_with(options)
             .await?;
-        sqlx::migrate!("./tasks_migrations").run(&pool).await?;
+        crate::compatibility::TASK_MIGRATOR.run(&pool).await?;
         Ok(Self { pool })
     }
 

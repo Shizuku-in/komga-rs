@@ -11,8 +11,11 @@ use komga_core::{
     PageHashAction, PageRequest, ReadListCreation, ReadProgress, ScanInterval, SeriesSearch, SeriesStatus,
     ThumbnailBook, ThumbnailSeries, User, UserRole, WebLink, scan_library_files,
 };
-use komga_storage::{ContainerThumbnail, DeleteLibraryResult, Storage, TaskRecord, TaskStorage};
-use sqlx::{Row, sqlite::SqliteConnectOptions};
+use komga_storage::{ContainerThumbnail, DeleteLibraryResult, Storage, StorageError, TaskRecord, TaskStorage};
+use sqlx::{
+    Row,
+    sqlite::{SqliteConnectOptions, SqliteJournalMode},
+};
 use url::Url;
 
 const KOTLIN_MAIN_TABLES: [&str; 51] = [
@@ -262,6 +265,49 @@ async fn scalar_i64(path: &Path, query: &str) -> i64 {
     value
 }
 
+async fn execute_sql(path: &Path, query: &str) {
+    let pool = sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(SqliteConnectOptions::new().filename(path))
+        .await
+        .unwrap();
+    sqlx::query(query).execute(&pool).await.unwrap();
+    pool.close().await;
+}
+
+fn directory_entries(path: &Path) -> Vec<String> {
+    let mut entries = fs::read_dir(path.parent().unwrap())
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    entries.sort();
+    entries
+}
+
+async fn assert_main_database_rejected_without_modification(path: &Path) {
+    let bytes = fs::read(path).unwrap();
+    let entries = directory_entries(path);
+    let error = match Storage::connect_path(path).await {
+        Ok(_) => panic!("unsupported main database was accepted"),
+        Err(error) => error,
+    };
+    assert!(matches!(error, StorageError::IncompatibleDatabase { .. }));
+    assert_eq!(fs::read(path).unwrap(), bytes);
+    assert_eq!(directory_entries(path), entries);
+}
+
+async fn assert_task_database_rejected_without_modification(path: &Path) {
+    let bytes = fs::read(path).unwrap();
+    let entries = directory_entries(path);
+    let error = match TaskStorage::connect_path(path).await {
+        Ok(_) => panic!("unsupported task database was accepted"),
+        Err(error) => error,
+    };
+    assert!(matches!(error, StorageError::IncompatibleDatabase { .. }));
+    assert_eq!(fs::read(path).unwrap(), bytes);
+    assert_eq!(directory_entries(path), entries);
+}
+
 #[tokio::test]
 async fn fresh_and_kotlin_databases_share_the_supported_schema_contract() {
     let baseline = schema_contract(&fixture("database.sqlite")).await;
@@ -349,6 +395,109 @@ async fn fresh_and_kotlin_databases_share_the_supported_schema_contract() {
         scalar_i64(&kotlin_tasks, "SELECT COUNT(*) FROM _sqlx_migrations WHERE success=1").await,
         1
     );
+}
+
+#[tokio::test]
+async fn unsupported_database_baselines_are_rejected_without_modification() {
+    let temporary = tempfile::tempdir().unwrap();
+
+    let old_main_directory = temporary.path().join("old-main");
+    fs::create_dir(&old_main_directory).unwrap();
+    let old_main = old_main_directory.join("database.sqlite");
+    fs::copy(fixture("database.sqlite"), &old_main).unwrap();
+    execute_sql(&old_main, "DELETE FROM flyway_schema_history WHERE installed_rank=90").await;
+    assert_main_database_rejected_without_modification(&old_main).await;
+
+    let future_main_directory = temporary.path().join("future-main");
+    fs::create_dir(&future_main_directory).unwrap();
+    let future_main = future_main_directory.join("database.sqlite");
+    fs::copy(fixture("database.sqlite"), &future_main).unwrap();
+    execute_sql(
+        &future_main,
+        r#"INSERT INTO flyway_schema_history
+           (installed_rank,version,description,type,script,checksum,installed_by,execution_time,success)
+           VALUES (91,'20990101000000','future','SQL','V20990101000000__future.sql',1,'test',1,1)"#,
+    )
+    .await;
+    assert_main_database_rejected_without_modification(&future_main).await;
+
+    let modified_main_directory = temporary.path().join("modified-main");
+    fs::create_dir(&modified_main_directory).unwrap();
+    let modified_main = modified_main_directory.join("database.sqlite");
+    fs::copy(fixture("database.sqlite"), &modified_main).unwrap();
+    execute_sql(
+        &modified_main,
+        "UPDATE flyway_schema_history SET checksum=0 WHERE installed_rank=90",
+    )
+    .await;
+    assert_main_database_rejected_without_modification(&modified_main).await;
+
+    let failed_main_directory = temporary.path().join("failed-main");
+    fs::create_dir(&failed_main_directory).unwrap();
+    let failed_main = failed_main_directory.join("database.sqlite");
+    fs::copy(fixture("database.sqlite"), &failed_main).unwrap();
+    execute_sql(
+        &failed_main,
+        "UPDATE flyway_schema_history SET success=0 WHERE installed_rank=90",
+    )
+    .await;
+    assert_main_database_rejected_without_modification(&failed_main).await;
+
+    let wal_main_directory = temporary.path().join("wal-main");
+    fs::create_dir(&wal_main_directory).unwrap();
+    let wal_main = wal_main_directory.join("database.sqlite");
+    let wal_sidecar = wal_main.with_extension("sqlite-wal");
+    fs::copy(fixture("database.sqlite"), &wal_main).unwrap();
+    let wal_pool = sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(
+            SqliteConnectOptions::new()
+                .filename(&wal_main)
+                .journal_mode(SqliteJournalMode::Wal),
+        )
+        .await
+        .unwrap();
+    sqlx::query("UPDATE flyway_schema_history SET checksum=0 WHERE installed_rank=90")
+        .execute(&wal_pool)
+        .await
+        .unwrap();
+    let database_bytes = fs::read(&wal_main).unwrap();
+    let wal_bytes = fs::read(&wal_sidecar).unwrap();
+    let entries = directory_entries(&wal_main);
+    let error = match Storage::connect_path(&wal_main).await {
+        Ok(_) => panic!("unsupported WAL database was accepted"),
+        Err(error) => error,
+    };
+    assert!(matches!(error, StorageError::IncompatibleDatabase { .. }));
+    assert_eq!(fs::read(&wal_main).unwrap(), database_bytes);
+    assert_eq!(fs::read(&wal_sidecar).unwrap(), wal_bytes);
+    assert_eq!(directory_entries(&wal_main), entries);
+    wal_pool.close().await;
+
+    let modified_sqlx_directory = temporary.path().join("modified-sqlx");
+    fs::create_dir(&modified_sqlx_directory).unwrap();
+    let modified_sqlx = modified_sqlx_directory.join("database.sqlite");
+    fs::copy(fixture("database.sqlite"), &modified_sqlx).unwrap();
+    drop(Storage::connect_path(&modified_sqlx).await.unwrap());
+    execute_sql(
+        &modified_sqlx,
+        "UPDATE _sqlx_migrations SET checksum=X'00' WHERE version=16",
+    )
+    .await;
+    assert_main_database_rejected_without_modification(&modified_sqlx).await;
+
+    let wrong_kind_directory = temporary.path().join("wrong-kind");
+    fs::create_dir(&wrong_kind_directory).unwrap();
+    let wrong_kind = wrong_kind_directory.join("tasks.sqlite");
+    fs::copy(fixture("database.sqlite"), &wrong_kind).unwrap();
+    assert_task_database_rejected_without_modification(&wrong_kind).await;
+
+    let old_tasks_directory = temporary.path().join("old-tasks");
+    fs::create_dir(&old_tasks_directory).unwrap();
+    let old_tasks = old_tasks_directory.join("tasks.sqlite");
+    fs::copy(fixture("tasks.sqlite"), &old_tasks).unwrap();
+    execute_sql(&old_tasks, "DELETE FROM flyway_schema_history").await;
+    assert_task_database_rejected_without_modification(&old_tasks).await;
 }
 
 #[tokio::test]

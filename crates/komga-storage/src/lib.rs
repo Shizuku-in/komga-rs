@@ -1,14 +1,15 @@
 //! SQLite persistence compatible with Komga's current Kotlin schema.
 //!
-//! Opening a database applies additive SQLx migrations. Those migrations use
-//! `IF NOT EXISTS` for tables owned by already-released Flyway migrations, so a
-//! current Kotlin-created database remains readable. Kotlin and Rust processes
+//! Existing database files are checked read-only before any SQLx migration or
+//! journal-mode change. Only the fixed Kotlin Flyway baseline and recognized
+//! prefixes of this crate's SQLx history are accepted. Kotlin and Rust processes
 //! must not write to the same database concurrently.
 
 #![warn(missing_docs)]
 
 mod auth;
 mod authentication_activity;
+mod compatibility;
 mod containers;
 mod content;
 mod content_queries;
@@ -54,6 +55,8 @@ use sqlx::{
 use thiserror::Error;
 use unicode_normalization::UnicodeNormalization;
 
+use compatibility::{DatabaseKind, MAIN_MIGRATOR, verify_database_file};
+
 const UNICODE_NOCASE_COLLATION: &str = "KOMGA_UNICODE_NOCASE";
 
 fn unicode_nocase_compare(left: &str, right: &str) -> Ordering {
@@ -88,6 +91,14 @@ pub enum StorageError {
     /// An embedded SQLx migration failed.
     #[error("database migration error: {0}")]
     Migration(#[from] sqlx::migrate::MigrateError),
+    /// An existing database does not match a supported Kotlin or Rust migration history.
+    #[error("incompatible {database} database: {reason}")]
+    IncompatibleDatabase {
+        /// Logical database selected by the caller.
+        database: &'static str,
+        /// Reason the database was rejected.
+        reason: String,
+    },
 }
 
 /// Result type returned by storage operations.
@@ -122,7 +133,9 @@ impl Storage {
     /// # Errors
     ///
     /// Returns [`StorageError::Database`] when the URL or connection is invalid,
-    /// or [`StorageError::Migration`] when the schema cannot be initialized.
+    /// [`StorageError::IncompatibleDatabase`] when an existing file is not a
+    /// supported baseline, or [`StorageError::Migration`] when the schema cannot
+    /// be initialized.
     pub async fn connect(database_path: &str) -> Result<Self> {
         let options = with_content_extensions(
             SqliteConnectOptions::from_str(database_path)?
@@ -131,25 +144,31 @@ impl Storage {
                 .busy_timeout(Duration::from_secs(30))
                 .journal_mode(SqliteJournalMode::Wal),
         );
+        if options.get_filename() != Path::new(":memory:") {
+            verify_database_file(options.get_filename(), DatabaseKind::Main).await?;
+        }
         let pool = SqlitePoolOptions::new()
             .max_connections(8)
             .connect_with(options)
             .await?;
-        sqlx::migrate!("./migrations").run(&pool).await?;
+        MAIN_MIGRATOR.run(&pool).await?;
         schema::reconcile_library_schema(&pool).await?;
         Ok(Self { pool })
     }
 
     /// Opens a SQLite file and applies embedded compatibility migrations.
     ///
-    /// The file is created when absent. Existing current Komga databases retain
-    /// their Flyway history; SQLx records its additive migrations separately.
-    /// Callers should back up an existing database before its first Rust start.
+    /// The file is created when absent. Existing databases are opened read-only
+    /// first and must match the fixed Kotlin Flyway baseline or a recognized Rust
+    /// migration prefix. SQLx records its additive migrations separately. Callers
+    /// should back up an existing database before its first Rust start.
     ///
     /// # Errors
     ///
-    /// Returns a storage error if the file cannot be opened or migrated.
+    /// Returns a storage error if the file cannot be opened, is not a supported
+    /// baseline, or cannot be migrated.
     pub async fn connect_path(database_path: &Path) -> Result<Self> {
+        verify_database_file(database_path, DatabaseKind::Main).await?;
         let options = with_content_extensions(
             SqliteConnectOptions::new()
                 .filename(database_path)
@@ -162,7 +181,7 @@ impl Storage {
             .max_connections(8)
             .connect_with(options)
             .await?;
-        sqlx::migrate!("./migrations").run(&pool).await?;
+        MAIN_MIGRATOR.run(&pool).await?;
         schema::reconcile_library_schema(&pool).await?;
         Ok(Self { pool })
     }
@@ -186,7 +205,7 @@ impl Storage {
             .max_connections(1)
             .connect_with(options)
             .await?;
-        sqlx::migrate!("./migrations").run(&pool).await?;
+        MAIN_MIGRATOR.run(&pool).await?;
         schema::reconcile_library_schema(&pool).await?;
         Ok(Self { pool })
     }
@@ -853,7 +872,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn opens_an_existing_kotlin_schema_without_recreating_it() {
+    async fn rejects_an_unversioned_schema_without_modifying_it() {
         let directory = tempfile::tempdir().unwrap();
         let database = directory.path().join("database.sqlite");
         let options = SqliteConnectOptions::new()
@@ -865,93 +884,21 @@ mod tests {
             .connect_with(options)
             .await
             .unwrap();
-        sqlx::raw_sql(
-            r#"
-            CREATE TABLE LIBRARY (
-                ID varchar NOT NULL PRIMARY KEY,
-                CREATED_DATE datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                LAST_MODIFIED_DATE datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                NAME varchar NOT NULL,
-                ROOT varchar NOT NULL,
-                UNAVAILABLE boolean NOT NULL DEFAULT 0
-            );
-            CREATE TABLE USER (
-                ID varchar NOT NULL PRIMARY KEY,
-                CREATED_DATE datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                LAST_MODIFIED_DATE datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                EMAIL varchar NOT NULL UNIQUE,
-                PASSWORD varchar NOT NULL,
-                SHARED_ALL_LIBRARIES boolean NOT NULL DEFAULT 1,
-                AGE_RESTRICTION integer,
-                AGE_RESTRICTION_ALLOW_ONLY boolean
-            );
-            CREATE TABLE USER_ROLE (
-                USER_ID varchar NOT NULL,
-                ROLE varchar NOT NULL,
-                PRIMARY KEY (USER_ID, ROLE),
-                FOREIGN KEY (USER_ID) REFERENCES USER (ID)
-            );
-            CREATE TABLE USER_LIBRARY_SHARING (
-                USER_ID varchar NOT NULL,
-                LIBRARY_ID varchar NOT NULL,
-                PRIMARY KEY (USER_ID, LIBRARY_ID),
-                FOREIGN KEY (USER_ID) REFERENCES USER (ID),
-                FOREIGN KEY (LIBRARY_ID) REFERENCES LIBRARY (ID)
-            );
-            CREATE TABLE USER_SHARING (
-                LABEL varchar NOT NULL,
-                ALLOW boolean NOT NULL,
-                USER_ID varchar NOT NULL,
-                PRIMARY KEY (LABEL, ALLOW, USER_ID),
-                FOREIGN KEY (USER_ID) REFERENCES USER (ID)
-            );
-            CREATE TABLE USER_API_KEY (
-                ID varchar NOT NULL PRIMARY KEY,
-                USER_ID varchar NOT NULL,
-                CREATED_DATE datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                LAST_MODIFIED_DATE datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                API_KEY varchar NOT NULL UNIQUE,
-                COMMENT varchar NOT NULL,
-                FOREIGN KEY (USER_ID) REFERENCES USER (ID)
-            );
-            CREATE TABLE CLIENT_SETTINGS_USER (
-                USER_ID varchar NOT NULL,
-                KEY varchar NOT NULL,
-                VALUE varchar NOT NULL,
-                FOREIGN KEY (USER_ID) REFERENCES USER (ID),
-                PRIMARY KEY (KEY, USER_ID)
-            );
-            CREATE TABLE SYNC_POINT (
-                ID varchar NOT NULL PRIMARY KEY,
-                CREATED_DATE datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                USER_ID varchar NOT NULL,
-                API_KEY_ID varchar,
-                FOREIGN KEY (USER_ID) REFERENCES USER (ID)
-            );
-            CREATE TABLE SYNC_POINT_BOOK (
-                SYNC_POINT_ID varchar NOT NULL,
-                BOOK_ID varchar NOT NULL,
-                PRIMARY KEY (SYNC_POINT_ID, BOOK_ID),
-                FOREIGN KEY (SYNC_POINT_ID) REFERENCES SYNC_POINT (ID)
-            );
-            INSERT INTO USER (ID, EMAIL, PASSWORD) VALUES ('kotlin-user', 'reader@example.org', '$2a$10$hash');
-            INSERT INTO USER_ROLE (USER_ID, ROLE) VALUES ('kotlin-user', 'PAGE_STREAMING');
-            INSERT INTO CLIENT_SETTINGS_USER (USER_ID, KEY, VALUE) VALUES ('kotlin-user', 'reader.mode', 'paged');
-            INSERT INTO SYNC_POINT (ID, USER_ID) VALUES ('sync-1', 'kotlin-user');
-            INSERT INTO SYNC_POINT_BOOK (SYNC_POINT_ID, BOOK_ID) VALUES ('sync-1', 'book-1');
-            "#,
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
+        sqlx::raw_sql("CREATE TABLE USER (ID varchar NOT NULL PRIMARY KEY);")
+            .execute(&pool)
+            .await
+            .unwrap();
         pool.close().await;
 
-        let storage = Storage::connect_path(&database).await.unwrap();
-        let user = storage.find_user_by_email("READER@example.org").await.unwrap().unwrap();
-        assert_eq!(user.id, "kotlin-user");
-        assert_eq!(user.roles, BTreeSet::from([UserRole::PageStreaming]));
-        assert!(storage.delete_user("kotlin-user").await.unwrap());
-        assert_eq!(storage.count_users().await.unwrap(), 0);
+        let before = fs::read(&database).unwrap();
+        let error = match Storage::connect_path(&database).await {
+            Ok(_) => panic!("unversioned database was accepted"),
+            Err(error) => error,
+        };
+        assert!(matches!(error, StorageError::IncompatibleDatabase { .. }));
+        assert_eq!(fs::read(&database).unwrap(), before);
+        assert!(!database.with_extension("sqlite-wal").exists());
+        assert!(!database.with_extension("sqlite-shm").exists());
     }
 
     #[tokio::test]
