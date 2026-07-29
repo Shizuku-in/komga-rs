@@ -1,7 +1,7 @@
 //! OAuth2/OIDC configuration and process-local authorization transactions.
 
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, HashMap},
     future::Future,
     net::IpAddr,
     path::Path as FilePath,
@@ -17,7 +17,6 @@ use axum::{
     response::{IntoResponse, Redirect, Response},
 };
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-use dashmap::DashMap;
 use futures_util::StreamExt;
 use komga_core::User;
 use komga_storage::StorageError;
@@ -42,12 +41,14 @@ use crate::{
     AppState,
     auth::{CookieSettings, append_cookie, authentication_request_metadata, record_oauth_activity, session_cookie},
     error::ApiError,
+    proxy::ClientAddress,
     webpub_routes::ManifestUrls,
 };
 
 const MAX_HTTP_RESPONSE_BYTES: usize = 1024 * 1024;
 const MAX_HTTP_REQUEST_BYTES: usize = 64 * 1024;
 const MAX_TRANSACTIONS: usize = 4096;
+const MAX_TRANSACTIONS_PER_CLIENT: usize = 64;
 const TRANSACTION_TTL: Duration = Duration::from_secs(10 * 60);
 const OAUTH_BINDING_COOKIE: &str = "KOMGA-OAUTH2-STATE";
 
@@ -158,8 +159,7 @@ struct OAuthInner {
     providers: BTreeMap<String, OAuthProvider>,
     provider_order: Vec<String>,
     http: LimitedHttpClient,
-    transactions: DashMap<String, OAuthTransaction>,
-    transaction_lock: Mutex<()>,
+    transactions: OAuthTransactions,
 }
 
 struct OAuthTransaction {
@@ -168,7 +168,13 @@ struct OAuthTransaction {
     nonce: Option<String>,
     browser_binding: String,
     redirect_uri: String,
+    client_address: Option<IpAddr>,
     created_at: Instant,
+}
+
+#[derive(Default)]
+struct OAuthTransactions {
+    entries: Mutex<HashMap<String, OAuthTransaction>>,
 }
 
 #[derive(Clone)]
@@ -298,8 +304,7 @@ impl OAuthService {
                 providers,
                 provider_order,
                 http,
-                transactions: DashMap::new(),
-                transaction_lock: Mutex::new(()),
+                transactions: OAuthTransactions::default(),
             })),
         })
     }
@@ -346,6 +351,8 @@ pub(crate) async fn authorize(
         .ok_or_else(|| ApiError::not_found("OAuth provider not found"))?;
     let base_url = public_base_url(inner, request.headers(), request.uri())?;
     let cookie_settings = CookieSettings::from_public_url(&base_url);
+    let previous_browser_binding = binding_cookie_value(request.headers()).filter(|binding| binding.len() <= 512);
+    let client_address = request.extensions().get::<ClientAddress>().map(|address| address.0);
     let redirect_uri = url_with_segments(&base_url, &["login", "oauth2", "code", &registration_id]);
     let (pkce_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
     let (authorization_url, state_token, nonce) = match &provider {
@@ -391,19 +398,22 @@ pub(crate) async fn authorize(
         }
     };
     let browser_binding = random_secret();
-    insert_transaction(
-        inner,
-        state_token,
-        OAuthTransaction {
-            registration_id,
-            pkce_verifier: pkce_verifier.secret().clone(),
-            nonce,
-            browser_binding: browser_binding.clone(),
-            redirect_uri: redirect_uri.to_string(),
-            created_at: Instant::now(),
-        },
-    )
-    .await?;
+    inner
+        .transactions
+        .insert(
+            state_token,
+            OAuthTransaction {
+                registration_id,
+                pkce_verifier: pkce_verifier.secret().clone(),
+                nonce,
+                browser_binding: browser_binding.clone(),
+                redirect_uri: redirect_uri.to_string(),
+                client_address,
+                created_at: Instant::now(),
+            },
+            previous_browser_binding.as_deref(),
+        )
+        .await?;
     let mut response = Redirect::temporary(authorization_url.as_str()).into_response();
     append_cookie(
         response.headers_mut(),
@@ -432,7 +442,7 @@ pub(crate) async fn callback(
     let query = callback_query(request.uri().query());
     let result = match (query.state.as_deref(), binding_cookie_value(request.headers())) {
         (Some(state_token), Some(binding)) if state_token.len() <= 512 && binding.len() <= 512 => {
-            match take_transaction(inner, state_token, &registration_id, &binding) {
+            match inner.transactions.take(state_token, &registration_id, &binding).await {
                 Ok(transaction) => {
                     if query.error.is_some() {
                         Err(CallbackFailure::generic())
@@ -738,32 +748,88 @@ fn oauth2_client(
     Ok(client)
 }
 
-async fn insert_transaction(inner: &OAuthInner, state: String, transaction: OAuthTransaction) -> Result<(), ApiError> {
-    let _guard = inner.transaction_lock.lock().await;
-    inner
-        .transactions
-        .retain(|_, transaction| transaction.created_at.elapsed() < TRANSACTION_TTL);
-    if inner.transactions.len() >= MAX_TRANSACTIONS {
-        return Err(ApiError::service_unavailable("Too many OAuth authorization requests"));
+impl OAuthTransactions {
+    async fn insert(
+        &self,
+        state: String,
+        transaction: OAuthTransaction,
+        previous_browser_binding: Option<&str>,
+    ) -> Result<(), ApiError> {
+        self.insert_with_limits(
+            state,
+            transaction,
+            previous_browser_binding,
+            MAX_TRANSACTIONS,
+            MAX_TRANSACTIONS_PER_CLIENT,
+        )
+        .await
     }
-    inner.transactions.insert(state, transaction);
-    Ok(())
-}
 
-fn take_transaction(
-    inner: &OAuthInner,
-    state: &str,
-    registration_id: &str,
-    binding: &str,
-) -> Result<OAuthTransaction, CallbackFailure> {
-    let (_, transaction) = inner.transactions.remove(state).ok_or_else(CallbackFailure::generic)?;
-    if transaction.created_at.elapsed() >= TRANSACTION_TTL
-        || transaction.registration_id != registration_id
-        || !secure_equal(&transaction.browser_binding, binding)
-    {
-        return Err(CallbackFailure::generic());
+    async fn insert_with_limits(
+        &self,
+        state: String,
+        transaction: OAuthTransaction,
+        previous_browser_binding: Option<&str>,
+        max_transactions: usize,
+        max_transactions_per_client: usize,
+    ) -> Result<(), ApiError> {
+        debug_assert!(max_transactions > 0);
+        debug_assert!(max_transactions_per_client > 0);
+
+        let now = Instant::now();
+        let mut entries = self.entries.lock().await;
+        entries.retain(|_, transaction| now.saturating_duration_since(transaction.created_at) < TRANSACTION_TTL);
+        if let Some(binding) = previous_browser_binding {
+            entries.retain(|_, transaction| !secure_equal(&transaction.browser_binding, binding));
+        }
+
+        let client_transactions = entries
+            .values()
+            .filter(|existing| existing.client_address == transaction.client_address)
+            .collect::<Vec<_>>();
+        if client_transactions.len() >= max_transactions_per_client {
+            let retry_after = client_transactions
+                .into_iter()
+                .filter_map(|existing| TRANSACTION_TTL.checked_sub(now.saturating_duration_since(existing.created_at)))
+                .min()
+                .unwrap_or(TRANSACTION_TTL)
+                .as_secs()
+                .max(1);
+            return Err(ApiError::too_many_requests(retry_after));
+        }
+
+        if entries.len() >= max_transactions
+            && let Some(oldest) = entries
+                .iter()
+                .min_by_key(|(_, transaction)| transaction.created_at)
+                .map(|(state, _)| state.clone())
+        {
+            entries.remove(&oldest);
+        }
+        entries.insert(state, transaction);
+        Ok(())
     }
-    Ok(transaction)
+
+    async fn take(
+        &self,
+        state: &str,
+        registration_id: &str,
+        binding: &str,
+    ) -> Result<OAuthTransaction, CallbackFailure> {
+        let transaction = self
+            .entries
+            .lock()
+            .await
+            .remove(state)
+            .ok_or_else(CallbackFailure::generic)?;
+        if transaction.created_at.elapsed() >= TRANSACTION_TTL
+            || transaction.registration_id != registration_id
+            || !secure_equal(&transaction.browser_binding, binding)
+        {
+            return Err(CallbackFailure::generic());
+        }
+        Ok(transaction)
+    }
 }
 
 fn secure_equal(left: &str, right: &str) -> bool {
@@ -1369,12 +1435,31 @@ mod tests {
     }
 
     fn proxy_request(uri: &str) -> http::request::Builder {
+        proxy_request_from(uri, "192.0.2.10")
+    }
+
+    fn proxy_request_from(uri: &str, client_address: &str) -> http::request::Builder {
         Request::get(uri)
             .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 41_000))))
             .header(header::HOST, "internal.example:25600")
-            .header("forwarded", "for=192.0.2.10;proto=https;host=reader.example")
+            .header(
+                "forwarded",
+                format!("for={client_address};proto=https;host=reader.example"),
+            )
             .header("x-forwarded-prefix", "/komga")
             .header(header::USER_AGENT, "oauth-test-agent")
+    }
+
+    fn pending_transaction(client_address: &str, browser_binding: &str, age: Duration) -> OAuthTransaction {
+        OAuthTransaction {
+            registration_id: "test".into(),
+            pkce_verifier: "verifier".into(),
+            nonce: None,
+            browser_binding: browser_binding.into(),
+            redirect_uri: "https://reader.example/login/oauth2/code/test".into(),
+            client_address: Some(client_address.parse().unwrap()),
+            created_at: Instant::now() - age,
+        }
     }
 
     fn response_cookie(response: &Response, name: &str) -> Option<String> {
@@ -1440,6 +1525,117 @@ mod tests {
 
     fn parse(value: serde_json::Value) -> Result<OAuthFileConfig, serde_json::Error> {
         serde_json::from_value(value)
+    }
+
+    #[tokio::test]
+    async fn transaction_pool_replaces_browser_state_and_evicts_the_oldest_entry() {
+        let transactions = OAuthTransactions::default();
+        transactions
+            .insert_with_limits(
+                "old-state".into(),
+                pending_transaction("192.0.2.1", "old-binding", Duration::from_secs(2)),
+                None,
+                2,
+                2,
+            )
+            .await
+            .unwrap();
+        transactions
+            .insert_with_limits(
+                "replacement-state".into(),
+                pending_transaction("192.0.2.1", "replacement-binding", Duration::ZERO),
+                Some("old-binding"),
+                2,
+                2,
+            )
+            .await
+            .unwrap();
+
+        {
+            let entries = transactions.entries.lock().await;
+            assert_eq!(entries.len(), 1);
+            assert!(!entries.contains_key("old-state"));
+            assert!(entries.contains_key("replacement-state"));
+        }
+
+        transactions
+            .insert_with_limits(
+                "second-state".into(),
+                pending_transaction("192.0.2.2", "second-binding", Duration::from_secs(1)),
+                None,
+                2,
+                2,
+            )
+            .await
+            .unwrap();
+        transactions
+            .insert_with_limits(
+                "new-state".into(),
+                pending_transaction("192.0.2.3", "new-binding", Duration::ZERO),
+                None,
+                2,
+                2,
+            )
+            .await
+            .unwrap();
+
+        let entries = transactions.entries.lock().await;
+        assert_eq!(entries.len(), 2);
+        assert!(!entries.contains_key("second-state"));
+        assert!(entries.contains_key("replacement-state"));
+        assert!(entries.contains_key("new-state"));
+    }
+
+    #[tokio::test]
+    async fn authorization_entrypoint_limits_one_client_without_blocking_another() {
+        let provider_base = Url::parse("http://localhost/").unwrap();
+        let oauth = OAuthService::from_config(ordinary_config(&provider_base, false), |_| None)
+            .await
+            .unwrap();
+        let mut state = AppState::new(
+            Storage::connect_memory().await.unwrap(),
+            TaskStorage::connect_memory().await.unwrap(),
+        )
+        .await
+        .unwrap()
+        .with_trusted_proxies(vec!["127.0.0.0/8".parse().unwrap()]);
+        state.oauth = oauth;
+        let app = crate::build_app(state);
+
+        for _ in 0..MAX_TRANSACTIONS_PER_CLIENT {
+            let response = app
+                .clone()
+                .oneshot(
+                    proxy_request_from("/oauth2/authorization/test", "192.0.2.20")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::TEMPORARY_REDIRECT);
+        }
+
+        let limited = app
+            .clone()
+            .oneshot(
+                proxy_request_from("/oauth2/authorization/test", "192.0.2.20")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(limited.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert!(limited.headers().contains_key(header::RETRY_AFTER));
+
+        let other_client = app
+            .oneshot(
+                proxy_request_from("/oauth2/authorization/test", "198.51.100.20")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(other_client.status(), StatusCode::TEMPORARY_REDIRECT);
     }
 
     #[test]

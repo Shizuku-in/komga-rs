@@ -24,7 +24,6 @@ bcrypt.workspace = true
 clap.workspace = true
 cookie.workspace = true
 chrono.workspace = true
-dashmap.workspace = true
 futures-core.workspace = true
 futures-util.workspace = true
 headers-accept.workspace = true
