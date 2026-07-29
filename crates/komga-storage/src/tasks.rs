@@ -786,6 +786,19 @@ impl TaskStorage {
             == 1)
     }
 
+    /// Releases every task claimed by one worker and returns the affected count.
+    ///
+    /// # Errors
+    ///
+    /// Returns a database error when the update fails.
+    pub async fn disown(&self, owner: &str) -> Result<u64> {
+        Ok(sqlx::query("UPDATE TASK SET OWNER = NULL WHERE OWNER = ?")
+            .bind(owner)
+            .execute(&self.pool)
+            .await?
+            .rows_affected())
+    }
+
     /// Counts all queued tasks by Kotlin simple type.
     ///
     /// # Errors

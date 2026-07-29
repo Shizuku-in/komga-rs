@@ -259,6 +259,7 @@ const SUPPORTED_TASK_TYPES: [&str; 24] = [
 ];
 
 struct WorkerHandle {
+    owner: String,
     stop: CancellationToken,
     handle: JoinHandle<()>,
 }
@@ -276,6 +277,7 @@ async fn worker_supervisor(state: AppState, mut desired: tokio::sync::watch::Rec
     );
     loop {
         tokio::select! {
+            biased;
             () = state.shutdown.cancelled() => break,
             changed = desired.changed() => {
                 if changed.is_err() {
@@ -288,7 +290,19 @@ async fn worker_supervisor(state: AppState, mut desired: tokio::sync::watch::Rec
                     &mut retiring,
                     &mut next_index,
                 );
-                collect_finished_workers(&mut retiring).await;
+                collect_finished_workers(&state, &mut retiring).await;
+            }
+            (index, result) = wait_for_worker_exit(&mut workers) => {
+                let desired_count = *desired.borrow();
+                handle_worker_exit(
+                    &state,
+                    desired_count,
+                    &mut workers,
+                    &mut retiring,
+                    &mut next_index,
+                    index,
+                    result,
+                ).await;
             }
         }
     }
@@ -313,9 +327,11 @@ fn resize_workers(
 ) {
     while workers.len() < desired {
         let stop = CancellationToken::new();
+        let owner = format!("komga-rs-{}-{}", std::process::id(), *next_index);
         workers.push(WorkerHandle {
+            owner: owner.clone(),
             stop: stop.clone(),
-            handle: tokio::spawn(worker_loop(state.clone(), *next_index, stop)),
+            handle: tokio::spawn(worker_loop(state.clone(), owner, stop)),
         });
         *next_index = next_index.wrapping_add(1);
     }
@@ -328,13 +344,42 @@ fn resize_workers(
     state.task_notify.notify_waiters();
 }
 
-async fn collect_finished_workers(workers: &mut Vec<WorkerHandle>) {
+async fn wait_for_worker_exit(workers: &mut [WorkerHandle]) -> (usize, Result<(), tokio::task::JoinError>) {
+    if workers.is_empty() {
+        std::future::pending().await
+    }
+    let (result, index, _) =
+        futures_util::future::select_all(workers.iter_mut().map(|worker| &mut worker.handle)).await;
+    (index, result)
+}
+
+async fn handle_worker_exit(
+    state: &AppState,
+    desired: usize,
+    workers: &mut Vec<WorkerHandle>,
+    retiring: &mut Vec<WorkerHandle>,
+    next_index: &mut usize,
+    index: usize,
+    result: Result<(), tokio::task::JoinError>,
+) {
+    let worker = workers.swap_remove(index);
+    match result {
+        Ok(()) => tracing::warn!(worker = %worker.owner, "task worker exited unexpectedly"),
+        Err(error) => tracing::error!(%error, worker = %worker.owner, "task worker terminated unexpectedly"),
+    }
+    release_worker_tasks(state, &worker.owner).await;
+    collect_finished_workers(state, retiring).await;
+    resize_workers(state, desired, workers, retiring, next_index);
+}
+
+async fn collect_finished_workers(state: &AppState, workers: &mut Vec<WorkerHandle>) {
     let mut index = 0;
     while index < workers.len() {
         if workers[index].handle.is_finished() {
             let worker = workers.swap_remove(index);
             if let Err(error) = worker.handle.await {
-                tracing::error!(%error, "retired task worker terminated unexpectedly");
+                tracing::error!(%error, worker = %worker.owner, "retired task worker terminated unexpectedly");
+                release_worker_tasks(state, &worker.owner).await;
             }
         } else {
             index += 1;
@@ -342,8 +387,15 @@ async fn collect_finished_workers(workers: &mut Vec<WorkerHandle>) {
     }
 }
 
-async fn worker_loop(state: AppState, index: usize, stop: CancellationToken) {
-    let owner = format!("komga-rs-{}-{index}", std::process::id());
+async fn release_worker_tasks(state: &AppState, owner: &str) {
+    match state.tasks.disown(owner).await {
+        Ok(released) if released > 0 => tracing::warn!(worker = owner, released, "released tasks from exited worker"),
+        Ok(_) => {}
+        Err(error) => tracing::error!(%error, worker = owner, "could not release tasks from exited worker"),
+    }
+}
+
+async fn worker_loop(state: AppState, owner: String, stop: CancellationToken) {
     loop {
         let notified = state.task_notify.notified();
         tokio::pin!(notified);
@@ -525,6 +577,40 @@ mod tests {
         for worker in workers {
             worker.handle.await.unwrap();
         }
+    }
+
+    #[tokio::test]
+    async fn task_workers_release_claims_and_replace_unexpected_exits() {
+        let state = AppState::new(
+            Storage::connect_memory().await.unwrap(),
+            TaskStorage::connect_memory().await.unwrap(),
+        )
+        .await
+        .unwrap();
+        let task = TaskRecord::scan_library("library", false, 1);
+        state.tasks.save(&task).await.unwrap();
+        let owner = format!("komga-rs-{}-0", std::process::id());
+        assert!(state.tasks.take_first(&owner).await.unwrap().is_some());
+        let stop = CancellationToken::new();
+        let mut workers = vec![WorkerHandle {
+            owner: owner.clone(),
+            stop,
+            handle: tokio::spawn(async { panic!("simulated worker failure") }),
+        }];
+        let mut retiring = Vec::new();
+        let mut next_index = 1;
+        let (index, result) = wait_for_worker_exit(&mut workers).await;
+
+        handle_worker_exit(&state, 0, &mut workers, &mut retiring, &mut next_index, index, result).await;
+        assert!(workers.is_empty());
+        assert_eq!(state.tasks.list().await.unwrap()[0].owner, None);
+
+        resize_workers(&state, 1, &mut workers, &mut retiring, &mut next_index);
+        assert_eq!(workers.len(), 1);
+        assert_ne!(workers[0].owner, owner);
+        state.shutdown.cancel();
+        state.task_notify.notify_waiters();
+        workers.pop().unwrap().handle.await.unwrap();
     }
 
     #[tokio::test]

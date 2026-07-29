@@ -694,6 +694,92 @@ async fn authentication_activity_records_attempts_without_recounting_ordinary_se
 }
 
 #[tokio::test]
+async fn device_api_key_authentication_records_successes_and_failures() {
+    let storage = Storage::connect_memory().await.unwrap();
+    let tasks = TaskStorage::connect_memory().await.unwrap();
+    let mut user = User::new("device@example.org".into(), "unused".into());
+    user.roles.insert(UserRole::KoboSync);
+    user.roles.insert(UserRole::KoreaderSync);
+    storage.create_user(&user).await.unwrap();
+    let key = "device-api-key";
+    let key_id = "device-key-id";
+    storage
+        .create_api_key(key_id, &user.id, &komga_server_test_sha512(key), "E-reader")
+        .await
+        .unwrap();
+    let app = build_app(
+        AppState::new(storage.clone(), tasks)
+            .await
+            .unwrap()
+            .with_trusted_proxies(vec!["127.0.0.0/8".parse().unwrap()]),
+    );
+
+    for request in [
+        Request::get(format!("/kobo/{key}/ping"))
+            .header("x-forwarded-for", "203.0.113.42")
+            .header(header::USER_AGENT, "KoboReader/1.0")
+            .body(Body::empty())
+            .unwrap(),
+        Request::get("/koreader/users/auth")
+            .header("X-Auth-User", key)
+            .header("x-forwarded-for", "203.0.113.42")
+            .header(header::USER_AGENT, "KOReader/1.0")
+            .body(Body::empty())
+            .unwrap(),
+    ] {
+        let response = app.clone().oneshot(through_trusted_proxy(request)).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+    for request in [
+        Request::get("/kobo/invalid-device-key/ping")
+            .header("x-forwarded-for", "203.0.113.42")
+            .header(header::USER_AGENT, "KoboReader/1.0")
+            .body(Body::empty())
+            .unwrap(),
+        Request::get("/koreader/users/auth")
+            .header("X-Auth-User", "invalid-device-key")
+            .header("x-forwarded-for", "203.0.113.42")
+            .header(header::USER_AGENT, "KOReader/1.0")
+            .body(Body::empty())
+            .unwrap(),
+    ] {
+        let response = app.clone().oneshot(through_trusted_proxy(request)).await.unwrap();
+        assert!(matches!(
+            response.status(),
+            StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN
+        ));
+    }
+
+    let own_activity = storage
+        .list_authentication_activity(Some(&user), &komga_core::PageRequest::default())
+        .await
+        .unwrap();
+    assert_eq!(own_activity.total_elements, 2);
+    assert!(own_activity.content.iter().all(|activity| {
+        activity.success
+            && activity.api_key_id.as_deref() == Some(key_id)
+            && activity.api_key_comment.as_deref() == Some("E-reader")
+            && activity.ip.as_deref() == Some("203.0.113.42")
+            && activity.source.as_deref() == Some("ApiKey")
+    }));
+    let all_activity = storage
+        .list_authentication_activity(None, &komga_core::PageRequest::default())
+        .await
+        .unwrap();
+    assert_eq!(all_activity.total_elements, 4);
+    assert_eq!(
+        all_activity.content.iter().filter(|activity| !activity.success).count(),
+        2
+    );
+    assert!(
+        all_activity
+            .content
+            .iter()
+            .all(|activity| activity.user_agent.is_some())
+    );
+}
+
+#[tokio::test]
 async fn authentication_audit_failure_does_not_block_a_valid_login() {
     let temporary = tempfile::tempdir().unwrap();
     let database = temporary.path().join("database.sqlite");

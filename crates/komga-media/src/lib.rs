@@ -475,7 +475,7 @@ pub fn image_dimension(bytes: &[u8]) -> Option<Dimension> {
     image_ops::dimension(bytes)
 }
 
-/// Builds a two-by-two JPEG poster, cycling one to four source images.
+/// Builds a two-by-two JPEG poster from up to four source images.
 pub fn collage_thumbnail(sources: &[Vec<u8>], size: u32) -> Result<Vec<u8>, MediaOperationError> {
     image_ops::collage(sources, size)
 }
@@ -920,6 +920,31 @@ mod tests {
         assert_eq!(invalid.status, MediaStatus::Error);
         assert_eq!(invalid.media_type.as_deref(), Some(ZIP_MEDIA_TYPE));
         assert_eq!(invalid.comment.as_deref(), Some("ERR_1032"));
+    }
+
+    #[test]
+    fn analyzes_epub_with_incomplete_manifest_items_as_resource_errors() {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("incomplete-manifest.epub");
+        write_epub(
+            &path,
+            r#"<package><manifest>
+                <item id="page" href="page.xhtml" media-type="application/xhtml+xml"/>
+                <item href="missing-id.css" media-type="text/css"/>
+                <item id="missing-href" media-type="image/jpeg"/>
+                <item id="missing-type" href="missing-type.bin"/>
+              </manifest><spine><itemref idref="page"/></spine></package>"#,
+            &[("page.xhtml", b"<html><body>Readable publication</body></html>")],
+        );
+
+        let media = analyze_book(&book(&path), true, || false).unwrap();
+        assert_eq!(media.status, MediaStatus::Ready);
+        assert_eq!(
+            media.comment.as_deref(),
+            Some("ERR_1033 [missing-id.css, , missing-type.bin]")
+        );
+        assert_eq!(media.files.len(), 1);
+        assert_eq!(media.files[0].file_name, "page.xhtml");
     }
 
     #[test]

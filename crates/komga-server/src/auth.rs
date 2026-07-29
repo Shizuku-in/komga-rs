@@ -488,6 +488,7 @@ pub(crate) async fn require_auth(State(state): State<AppState>, mut request: Req
 
 /// Authenticates KOReader protocol requests exclusively through `X-Auth-User`.
 pub(crate) async fn require_koreader_auth(State(state): State<AppState>, mut request: Request, next: Next) -> Response {
+    let request_metadata = authentication_request_metadata(&request);
     let Some(key) = request
         .headers()
         .get("X-Auth-User")
@@ -498,11 +499,32 @@ pub(crate) async fn require_koreader_auth(State(state): State<AppState>, mut req
         return ApiError::forbidden().into_response();
     };
     let digest = hex::encode(Sha512::digest(key.as_bytes()));
-    let user = match state.storage.find_user_by_api_key_hash(&digest).await {
-        Ok(Some(user)) if user.roles.contains(&UserRole::KoreaderSync) => user,
-        Ok(_) => return ApiError::forbidden().into_response(),
-        Err(error) => return ApiError::from(error).into_response(),
+    let api_key = match state.storage.find_api_key_by_hash(&digest).await {
+        Ok(Some(api_key)) => api_key,
+        Ok(None) => {
+            record_api_key_authentication_failure(&state, &request_metadata).await;
+            return ApiError::forbidden().into_response();
+        }
+        Err(error) => {
+            record_api_key_authentication_failure(&state, &request_metadata).await;
+            return ApiError::from(error).into_response();
+        }
     };
+    let user = match state.storage.find_user_by_id(&api_key.user_id).await {
+        Ok(Some(user)) => user,
+        Ok(None) => {
+            record_api_key_authentication_failure(&state, &request_metadata).await;
+            return ApiError::forbidden().into_response();
+        }
+        Err(error) => {
+            record_api_key_authentication_failure(&state, &request_metadata).await;
+            return ApiError::from(error).into_response();
+        }
+    };
+    record_api_key_authentication_success(&state, &request_metadata, &user, &api_key).await;
+    if !user.roles.contains(&UserRole::KoreaderSync) {
+        return ApiError::forbidden().into_response();
+    }
     request.extensions_mut().insert(AuthContext { user, session_id: None });
     next.run(request).await
 }
@@ -600,6 +622,34 @@ async fn record_authentication_success(
             error: None,
             date_time: chrono::Utc::now().naive_utc(),
             source,
+        },
+    )
+    .await;
+}
+
+pub(crate) async fn record_api_key_authentication_success(
+    state: &AppState,
+    metadata: &AuthenticationRequestMetadata,
+    user: &User,
+    api_key: &ApiKey,
+) {
+    record_authentication_success(state, metadata, user, &AuthSource::ApiKey(api_key.clone())).await;
+}
+
+pub(crate) async fn record_api_key_authentication_failure(state: &AppState, metadata: &AuthenticationRequestMetadata) {
+    record_authentication_activity(
+        state,
+        AuthenticationActivity {
+            user_id: None,
+            email: None,
+            api_key_id: None,
+            api_key_comment: None,
+            ip: metadata.ip.clone(),
+            user_agent: metadata.user_agent.clone(),
+            success: false,
+            error: Some("Authentication failed".to_owned()),
+            date_time: chrono::Utc::now().naive_utc(),
+            source: Some("ApiKey".to_owned()),
         },
     )
     .await;

@@ -20,13 +20,13 @@ const J2C_MAGIC: &[u8] = &[0xff, 0x4f, 0xff, 0x51];
 const TGA_FOOTER: &[u8] = b"TRUEVISION-XFILE.\0";
 
 pub(crate) fn collage(sources: &[Vec<u8>], size: u32) -> Result<Vec<u8>, MediaOperationError> {
-    let width = size.max(2);
-    let height = width.saturating_mul(3) / 2;
+    let height = size.max(2);
+    let width = ((f64::from(height) * 0.706_666_666_7).round() as u32).max(2);
     let cell_w = width / 2;
     let cell_h = height / 2;
     let mut canvas = RgbImage::new(width, height);
-    for slot in 0..if sources.is_empty() { 0 } else { 4usize } {
-        let tile = decode(&sources[slot % sources.len()])
+    for (slot, source) in sources.iter().take(4).enumerate() {
+        let tile = decode(source)
             .map_err(|e| MediaOperationError::Image(e.to_string()))?
             .resize_to_fill(cell_w, cell_h, FilterType::Lanczos3)
             .to_rgb8();
@@ -271,6 +271,21 @@ mod tests {
         0xff, 0x90, 0x00, 0x0a, 0x00, 0x00, 0x00, 0x00, 0x00, 0x1e, 0x00, 0x01, 0xff, 0x93, 0xcf, 0xfc, 0x30, 0x08,
         0x07, 0xb7, 0x80, 0xdf, 0xf8, 0x90, 0x10, 0x01, 0x3f, 0x80, 0x80, 0x80, 0xff, 0xd9,
     ];
+
+    #[test]
+    fn collage_uses_configured_max_edge_without_repeating_sources() {
+        let mut source = Cursor::new(Vec::new());
+        DynamicImage::ImageRgb8(RgbImage::from_pixel(8, 8, Rgb([240, 16, 16])))
+            .write_to(&mut source, ImageFormat::Png)
+            .unwrap();
+
+        let collage = collage(&[source.into_inner()], 300).unwrap();
+        let collage = image::load_from_memory(&collage).unwrap().to_rgb8();
+        assert_eq!(collage.dimensions(), (212, 300));
+        assert!(collage.get_pixel(50, 75).0[0] > 200);
+        assert!(collage.get_pixel(175, 75).0.iter().all(|channel| *channel < 10));
+        assert!(collage.get_pixel(50, 225).0.iter().all(|channel| *channel < 10));
+    }
 
     #[test]
     fn decodes_jpeg_xl_and_jpeg_2000() {

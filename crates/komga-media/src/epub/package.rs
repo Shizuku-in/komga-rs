@@ -95,10 +95,10 @@ pub(super) fn parse_package(xml: &str, base_dir: &str) -> Result<EpubPackage, St
         .children()
         .filter(|node| is_element(*node, "item"))
         .map(|node| {
-            let id = required_attribute(node, "id")?.to_owned();
-            let href = required_attribute(node, "href")?;
+            let id = node.attribute("id").unwrap_or_default().to_owned();
+            let href = node.attribute("href").unwrap_or_default();
             let path = normalize_href(base_dir, href)?;
-            let media_type = required_attribute(node, "media-type")?.to_owned();
+            let media_type = node.attribute("media-type").unwrap_or_default().to_owned();
             let properties = node
                 .attribute("properties")
                 .unwrap_or_default()
@@ -277,12 +277,6 @@ pub(super) fn entry_sizes(archive: &mut ZipArchive<File>, name: &str) -> Option<
     })
 }
 
-fn required_attribute<'a>(node: Node<'a, 'a>, name: &str) -> Result<&'a str, String> {
-    node.attribute(name)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| format!("OPF item is missing {name}"))
-}
-
 fn normalized_text(node: Node<'_, '_>) -> String {
     node.descendants()
         .filter(|child| child.is_text())
@@ -337,6 +331,27 @@ mod tests {
             "OPS/Images/cover page.jpg#cover"
         );
         assert!(normalize_href("", "../outside.xhtml").is_err());
+    }
+
+    #[test]
+    fn keeps_manifest_items_with_missing_attributes_for_resource_level_errors() {
+        let package = parse_package(
+            r#"<package><manifest>
+                <item id="page" href="page.xhtml" media-type="application/xhtml+xml"/>
+                <item href="missing-id.css" media-type="text/css"/>
+                <item id="missing-href" media-type="image/jpeg"/>
+                <item id="missing-type" href="image.jpg"/>
+              </manifest><spine><itemref idref="page"/></spine></package>"#,
+            "OPS",
+        )
+        .unwrap();
+
+        assert_eq!(package.manifest.len(), 4);
+        assert_eq!(package.spine[0].path, "OPS/page.xhtml");
+        assert_eq!(package.manifest[1].id, "");
+        assert_eq!(package.manifest[1].path, "OPS/missing-id.css");
+        assert_eq!(package.manifest[2].path, "OPS");
+        assert_eq!(package.manifest[3].media_type, "");
     }
 
     #[test]
