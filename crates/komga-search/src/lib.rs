@@ -30,7 +30,7 @@ use tantivy::{
 use thiserror::Error;
 
 /// On-disk schema version. A different version requires a full rebuild.
-pub const SCHEMA_VERSION: u32 = 2;
+pub const SCHEMA_VERSION: u32 = 3;
 /// Maximum number of ranked identifiers returned by one query.
 pub const RESULT_LIMIT: usize = 1000;
 
@@ -210,7 +210,7 @@ impl SearchIndex {
         Self::from_index(Index::create_in_ram(schema()), IndexState::Empty)
     }
 
-    /// Opens or creates `<path>/v2`, leaving older version directories untouched.
+    /// Opens or creates `<path>/v3`, leaving older version directories untouched.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, SearchError> {
         let versioned_path = path.as_ref().join(format!("v{SCHEMA_VERSION}"));
         std::fs::create_dir_all(&versioned_path).map_err(|error| {
@@ -813,6 +813,23 @@ mod tests {
         assert_eq!(hit_ids(&index, EntityKind::ReadList, "batman"), ["readlist"]);
     }
 
+    #[test]
+    fn unicode_marks_do_not_collapse_distinct_words_during_search() {
+        let index = SearchIndex::in_memory().unwrap();
+        index
+            .replace(
+                &[EntityKind::Book],
+                [
+                    SearchEntity::new(EntityKind::Book, "with-marks").field("title", "किताब"),
+                    SearchEntity::new(EntityKind::Book, "without-marks").field("title", "कतब"),
+                ],
+            )
+            .unwrap();
+
+        assert_eq!(hit_ids(&index, EntityKind::Book, "किताब"), ["with-marks"]);
+        assert_eq!(hit_ids(&index, EntityKind::Book, "कतब"), ["without-marks"]);
+    }
+
     fn hit_ids(index: &SearchIndex, kind: EntityKind, query: &str) -> Vec<String> {
         index.search(kind, query).into_iter().map(|hit| hit.id).collect()
     }
@@ -859,9 +876,9 @@ mod tests {
     }
 
     #[test]
-    fn file_index_uses_v2_and_tracks_version_document() {
+    fn file_index_uses_v3_and_tracks_version_document() {
         let directory = tempfile::tempdir().unwrap();
-        std::fs::create_dir(directory.path().join("v1")).unwrap();
+        std::fs::create_dir(directory.path().join("v2")).unwrap();
         let index = SearchIndex::open(directory.path()).unwrap();
         assert_eq!(index.state(), IndexState::Empty);
         index.replace(&ALL_KINDS, []).unwrap();
@@ -871,7 +888,7 @@ mod tests {
             SearchIndex::open(directory.path()).unwrap().state(),
             IndexState::Current
         );
-        assert!(directory.path().join("v1").exists());
+        assert!(directory.path().join("v2").exists());
     }
 
     #[test]
@@ -916,18 +933,18 @@ mod tests {
     }
 
     #[test]
-    fn mismatched_v2_schema_is_recreated_without_touching_v1() {
+    fn mismatched_v3_schema_is_recreated_without_touching_v2() {
         let directory = tempfile::tempdir().unwrap();
-        let v1 = directory.path().join("v1");
         let v2 = directory.path().join("v2");
-        std::fs::create_dir(&v1).unwrap();
-        std::fs::write(v1.join("marker"), "legacy").unwrap();
+        let v3 = directory.path().join("v3");
         std::fs::create_dir(&v2).unwrap();
+        std::fs::write(v2.join("marker"), "legacy").unwrap();
+        std::fs::create_dir(&v3).unwrap();
 
         let mut builder = Schema::builder();
         builder.add_text_field("legacy", TextOptions::default());
         let legacy = Index::create(
-            MmapDirectory::open(&v2).unwrap(),
+            MmapDirectory::open(&v3).unwrap(),
             builder.build(),
             tantivy::IndexSettings::default(),
         )
@@ -936,7 +953,7 @@ mod tests {
 
         let index = SearchIndex::open(directory.path()).unwrap();
         assert_eq!(index.state(), IndexState::Incompatible);
-        assert_eq!(std::fs::read_to_string(v1.join("marker")).unwrap(), "legacy");
+        assert_eq!(std::fs::read_to_string(v2.join("marker")).unwrap(), "legacy");
         index.replace(&ALL_KINDS, []).unwrap();
         assert_eq!(index.state(), IndexState::Current);
     }

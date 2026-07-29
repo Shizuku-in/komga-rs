@@ -11,6 +11,7 @@ tantivy.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 unicode-normalization.workspace = true
+unicode-segmentation.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

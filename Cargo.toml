@@ -79,6 +79,7 @@ percent-encoding = "2.3"
 roxmltree = "0.21"
 scraper = "0.27"
 unicode-normalization = "0.1"
+unicode-segmentation = "1.13"
 tantivy = "0.26.1"
 zip = { version = "8.6", default-features = false, features = ["bzip2", "deflate", "deflate64", "lzma", "ppmd", "xz", "zstd"] }
 xxhash-rust = { version = "0.8.18", default-features = false, features = ["xxh3"] }

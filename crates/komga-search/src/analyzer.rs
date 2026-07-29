@@ -1,5 +1,6 @@
 use tantivy::tokenizer::{AsciiFoldingFilter, TextAnalyzer, Token, TokenStream, Tokenizer};
-use unicode_normalization::UnicodeNormalization;
+use unicode_normalization::{UnicodeNormalization, char::is_combining_mark};
+use unicode_segmentation::UnicodeSegmentation;
 
 #[derive(Clone, Copy)]
 pub(crate) struct MultilingualTokenizer {
@@ -77,38 +78,34 @@ fn base_tokens(text: &str) -> Vec<Token> {
     #[derive(Clone, Copy, PartialEq, Eq)]
     enum Class {
         Cjk,
+        SoutheastAsian,
         Alphanumeric,
     }
 
     let mut spans = Vec::<(usize, usize, Class)>::new();
-    let mut current: Option<(usize, usize, Class)> = None;
-    for (offset, character) in text.char_indices() {
-        let class = if is_cjk(character) {
-            Some(Class::Cjk)
-        } else if character.is_alphanumeric() {
-            Some(Class::Alphanumeric)
+    for (start, value) in text.unicode_word_indices() {
+        let end = start + value.len();
+        let class = if value
+            .chars()
+            .all(|character| is_cjk(character) || is_combining_mark(character))
+        {
+            Class::Cjk
+        } else if value
+            .chars()
+            .all(|character| is_southeast_asian(character) || is_combining_mark(character))
+        {
+            Class::SoutheastAsian
         } else {
-            None
+            Class::Alphanumeric
         };
-        let end = offset + character.len_utf8();
-        match (current, class) {
-            (Some((start, _, existing)), Some(next)) if existing == next => {
-                current = Some((start, end, existing));
+        match spans.last_mut() {
+            Some((_, previous_end, previous_class))
+                if class != Class::Alphanumeric && *previous_class == class && *previous_end == start =>
+            {
+                *previous_end = end;
             }
-            (Some(span), Some(next)) => {
-                spans.push(span);
-                current = Some((offset, end, next));
-            }
-            (Some(span), None) => {
-                spans.push(span);
-                current = None;
-            }
-            (None, Some(next)) => current = Some((offset, end, next)),
-            (None, None) => {}
+            _ => spans.push((start, end, class)),
         }
-    }
-    if let Some(span) = current {
-        spans.push(span);
     }
 
     let mut tokens = Vec::new();
@@ -198,6 +195,14 @@ fn is_cjk(character: char) -> bool {
     )
 }
 
+fn is_southeast_asian(character: char) -> bool {
+    // Lucene groups Thai, Lao, Myanmar, and Khmer runs as SOUTHEAST_ASIAN tokens.
+    matches!(
+        character as u32,
+        0x0E00..=0x0EFF | 0x1000..=0x109F | 0x1780..=0x17FF | 0xA9E0..=0xA9FF | 0xAA60..=0xAA7F
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -247,6 +252,33 @@ mod tests {
             (
                 "고교생을 환불해 주세요",
                 vec!["고교", "교생", "생을", "환불", "불해", "주세", "세요"],
+            ),
+        ];
+        for (input, expected) in cases {
+            assert_eq!(analyze(query_analyzer(), input), expected, "input: {input}");
+        }
+    }
+
+    #[test]
+    fn query_analyzer_matches_lucene_unicode_word_boundaries() {
+        let cases = [
+            (
+                "can't can’t rock'n'roll l'amour O’Reilly",
+                vec!["can't", "can't", "rock'n'roll", "l'amour", "o'reilly"],
+            ),
+            (
+                "foo_bar foo.bar 3.14 1,234 A1.2",
+                vec!["foo_bar", "foo.bar", "3.14", "1,234", "a1.2"],
+            ),
+            ("किताब कतब हिंदी हद", vec!["किताब", "कतब", "हिंदी", "हद"]),
+            ("क्षेत्र श्री गणेश", vec!["क्षेत्र", "श्री", "गणेश"]),
+            (
+                "ภาษาไทย ภาษาไทยทดสอบ ພາສາລາວ မြန်မာဘာသာ ភាសាខ្មែរ",
+                vec!["ภาษาไทย", "ภาษาไทยทดสอบ", "ພາສາລາວ", "မြန်မာဘာသာ", "ភាសាខ្មែរ"],
+            ),
+            (
+                "カタカナ_abc abc_한국어 中文_abc abc_中文",
+                vec!["カタカナ_abc", "abc_한국어", "中文", "_abc", "abc_", "中文"],
             ),
         ];
         for (input, expected) in cases {
