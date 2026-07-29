@@ -96,7 +96,7 @@ fn parse_metadata(xml: &str) -> Result<EmbeddedMetadata, MediaOperationError> {
                     || node.attribute("property") == Some("group-position"))
         })
         .and_then(|node| node.attribute("content").or_else(|| node.text()))
-        .and_then(|value| value.trim().parse::<f64>().ok());
+        .and_then(|value| value.trim().parse::<f32>().ok());
     let subjects = values("subject").into_iter().map(str::to_owned).collect::<Vec<_>>();
     let description = first("description").map(strip_html);
     let direction = doc

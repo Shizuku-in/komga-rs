@@ -193,7 +193,7 @@ pub struct BookMetadataDto {
     /// Whether display number is locked.
     pub number_lock: bool,
     /// Numeric sort value.
-    pub number_sort: f64,
+    pub number_sort: f32,
     /// Whether the sort value is locked.
     pub number_sort_lock: bool,
     /// Optional release date.

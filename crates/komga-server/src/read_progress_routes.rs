@@ -37,7 +37,7 @@ pub(crate) struct ReadProgressUpdateDto {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct TachiyomiReadProgressUpdateDto {
-    last_book_number_sort_read: f64,
+    last_book_number_sort_read: f32,
 }
 
 /// Marks every incomplete book in a visible series complete.

@@ -179,7 +179,7 @@ fn parse_metadata(bytes: &[u8], append_volume: bool) -> Result<EmbeddedMetadata,
         ),
         _ => None,
     };
-    let number_sort = text("Number").and_then(|value| value.parse::<f64>().ok());
+    let number_sort = text("Number").and_then(|value| value.parse::<f32>().ok());
     let isbn = text("GTIN").or_else(|| text("ISBN")).map(isbn13).transpose()?;
     let links = text("Web").map(|url| {
         vec![WebLink {

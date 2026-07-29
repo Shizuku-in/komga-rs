@@ -382,7 +382,7 @@ pub enum BookCondition {
     /// Match metadata tags.
     Tag { operator: NullableEqualityOperator<String> },
     /// Match metadata number sort.
-    NumberSort { operator: NumericOperator<f64> },
+    NumberSort { operator: NumericOperator<f32> },
     /// Match media-analysis status.
     MediaStatus { operator: EqualityOperator<MediaStatus> },
     /// Match media rendering profile.
@@ -474,6 +474,18 @@ mod tests {
         )
         .unwrap();
         assert!(matches!(book.condition, Some(BookCondition::AllOf { conditions }) if conditions.len() == 4));
+    }
+
+    #[test]
+    fn number_sort_condition_uses_kotlin_float_precision() {
+        let search: BookSearch =
+            serde_json::from_str(r#"{"condition":{"numberSort":{"operator":"is","value":0.1}}}"#).unwrap();
+        assert!(matches!(
+            search.condition,
+            Some(BookCondition::NumberSort {
+                operator: NumericOperator::Is { value }
+            }) if value.to_bits() == 0.1_f32.to_bits()
+        ));
     }
 
     #[test]

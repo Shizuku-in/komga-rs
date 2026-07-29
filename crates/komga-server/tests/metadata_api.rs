@@ -180,7 +180,7 @@ async fn book_metadata_patch_normalizes_values_and_preserves_or_clears_nulls() {
             "summaryLock": true,
             "number": " 12 ",
             "numberLock": true,
-            "numberSort": 12.5,
+            "numberSort": 0.1,
             "numberSortLock": true,
             "releaseDate": "2025-02-03",
             "releaseDateLock": true,
@@ -211,7 +211,7 @@ async fn book_metadata_patch_normalizes_values_and_preserves_or_clears_nulls() {
     assert_eq!(metadata.title, "Updated title");
     assert_eq!(metadata.summary, "Summary");
     assert_eq!(metadata.number, "12");
-    assert_eq!(metadata.number_sort, 12.5);
+    assert_eq!(metadata.number_sort, 0.1_f32);
     assert_eq!(metadata.release_date.unwrap().to_string(), "2025-02-03");
     assert_eq!(metadata.authors[0].name, "Jane Doe");
     assert_eq!(metadata.authors[0].role, "writer");
@@ -250,7 +250,7 @@ async fn book_metadata_patch_normalizes_values_and_preserves_or_clears_nulls() {
     let metadata = fixture.storage.find_book_metadata(&book.id).await.unwrap().unwrap();
     assert_eq!(metadata.title, "Updated title");
     assert_eq!(metadata.number, "12");
-    assert_eq!(metadata.number_sort, 12.5);
+    assert_eq!(metadata.number_sort, 0.1_f32);
     assert!(metadata.title_lock && metadata.summary_lock);
     assert!(metadata.summary.is_empty());
     assert!(metadata.release_date.is_none());

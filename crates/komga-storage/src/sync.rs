@@ -53,7 +53,7 @@ struct BookProjectionRow {
     series_id: String,
     title: String,
     number: String,
-    number_sort: f64,
+    number_sort: f32,
     isbn: String,
     summary: String,
     release_date: Option<NaiveDate>,

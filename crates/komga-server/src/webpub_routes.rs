@@ -169,7 +169,7 @@ pub(crate) struct WpContributorDto {
     #[serde(skip_serializing_if = "String::is_empty")]
     name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    position: Option<f64>,
+    position: Option<f32>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     links: Vec<WpLinkDto>,
 }

@@ -1822,7 +1822,7 @@ mod tests {
         assert_eq!(restored_metadata.title, "Renamed");
         assert!(!restored_metadata.title_lock);
         assert_eq!(restored_metadata.number, restored.number.to_string());
-        assert_eq!(restored_metadata.number_sort, f64::from(restored.number));
+        assert_eq!(restored_metadata.number_sort, restored.number as f32);
         assert_eq!(restored_metadata.summary, "Restored summary");
         assert!(restored_metadata.tags.contains("restored-tag"));
         let locked_restored_metadata = storage.find_book_metadata(&locked_restored.id).await.unwrap().unwrap();
@@ -2570,7 +2570,9 @@ mod tests {
             .execute(storage.pool())
             .await
             .unwrap();
-        sqlx::query("UPDATE BOOK_METADATA SET RELEASE_DATE = '2024-01-10', NUMBER_SORT = 1.5 WHERE BOOK_ID = ?")
+        let kotlin_number_sort = f64::from(0.1_f32);
+        sqlx::query("UPDATE BOOK_METADATA SET RELEASE_DATE = '2024-01-10', NUMBER_SORT = ? WHERE BOOK_ID = ?")
+            .bind(kotlin_number_sort)
             .bind(&books[0].id)
             .execute(storage.pool())
             .await
@@ -2665,7 +2667,7 @@ mod tests {
                 "allOf": [
                     {"releaseDate": {"operator": "before", "dateTime": "2024-02-01T00:00:00Z"}},
                     {"tag": {"operator": "is", "value": "booktag"}},
-                    {"numberSort": {"operator": "greaterThan", "value": 1}},
+                    {"numberSort": {"operator": "is", "value": 0.1}},
                     {"mediaProfile": {"operator": "is", "value": "PDF"}},
                     {"author": {"operator": "is", "value": {"name": "AUTHOR"}}},
                     {"poster": {"operator": "is", "value": {"type": "SIDECAR", "selected": true}}}
@@ -2790,6 +2792,22 @@ mod tests {
         assert_eq!(book_page.content[0].metadata.tags, BTreeSet::from(["BookTag".into()]));
         assert_eq!(book_page.content[0].read_progress.as_ref().unwrap().device_id, "device");
         assert_eq!(book_page.content[0].size, "1.5 KiB");
+        assert_eq!(book_page.content[0].metadata.number_sort, 0.1_f32);
+        assert!(
+            serde_json::to_string(&book_page.content[0])
+                .unwrap()
+                .contains(r#""numberSort":0.1"#)
+        );
+        let metadata = storage.find_book_metadata(&books[0].id).await.unwrap().unwrap();
+        storage.save_book_metadata(&metadata).await.unwrap();
+        assert_eq!(
+            sqlx::query_scalar::<_, f64>("SELECT NUMBER_SORT FROM BOOK_METADATA WHERE BOOK_ID = ?")
+                .bind(&books[0].id)
+                .fetch_one(storage.pool())
+                .await
+                .unwrap(),
+            kotlin_number_sort
+        );
         let ranked = vec![books[1].id.clone(), books[0].id.clone()];
         let ranked_page = storage
             .query_books(

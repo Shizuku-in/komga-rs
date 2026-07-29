@@ -196,7 +196,7 @@ async fn series_and_tachiyomi_read_progress_contract() {
     let books = storage.list_books_by_series_id(&series.id).await.unwrap();
     for (index, book) in books.iter().enumerate() {
         let mut metadata = storage.find_book_metadata(&book.id).await.unwrap().unwrap();
-        metadata.number_sort = index as f64 + 1.5;
+        metadata.number_sort = index as f32 + 1.5;
         storage.save_book_metadata(&metadata).await.unwrap();
         let mut media = storage.find_media_by_book_id(&book.id).await.unwrap().unwrap();
         media.page_count = (index as i32 + 1) * 10;

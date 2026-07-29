@@ -25,13 +25,13 @@ pub struct SeriesReadProgressDto {
     /// Number of books with incomplete progress.
     pub books_in_progress_count: i32,
     /// Sort number of the last completed book before the first gap.
-    pub last_read_continuous_number_sort: f64,
+    pub last_read_continuous_number_sort: f32,
     /// Greatest book sort number, or zero for an empty series.
-    pub max_number_sort: f64,
+    pub max_number_sort: f32,
 }
 
 /// Computes a Mihon-compatible series summary from book sort numbers and completion states.
-pub fn series_read_progress(books: impl IntoIterator<Item = (f64, Option<bool>)>) -> SeriesReadProgressDto {
+pub fn series_read_progress(books: impl IntoIterator<Item = (f32, Option<bool>)>) -> SeriesReadProgressDto {
     let mut books = books.into_iter().collect::<Vec<_>>();
     books.sort_by(|left, right| left.0.total_cmp(&right.0));
     let mut result = SeriesReadProgressDto::default();

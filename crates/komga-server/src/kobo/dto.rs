@@ -47,7 +47,7 @@ pub(super) struct KoboSeriesDto {
     pub id: String,
     pub name: String,
     pub number: String,
-    pub number_float: f64,
+    pub number_float: f32,
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]

@@ -986,7 +986,7 @@ async fn restore_book(
             .fetch_one(&mut **tx)
             .await?;
     let (old_number, number_locked, old_number_sort, number_sort_locked, title_locked) =
-        sqlx::query_as::<_, (String, bool, f64, bool, bool)>(
+        sqlx::query_as::<_, (String, bool, f32, bool, bool)>(
             "SELECT NUMBER, NUMBER_LOCK, NUMBER_SORT, NUMBER_SORT_LOCK, TITLE_LOCK \
              FROM BOOK_METADATA WHERE BOOK_ID = ?",
         )
@@ -994,9 +994,9 @@ async fn restore_book(
         .fetch_one(&mut **tx)
         .await?;
     let new_number = new_book.number.to_string();
-    let new_number_sort = f64::from(new_book.number);
+    let new_number_sort = new_book.number as f32;
     let numbering_changed = (!number_locked && old_number != new_number)
-        || (!number_sort_locked && (old_number_sort - new_number_sort).abs() > f64::EPSILON);
+        || (!number_sort_locked && (old_number_sort - new_number_sort).abs() > f32::EPSILON);
     sqlx::query("DELETE FROM BOOK_METADATA WHERE BOOK_ID = ?")
         .bind(&new_book.id)
         .execute(&mut **tx)

@@ -138,7 +138,7 @@ pub struct SyncBookProjection {
     /// Display number within the series.
     pub number: String,
     /// Numeric number used by Kobo.
-    pub number_sort: f64,
+    pub number_sort: f32,
     /// Optional normalized ISBN.
     pub isbn: Option<String>,
     /// Summary; an empty summary is normalized by the transport layer.

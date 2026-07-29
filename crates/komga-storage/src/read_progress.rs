@@ -42,7 +42,7 @@ impl Storage {
 
     /// Computes one user's progress summary across all books in a series.
     pub async fn find_series_read_progress(&self, series_id: &str, user_id: &str) -> Result<SeriesReadProgressDto> {
-        let books = sqlx::query_as::<_, (f64, Option<bool>)>(
+        let books = sqlx::query_as::<_, (f32, Option<bool>)>(
             r#"SELECT bm.NUMBER_SORT, rp.COMPLETED
                  FROM BOOK b
                  JOIN BOOK_METADATA bm ON bm.BOOK_ID = b.ID
@@ -63,7 +63,7 @@ impl Storage {
         &self,
         series_id: &str,
         user_id: &str,
-        through_number_sort: Option<f64>,
+        through_number_sort: Option<f32>,
         read_date: NaiveDateTime,
     ) -> Result<Vec<String>> {
         let mut tx = self.pool.begin().await?;

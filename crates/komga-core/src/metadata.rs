@@ -137,7 +137,7 @@ pub struct BookMetadata {
     /// Whether display number is locked.
     pub number_lock: bool,
     /// Numeric ordering value.
-    pub number_sort: f64,
+    pub number_sort: f32,
     /// Whether numeric ordering is locked.
     pub number_sort_lock: bool,
     /// Optional publication date.
@@ -593,7 +593,7 @@ pub struct BookMetadataPatch {
     /// New display-number lock state.
     pub number_lock: Option<bool>,
     /// New numeric sort value.
-    pub number_sort: Option<f64>,
+    pub number_sort: Option<f32>,
     /// New numeric-sort lock state.
     pub number_sort_lock: Option<bool>,
     /// Publication-date update.
@@ -887,7 +887,7 @@ mod tests {
             .naive_utc()
     }
 
-    fn book(number: &str, number_sort: f64, summary: &str) -> BookMetadata {
+    fn book(number: &str, number_sort: f32, summary: &str) -> BookMetadata {
         BookMetadata {
             book_id: number.into(),
             title: format!("Book {number}"),

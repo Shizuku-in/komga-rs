@@ -98,7 +98,7 @@ struct BookQueryRow {
     metadata_summary_lock: bool,
     metadata_number: String,
     metadata_number_lock: bool,
-    metadata_number_sort: f64,
+    metadata_number_sort: f32,
     metadata_number_sort_lock: bool,
     metadata_release_date: Option<String>,
     metadata_release_date_lock: bool,
@@ -1040,7 +1040,7 @@ fn push_poster(query: &mut QueryBuilder<'static, Sqlite>, operator: &EqualityOpe
     query.push(")");
 }
 
-fn push_numeric(query: &mut QueryBuilder<'static, Sqlite>, column: &str, operator: &NumericOperator<f64>) {
+fn push_numeric(query: &mut QueryBuilder<'static, Sqlite>, column: &str, operator: &NumericOperator<f32>) {
     let (comparison, value) = match operator {
         NumericOperator::Is { value } => (" = ", value),
         NumericOperator::IsNot { value } => (" <> ", value),

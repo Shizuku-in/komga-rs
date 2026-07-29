@@ -260,8 +260,7 @@ pub(crate) async fn reorder_series(
         let number_lock = row.get::<bool, _>("NUMBER_LOCK");
         let number_sort_lock = row.get::<bool, _>("NUMBER_SORT_LOCK");
         let number_changed = !number_lock && row.get::<String, _>("NUMBER") != number.to_string();
-        let sort_changed =
-            !number_sort_lock && (row.get::<f64, _>("NUMBER_SORT") - f64::from(number)).abs() > f64::EPSILON;
+        let sort_changed = !number_sort_lock && (row.get::<f32, _>("NUMBER_SORT") - number as f32).abs() > f32::EPSILON;
         if !number_lock || !number_sort_lock {
             sqlx::query(
                 r#"UPDATE BOOK_METADATA SET
@@ -270,7 +269,7 @@ pub(crate) async fn reorder_series(
                    LAST_MODIFIED_DATE=CURRENT_TIMESTAMP WHERE BOOK_ID=?"#,
             )
             .bind(number.to_string())
-            .bind(f64::from(number))
+            .bind(number as f32)
             .bind(&book_id)
             .execute(&mut **tx)
             .await?;

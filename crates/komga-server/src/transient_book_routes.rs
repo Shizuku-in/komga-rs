@@ -62,7 +62,7 @@ impl TransientBookCache {
 struct TransientBook {
     book: Book,
     media: Media,
-    number: Option<f64>,
+    number: Option<f32>,
     series_id: Option<String>,
 }
 
@@ -85,7 +85,7 @@ pub(crate) struct TransientBookDto {
     pages: Vec<PageDto>,
     files: Vec<String>,
     comment: String,
-    number: Option<f64>,
+    number: Option<f32>,
     series_id: Option<String>,
 }
 
@@ -285,7 +285,7 @@ fn ensure_source_file(book: &Book) -> Result<(), ApiError> {
 
 #[derive(Default)]
 struct CandidateMetadata {
-    number: Option<f64>,
+    number: Option<f32>,
     series_names: Vec<String>,
 }
 

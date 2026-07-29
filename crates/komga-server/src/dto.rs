@@ -334,7 +334,7 @@ pub(crate) struct BookMetadataUpdateDto {
     summary_lock: Patch<bool>,
     number: Patch<String>,
     number_lock: Patch<bool>,
-    number_sort: Patch<f64>,
+    number_sort: Patch<f32>,
     number_sort_lock: Patch<bool>,
     release_date: Patch<NaiveDate>,
     release_date_lock: Patch<bool>,

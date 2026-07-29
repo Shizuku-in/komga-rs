@@ -20,7 +20,7 @@ struct BookMetadataRow {
     summary_lock: bool,
     number: String,
     number_lock: bool,
-    number_sort: f64,
+    number_sort: f32,
     number_sort_lock: bool,
     release_date: Option<NaiveDate>,
     release_date_lock: bool,
