@@ -216,7 +216,7 @@ async fn transient_cbz_analysis_extracts_metadata_matches_series_and_serves_page
 }
 
 #[tokio::test]
-async fn transient_pdf_epub_and_mobi_analysis_support_preview_and_embedded_metadata() {
+async fn transient_pdf_epub_mobi_and_azw_analysis_support_preview_and_metadata() {
     let storage = Storage::connect_memory().await.unwrap();
     let temporary = tempfile::tempdir().unwrap();
     let library_root = temporary.path().join("library");
@@ -243,6 +243,16 @@ async fn transient_pdf_epub_and_mobi_analysis_support_preview_and_embedded_metad
         ),
     )
     .unwrap();
+    fs::write(
+        import_root.join("Kindle.AzW"),
+        minimal_mobi(b"<html><body>AZW import</body></html>", false),
+    )
+    .unwrap();
+    fs::write(
+        import_root.join("Modern.aZw3"),
+        minimal_mobi(b"<html><body>AZW3 import</body></html>", false),
+    )
+    .unwrap();
     let app = app_with_storage(storage).await;
     assert_eq!(claim(&app).await.status(), StatusCode::OK);
     let admin = basic("admin@example.org", "password");
@@ -263,15 +273,6 @@ async fn transient_pdf_epub_and_mobi_analysis_support_preview_and_embedded_metad
         .unwrap()["id"]
         .as_str()
         .unwrap();
-    let mobi_id = scanned
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|book| book["name"] == "Mobile")
-        .unwrap()["id"]
-        .as_str()
-        .unwrap();
-
     let pdf = analyze_transient(&app, &admin, pdf_id).await;
     assert_eq!(pdf["status"], "READY");
     assert_eq!(pdf["mediaType"], "application/pdf");
@@ -292,17 +293,31 @@ async fn transient_pdf_epub_and_mobi_analysis_support_preview_and_embedded_metad
     assert_eq!(page.headers()[header::CONTENT_TYPE], "image/png");
     assert_eq!(body_bytes(page).await, PNG_1X1);
 
-    let mobi = analyze_transient(&app, &admin, mobi_id).await;
-    assert_eq!(mobi["status"], "READY");
-    assert_eq!(mobi["mediaType"], komga_core::MOBI_MEDIA_TYPE);
-    assert_eq!(mobi["pages"], serde_json::json!([]));
-    assert!(
-        mobi["files"]
+    for (name, expected_media_type) in [
+        ("Mobile", komga_core::MOBI_MEDIA_TYPE),
+        ("Kindle", komga_core::AZW_MEDIA_TYPE),
+        ("Modern", komga_core::AZW3_MEDIA_TYPE),
+    ] {
+        let id = scanned
             .as_array()
             .unwrap()
             .iter()
-            .any(|file| file.as_str().is_some_and(|file| file.ends_with("content.html")))
-    );
+            .find(|book| book["name"] == name)
+            .unwrap()["id"]
+            .as_str()
+            .unwrap();
+        let publication = analyze_transient(&app, &admin, id).await;
+        assert_eq!(publication["status"], "READY");
+        assert_eq!(publication["mediaType"], expected_media_type);
+        assert_eq!(publication["pages"], serde_json::json!([]));
+        assert!(
+            publication["files"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|file| file.as_str().is_some_and(|file| file.ends_with("content.html")))
+        );
+    }
 }
 
 async fn scan_books(app: &axum::Router, admin: &str, path: &std::path::Path) -> serde_json::Value {

@@ -2270,6 +2270,75 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn azw_support_migration_only_marks_unsupported_azw_outdated() {
+        let storage = Storage::connect_memory().await.unwrap();
+        let temporary = tempfile::tempdir().unwrap();
+        let book = scanned_book(&storage, temporary.path()).await;
+        let migration = include_str!("../migrations/0018_azw_support.sql");
+
+        for media_type in ["application/vnd.amazon.ebook", "application/vnd.amazon.mobi8-ebook"] {
+            sqlx::query("UPDATE MEDIA SET STATUS = 'UNSUPPORTED', MEDIA_TYPE = ? WHERE BOOK_ID = ?")
+                .bind(media_type)
+                .bind(&book.id)
+                .execute(&storage.pool)
+                .await
+                .unwrap();
+            sqlx::query(migration).execute(&storage.pool).await.unwrap();
+            let status = sqlx::query_scalar::<_, String>("SELECT STATUS FROM MEDIA WHERE BOOK_ID = ?")
+                .bind(&book.id)
+                .fetch_one(&storage.pool)
+                .await
+                .unwrap();
+            assert_eq!(status, "OUTDATED", "{media_type}");
+        }
+
+        sqlx::query("UPDATE BOOK SET URL = 'file:///library/Legacy.AZW' WHERE ID = ?")
+            .bind(&book.id)
+            .execute(&storage.pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "UPDATE MEDIA SET STATUS = 'UNSUPPORTED', MEDIA_TYPE = 'application/octet-stream' WHERE BOOK_ID = ?",
+        )
+        .bind(&book.id)
+        .execute(&storage.pool)
+        .await
+        .unwrap();
+        sqlx::query(migration).execute(&storage.pool).await.unwrap();
+        let status = sqlx::query_scalar::<_, String>("SELECT STATUS FROM MEDIA WHERE BOOK_ID = ?")
+            .bind(&book.id)
+            .fetch_one(&storage.pool)
+            .await
+            .unwrap();
+        assert_eq!(status, "OUTDATED");
+
+        for (status, media_type) in [
+            ("READY", "application/vnd.amazon.ebook"),
+            ("UNSUPPORTED", "application/epub+zip"),
+        ] {
+            sqlx::query("UPDATE BOOK SET URL = 'file:///library/Volume.cbz' WHERE ID = ?")
+                .bind(&book.id)
+                .execute(&storage.pool)
+                .await
+                .unwrap();
+            sqlx::query("UPDATE MEDIA SET STATUS = ?, MEDIA_TYPE = ? WHERE BOOK_ID = ?")
+                .bind(status)
+                .bind(media_type)
+                .bind(&book.id)
+                .execute(&storage.pool)
+                .await
+                .unwrap();
+            sqlx::query(migration).execute(&storage.pool).await.unwrap();
+            let actual = sqlx::query_scalar::<_, String>("SELECT STATUS FROM MEDIA WHERE BOOK_ID = ?")
+                .bind(&book.id)
+                .fetch_one(&storage.pool)
+                .await
+                .unwrap();
+            assert_eq!(actual, status, "{media_type}");
+        }
+    }
+
+    #[tokio::test]
     async fn uploaded_book_and_series_thumbnails_enforce_selection_and_ownership() {
         let storage = Storage::connect_memory().await.unwrap();
         let temporary = tempfile::tempdir().unwrap();

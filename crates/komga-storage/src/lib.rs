@@ -614,10 +614,10 @@ mod tests {
     use super::*;
     use chrono::Local;
     use komga_core::{
-        ALL_ROLES, AgeRestriction, AllowExclude, BookCondition, BookPage, BookSearch, CollectionCreation,
-        ContentRestrictions, Dimension, EqualityOperator, Library, MOBI_MEDIA_TYPE, Media, MediaFile, MediaProfile,
-        MediaStatus, PageRequest, ReadListCreation, ReadProgress, ReadStatus, ScanInterval, ScanResult, SeriesSearch,
-        SortDirection, SortOrder, ThumbnailBook, ThumbnailSeries, new_id, scan_library_files,
+        ALL_ROLES, AZW_MEDIA_TYPE, AZW3_MEDIA_TYPE, AgeRestriction, AllowExclude, BookCondition, BookPage, BookSearch,
+        CollectionCreation, ContentRestrictions, Dimension, EqualityOperator, Library, MOBI_MEDIA_TYPE, Media,
+        MediaFile, MediaProfile, MediaStatus, PageRequest, ReadListCreation, ReadProgress, ReadStatus, ScanInterval,
+        ScanResult, SeriesSearch, SortDirection, SortOrder, ThumbnailBook, ThumbnailSeries, new_id, scan_library_files,
     };
     use url::Url;
 
@@ -3007,29 +3007,43 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn epub_profile_search_includes_mobi_media() {
+    async fn epub_profile_search_includes_mobi_and_azw_media() {
         let storage = Storage::connect_memory().await.unwrap();
         let temporary = tempfile::tempdir().unwrap();
         let root = temporary.path().join("library");
         fs::create_dir_all(root.join("Series")).unwrap();
         fs::write(root.join("Series/Book.MOBI"), b"mobi").unwrap();
+        fs::write(root.join("Series/Legacy.AZW"), b"azw").unwrap();
+        fs::write(root.join("Series/Modern.AZW3"), b"azw3").unwrap();
         let library = Library::new("Library".into(), Url::from_directory_path(&root).unwrap());
         storage.create_library(&library).await.unwrap();
         storage
             .apply_library_scan(&library.id, &scan_library_files(&library, || false).unwrap(), false)
             .await
             .unwrap();
-        let book = storage
-            .list_active_books_by_library_id(&library.id)
-            .await
-            .unwrap()
-            .remove(0);
-        sqlx::query("UPDATE MEDIA SET STATUS='READY', MEDIA_TYPE=? WHERE BOOK_ID=?")
-            .bind(MOBI_MEDIA_TYPE)
-            .bind(&book.id)
-            .execute(storage.pool())
-            .await
-            .unwrap();
+        for book in storage.list_active_books_by_library_id(&library.id).await.unwrap() {
+            let media_type = match book
+                .url
+                .to_file_path()
+                .unwrap()
+                .extension()
+                .unwrap()
+                .to_string_lossy()
+                .to_ascii_lowercase()
+                .as_str()
+            {
+                "mobi" => MOBI_MEDIA_TYPE,
+                "azw" => AZW_MEDIA_TYPE,
+                "azw3" => AZW3_MEDIA_TYPE,
+                extension => panic!("unexpected extension: {extension}"),
+            };
+            sqlx::query("UPDATE MEDIA SET STATUS='READY', MEDIA_TYPE=? WHERE BOOK_ID=?")
+                .bind(media_type)
+                .bind(&book.id)
+                .execute(storage.pool())
+                .await
+                .unwrap();
+        }
         let search = BookSearch {
             condition: Some(BookCondition::MediaProfile {
                 operator: EqualityOperator::Is {
@@ -3047,9 +3061,16 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(result.total_elements, 1);
-        assert_eq!(result.content[0].media.media_type, MOBI_MEDIA_TYPE);
-        assert_eq!(result.content[0].media.media_profile, "EPUB");
+        assert_eq!(result.total_elements, 3);
+        assert!(result.content.iter().all(|book| book.media.media_profile == "EPUB"));
+        assert_eq!(
+            result
+                .content
+                .iter()
+                .map(|book| book.media.media_type.as_str())
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([MOBI_MEDIA_TYPE, AZW_MEDIA_TYPE, AZW3_MEDIA_TYPE])
+        );
     }
 
     #[tokio::test]

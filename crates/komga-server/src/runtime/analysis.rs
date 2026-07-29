@@ -34,23 +34,28 @@ pub(super) async fn process_analyze_book_task(state: &AppState, task: &TaskRecor
         || library.import_epub_book
         || library.import_epub_series
         || library.import_barcode_isbn;
-    let mut media = if is_mobi_book(&book) {
+    let mut media = if let Some(source) = mobipocket_source(&book) {
+        let source_media_type = source.media_type();
         match state.mobi.get_or_convert(&book, &state.shutdown).await {
             Ok(converted) => {
                 let cancellation = state.shutdown.clone();
                 let converted_path = converted.path.clone();
                 let book_id = book.id.clone();
                 match tokio::task::spawn_blocking(move || {
-                    analyze_materialized_mobi(&converted_path, &book_id, library.analyze_dimensions, || {
-                        cancellation.is_cancelled()
-                    })
+                    analyze_materialized_mobipocket(
+                        &converted_path,
+                        &book_id,
+                        source,
+                        library.analyze_dimensions,
+                        || cancellation.is_cancelled(),
+                    )
                 })
                 .await
                 {
                     Ok(Ok(media)) => media,
                     Ok(Err(MediaAnalysisError::Cancelled)) => return TaskOutcome::Cancelled,
                     Err(error) => {
-                        tracing::error!(%error, book_id = %book.id, "MOBI analyzer panicked");
+                        tracing::error!(%error, book_id = %book.id, "MOBI/AZW analyzer panicked");
                         return TaskOutcome::Retry;
                     }
                 }
@@ -59,15 +64,15 @@ pub(super) async fn process_analyze_book_task(state: &AppState, task: &TaskRecor
             Err(crate::mobi::MaterializationError::Drm) => Media::result(
                 &book.id,
                 MediaStatus::Unsupported,
-                Some(MOBI_MEDIA_TYPE.to_owned()),
+                Some(source_media_type.to_owned()),
                 Some("ERR_1040"),
             ),
             Err(error) => {
-                tracing::warn!(%error, book_id = %book.id, "could not materialize MOBI for analysis");
+                tracing::warn!(%error, book_id = %book.id, "could not materialize MOBI/AZW for analysis");
                 Media::result(
                     &book.id,
                     MediaStatus::Error,
-                    Some(MOBI_MEDIA_TYPE.to_owned()),
+                    Some(source_media_type.to_owned()),
                     Some("ERR_1041"),
                 )
             }
@@ -169,10 +174,6 @@ fn needs_converted_kobo_spans(media: &komga_core::Media) -> bool {
         )
 }
 
-fn is_mobi_book(book: &komga_core::Book) -> bool {
-    book.url.to_file_path().ok().is_some_and(|path| {
-        path.extension()
-            .and_then(|extension| extension.to_str())
-            .is_some_and(|extension| extension.eq_ignore_ascii_case("mobi"))
-    })
+fn mobipocket_source(book: &komga_core::Book) -> Option<MobipocketSource> {
+    MobipocketSource::from_path(&book.url.to_file_path().ok()?)
 }

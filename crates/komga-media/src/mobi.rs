@@ -1,4 +1,4 @@
-//! Bounded MOBI-to-EPUB conversion used by analysis and resource delivery.
+//! Bounded MOBI/AZW-to-EPUB conversion used by analysis and resource delivery.
 
 use std::{
     cell::Cell,
@@ -14,6 +14,7 @@ use boko::{
     export::{EpubExporter, Exporter},
 };
 use encoding_rs::WINDOWS_1252;
+use komga_core::{AZW_MEDIA_TYPE, AZW3_MEDIA_TYPE, MOBI_MEDIA_TYPE};
 use regex::{Captures, Regex};
 use thiserror::Error;
 use zip::{CompressionMethod, ZipArchive, ZipWriter, write::SimpleFileOptions};
@@ -22,6 +23,38 @@ const MAX_ENTRIES: usize = 65_535;
 const MAX_MARKUP_SIZE: usize = 16 * 1024 * 1024;
 const MAX_TEXT_SIZE: usize = 256 * 1024 * 1024;
 const MAX_UNCOMPRESSED_SIZE: u64 = 4 * 1024 * 1024 * 1024;
+
+/// Supported filename-level Mobipocket/Kindle source formats.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MobipocketSource {
+    /// A `.mobi` source.
+    Mobi,
+    /// A legacy Kindle `.azw` source.
+    Azw,
+    /// A Kindle Format 8 `.azw3` source.
+    Azw3,
+}
+
+impl MobipocketSource {
+    /// Classifies a supported source extension case-insensitively.
+    pub fn from_path(path: &Path) -> Option<Self> {
+        match path.extension()?.to_str()?.to_ascii_lowercase().as_str() {
+            "mobi" => Some(Self::Mobi),
+            "azw" => Some(Self::Azw),
+            "azw3" => Some(Self::Azw3),
+            _ => None,
+        }
+    }
+
+    /// Returns the media type persisted and exposed for the original source.
+    pub const fn media_type(self) -> &'static str {
+        match self {
+            Self::Mobi => MOBI_MEDIA_TYPE,
+            Self::Azw => AZW_MEDIA_TYPE,
+            Self::Azw3 => AZW3_MEDIA_TYPE,
+        }
+    }
+}
 
 /// MOBI section selected for a successful conversion.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -32,27 +65,27 @@ pub enum MobiVariant {
     Legacy,
 }
 
-/// Errors produced while materializing a MOBI publication as EPUB.
+/// Errors produced while materializing a MOBI/AZW publication as EPUB.
 #[derive(Debug, Error)]
 pub enum MobiConversionError {
     /// Conversion was stopped between bounded processing stages.
-    #[error("MOBI conversion cancelled")]
+    #[error("MOBI/AZW conversion cancelled")]
     Cancelled,
     /// The publication is encrypted with Kindle DRM.
-    #[error("DRM-protected MOBI files are not supported")]
+    #[error("DRM-protected MOBI/AZW files are not supported")]
     Drm,
     /// Input structure or generated EPUB structure is invalid.
-    #[error("invalid MOBI publication: {0}")]
+    #[error("invalid MOBI/AZW publication: {0}")]
     Invalid(String),
     /// A configured record, markup, text, or output-size limit was exceeded.
-    #[error("MOBI conversion limit exceeded: {0}")]
+    #[error("MOBI/AZW conversion limit exceeded: {0}")]
     Limit(&'static str),
     /// Source or destination I/O failed.
-    #[error("MOBI conversion I/O failed: {0}")]
+    #[error("MOBI/AZW conversion I/O failed: {0}")]
     Io(#[from] io::Error),
 }
 
-/// Checks the Palm database type/creator signature used by MOBI files.
+/// Checks the Palm database type/creator signature used by MOBI and AZW files.
 pub fn is_mobi(path: &Path) -> bool {
     let mut signature = [0_u8; 8];
     File::open(path)
@@ -638,6 +671,23 @@ mod tests {
     }
 
     #[test]
+    fn source_extensions_map_to_distinct_media_types() {
+        assert_eq!(
+            MobipocketSource::from_path(Path::new("book.MOBI")).map(MobipocketSource::media_type),
+            Some(MOBI_MEDIA_TYPE)
+        );
+        assert_eq!(
+            MobipocketSource::from_path(Path::new("book.AzW")).map(MobipocketSource::media_type),
+            Some(AZW_MEDIA_TYPE)
+        );
+        assert_eq!(
+            MobipocketSource::from_path(Path::new("book.aZw3")).map(MobipocketSource::media_type),
+            Some(AZW3_MEDIA_TYPE)
+        );
+        assert_eq!(MobipocketSource::from_path(Path::new("book.prc")), None);
+    }
+
+    #[test]
     fn filepos_links_receive_stable_anchors_and_invalid_offsets_fall_back() {
         let mut entries = vec![
             GeneratedEntry {
@@ -710,7 +760,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let legacy = directory.path().join("legacy.mobi");
         let intermediate = directory.path().join("intermediate.epub");
-        let kf8 = directory.path().join("kf8.mobi");
+        let kf8 = directory.path().join("kf8.azw3");
         let converted = directory.path().join("converted.epub");
         fs::write(
             &legacy,
@@ -739,28 +789,58 @@ mod tests {
             MobiVariant::Kf8
         );
         validate_generated_epub(&converted).unwrap();
+
+        let source_book = komga_core::scan_book_file(&kf8, "library", false).unwrap();
+        let media = crate::analyze_book(&source_book, true, || false).unwrap();
+        assert_eq!(media.status, komga_core::MediaStatus::Ready);
+        assert_eq!(media.media_type.as_deref(), Some(AZW3_MEDIA_TYPE));
+        assert_eq!(media.profile(), Some(komga_core::MediaProfile::Epub));
     }
 
     #[test]
-    fn encrypted_mobi_is_reported_as_drm() {
+    fn legacy_azw_preserves_amazon_media_type() {
         let directory = tempfile::tempdir().unwrap();
-        let source = directory.path().join("encrypted.mobi");
-        let destination = directory.path().join("encrypted.epub");
+        let source = directory.path().join("legacy.azw");
         fs::write(
             &source,
-            minimal_mobi(b"<html><body>DRM</body></html>", false, true, None),
+            minimal_mobi(b"<html><body>AZW</body></html>", true, false, None),
         )
         .unwrap();
 
-        assert!(matches!(
-            convert_mobi_to_epub(&source, &destination, || false),
-            Err(MobiConversionError::Drm)
-        ));
         let book = komga_core::scan_book_file(&source, "library", false).unwrap();
         let media = crate::analyze_book(&book, true, || false).unwrap();
-        assert_eq!(media.status, komga_core::MediaStatus::Unsupported);
-        assert_eq!(media.comment.as_deref(), Some("ERR_1040"));
-        assert_eq!(media.media_type.as_deref(), Some(komga_core::MOBI_MEDIA_TYPE));
+
+        assert_eq!(media.status, komga_core::MediaStatus::Ready);
+        assert_eq!(media.media_type.as_deref(), Some(AZW_MEDIA_TYPE));
+        assert_eq!(media.profile(), Some(komga_core::MediaProfile::Epub));
+    }
+
+    #[test]
+    fn encrypted_mobi_and_azw_are_reported_as_drm() {
+        let directory = tempfile::tempdir().unwrap();
+        for (file_name, media_type) in [
+            ("encrypted.mobi", MOBI_MEDIA_TYPE),
+            ("encrypted.azw", AZW_MEDIA_TYPE),
+            ("encrypted.azw3", AZW3_MEDIA_TYPE),
+        ] {
+            let source = directory.path().join(file_name);
+            let destination = directory.path().join(format!("{file_name}.epub"));
+            fs::write(
+                &source,
+                minimal_mobi(b"<html><body>DRM</body></html>", false, true, None),
+            )
+            .unwrap();
+
+            assert!(matches!(
+                convert_mobi_to_epub(&source, &destination, || false),
+                Err(MobiConversionError::Drm)
+            ));
+            let book = komga_core::scan_book_file(&source, "library", false).unwrap();
+            let media = crate::analyze_book(&book, true, || false).unwrap();
+            assert_eq!(media.status, komga_core::MediaStatus::Unsupported);
+            assert_eq!(media.comment.as_deref(), Some("ERR_1040"));
+            assert_eq!(media.media_type.as_deref(), Some(media_type));
+        }
     }
 
     #[test]

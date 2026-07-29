@@ -1,9 +1,9 @@
-//! Shared temporary EPUB materialization for MOBI-backed server operations.
+//! Shared temporary EPUB materialization for MOBI/AZW-backed server operations.
 
 use std::{fmt, hash::Hash, path::PathBuf, sync::Arc, time::Duration};
 
 use chrono::NaiveDateTime;
-use komga_core::{Book, MOBI_MEDIA_TYPE, Media};
+use komga_core::{AZW_MEDIA_TYPE, AZW3_MEDIA_TYPE, Book, MOBI_MEDIA_TYPE, Media};
 use komga_media::{MobiConversionError, MobiVariant, convert_mobi_to_epub};
 use moka::future::Cache;
 use tempfile::TempDir;
@@ -32,7 +32,7 @@ pub(crate) struct CachedMobi {
     pub(crate) variant: MobiVariant,
 }
 
-/// A source-book view that keeps any cached MOBI conversion alive while used.
+/// A source-book view that keeps any cached MOBI/AZW conversion alive while used.
 pub(crate) struct MaterializedBook {
     pub(crate) book: Book,
     _converted: Option<Arc<CachedMobi>>,
@@ -53,13 +53,13 @@ impl fmt::Debug for CachedMobi {
 pub(crate) enum MaterializationError {
     #[error("book URL is not a local file")]
     InvalidSource,
-    #[error("MOBI materialization was cancelled")]
+    #[error("MOBI/AZW materialization was cancelled")]
     Cancelled,
-    #[error("MOBI is protected with DRM")]
+    #[error("MOBI/AZW is protected with DRM")]
     Drm,
-    #[error("MOBI conversion failed: {0}")]
+    #[error("MOBI/AZW conversion failed: {0}")]
     Conversion(String),
-    #[error("MOBI conversion worker failed: {0}")]
+    #[error("MOBI/AZW conversion worker failed: {0}")]
     Worker(String),
 }
 
@@ -106,7 +106,10 @@ impl MobiService {
         media: &Media,
         shutdown: &CancellationToken,
     ) -> Result<MaterializedBook, MaterializationError> {
-        if media.media_type.as_deref() != Some(MOBI_MEDIA_TYPE) {
+        if !matches!(
+            media.media_type.as_deref(),
+            Some(MOBI_MEDIA_TYPE | AZW_MEDIA_TYPE | AZW3_MEDIA_TYPE)
+        ) {
             return Ok(MaterializedBook {
                 book: book.clone(),
                 _converted: None,

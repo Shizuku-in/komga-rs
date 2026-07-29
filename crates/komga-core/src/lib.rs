@@ -50,11 +50,11 @@ pub use events::{
 };
 pub use history::HistoricalEvent;
 pub use media::{
-    BookPage, Dimension, EPUB_ASSET_SUBTYPE, EPUB_EXTENSION_CLASS, EPUB_MEDIA_TYPE, EPUB_PAGE_SUBTYPE, EpubTocEntry,
-    JPEG_MEDIA_TYPE, MOBI_MEDIA_TYPE, Media, MediaExtension, MediaExtensionEpub, MediaFile, MediaProfile, MediaStatus,
-    PDF_MEDIA_TYPE, R2Location, R2Locator, R2Text, RAR_MEDIA_TYPE, RAR4_MEDIA_TYPE, RAR5_MEDIA_TYPE, ThumbnailBook,
-    ThumbnailBookDto, ThumbnailCollectionDto, ThumbnailReadListDto, ThumbnailSeries, ThumbnailSeriesDto,
-    ZIP_MEDIA_TYPE,
+    AZW_MEDIA_TYPE, AZW3_MEDIA_TYPE, BookPage, Dimension, EPUB_ASSET_SUBTYPE, EPUB_EXTENSION_CLASS, EPUB_MEDIA_TYPE,
+    EPUB_PAGE_SUBTYPE, EpubTocEntry, JPEG_MEDIA_TYPE, MOBI_MEDIA_TYPE, Media, MediaExtension, MediaExtensionEpub,
+    MediaFile, MediaProfile, MediaStatus, PDF_MEDIA_TYPE, R2Location, R2Locator, R2Text, RAR_MEDIA_TYPE,
+    RAR4_MEDIA_TYPE, RAR5_MEDIA_TYPE, ThumbnailBook, ThumbnailBookDto, ThumbnailCollectionDto, ThumbnailReadListDto,
+    ThumbnailSeries, ThumbnailSeriesDto, ZIP_MEDIA_TYPE,
 };
 pub use metadata::{
     AlternateTitle, Author, BookMetadata, BookMetadataAggregation, BookMetadataPatch, MetadataError, MetadataUpdate,
@@ -501,7 +501,7 @@ pub struct Library {
     pub scan_pdf: bool,
     /// Include EPUB files while scanning.
     pub scan_epub: bool,
-    /// Include MOBI files while scanning.
+    /// Include MOBI and Kindle AZW/AZW3 files while scanning.
     pub scan_mobi: bool,
     /// Directory names excluded from scans.
     pub scan_directory_exclusions: BTreeSet<String>,

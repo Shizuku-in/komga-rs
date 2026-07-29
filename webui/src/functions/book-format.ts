@@ -14,6 +14,10 @@ export function getBookFormatFromMedia(media: MediaDto): BookFormat {
       return media.epubIsKepub ? {type: 'KEPUB', color: '#ff5ab1'} : {type: 'EPUB', color: '#ff5ab1'}
     case 'application/x-mobipocket-ebook':
       return {type: 'MOBI', color: '#795548'}
+    case 'application/vnd.amazon.ebook':
+      return {type: 'AZW', color: '#FF9900'}
+    case 'application/vnd.amazon.mobi8-ebook':
+      return {type: 'AZW3', color: '#FF9900'}
     case 'application/x-rar-compressed; version=5':
       return {type: 'RAR5', color: '#000000'}
     default:
@@ -34,6 +38,10 @@ export function getBookFormatFromMediaType(mediaType: string): BookFormat {
       return {type: 'EPUB', color: '#ff5ab1'}
     case 'application/x-mobipocket-ebook':
       return {type: 'MOBI', color: '#795548'}
+    case 'application/vnd.amazon.ebook':
+      return {type: 'AZW', color: '#FF9900'}
+    case 'application/vnd.amazon.mobi8-ebook':
+      return {type: 'AZW3', color: '#FF9900'}
     case 'application/x-rar-compressed; version=5':
       return {type: 'RAR5', color: '#000000'}
     default:

@@ -15,10 +15,10 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use chrono::{DateTime, Local, NaiveDateTime};
-use komga_core::{Book, MOBI_MEDIA_TYPE, Media, MediaStatus, new_id};
+use komga_core::{Book, Media, MediaStatus, new_id};
 use komga_media::{
-    MediaAnalysisError, MediaOperationError, analyze_book, analyze_materialized_mobi, extract_comic_info_metadata,
-    extract_epub_metadata, extract_page, page_output_dimension, page_output_media_type,
+    MediaAnalysisError, MediaOperationError, MobipocketSource, analyze_book, analyze_materialized_mobipocket,
+    extract_comic_info_metadata, extract_epub_metadata, extract_page, page_output_dimension, page_output_media_type,
 };
 use moka::future::Cache;
 use serde::{Deserialize, Serialize};
@@ -129,7 +129,8 @@ pub(crate) async fn analyze(
         .ok_or_else(|| ApiError::not_found("Transient book not found"))?;
     let book = transient.book.clone();
     ensure_source_file(&book)?;
-    let (media, metadata) = if has_mobi_extension(&book) {
+    let (media, metadata) = if let Some(source) = mobipocket_source(&book) {
+        let source_media_type = source.media_type();
         match state.mobi.get_or_convert(&book, &state.shutdown).await {
             Ok(converted) => {
                 let converted_path = converted.path.clone();
@@ -138,13 +139,13 @@ pub(crate) async fn analyze(
                     .map_err(|()| ApiError::internal("Could not analyze transient book"))?;
                 let book_id = book.id.clone();
                 tokio::task::spawn_blocking(move || {
-                    let media = analyze_materialized_mobi(&converted_path, &book_id, true, || false)?;
+                    let media = analyze_materialized_mobipocket(&converted_path, &book_id, source, true, || false)?;
                     let metadata = embedded_metadata(&materialized_book, &media);
                     Ok::<_, MediaAnalysisError>((media, metadata))
                 })
                 .await
                 .map_err(|error| {
-                    tracing::error!(%error, %id, "transient MOBI analyzer panicked");
+                    tracing::error!(%error, %id, "transient MOBI/AZW analyzer panicked");
                     ApiError::internal("Could not analyze transient book")
                 })?
                 .map_err(|MediaAnalysisError::Cancelled| ApiError::internal("Could not analyze transient book"))?
@@ -153,7 +154,7 @@ pub(crate) async fn analyze(
                 Media::result(
                     &book.id,
                     MediaStatus::Unsupported,
-                    Some(MOBI_MEDIA_TYPE.to_owned()),
+                    Some(source_media_type.to_owned()),
                     Some("ERR_1040"),
                 ),
                 CandidateMetadata::default(),
@@ -162,12 +163,12 @@ pub(crate) async fn analyze(
                 return Err(ApiError::internal("Could not analyze transient book"));
             }
             Err(error) => {
-                tracing::warn!(%error, %id, "could not materialize transient MOBI");
+                tracing::warn!(%error, %id, "could not materialize transient MOBI/AZW");
                 (
                     Media::result(
                         &book.id,
                         MediaStatus::Error,
-                        Some(MOBI_MEDIA_TYPE.to_owned()),
+                        Some(source_media_type.to_owned()),
                         Some("ERR_1041"),
                     ),
                     CandidateMetadata::default(),
@@ -314,16 +315,12 @@ fn is_supported(path: &FilePath) -> bool {
             .unwrap_or_default()
             .to_ascii_lowercase()
             .as_str(),
-        "cbz" | "zip" | "cbr" | "rar" | "pdf" | "epub" | "mobi"
+        "cbz" | "zip" | "cbr" | "rar" | "pdf" | "epub" | "mobi" | "azw" | "azw3"
     )
 }
 
-fn has_mobi_extension(book: &Book) -> bool {
-    book.url.to_file_path().ok().is_some_and(|path| {
-        path.extension()
-            .and_then(|extension| extension.to_str())
-            .is_some_and(|extension| extension.eq_ignore_ascii_case("mobi"))
-    })
+fn mobipocket_source(book: &Book) -> Option<MobipocketSource> {
+    MobipocketSource::from_path(&book.url.to_file_path().ok()?)
 }
 
 fn ensure_source_file(book: &Book) -> Result<(), ApiError> {

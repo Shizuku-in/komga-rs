@@ -1,15 +1,25 @@
 use super::*;
 
 #[tokio::test]
-async fn mobi_uses_epub_webpub_resources_and_preserves_original_download() {
+async fn mobi_and_azw_use_epub_webpub_resources_and_preserve_original_downloads() {
+    for (file_name, media_type) in [
+        ("Volume.MoBi", komga_core::MOBI_MEDIA_TYPE),
+        ("Volume.AzW", komga_core::AZW_MEDIA_TYPE),
+        ("Volume.aZw3", komga_core::AZW3_MEDIA_TYPE),
+    ] {
+        assert_mobipocket_webpub(file_name, media_type).await;
+    }
+}
+
+async fn assert_mobipocket_webpub(file_name: &str, expected_media_type: &str) {
     let source = minimal_mobi(
         r##"<html><head><title>MOBI</title></head><body><p id="start">浏览器阅读</p><a filepos=0000010>Jump</a></body></html>"##
             .as_bytes(),
         false,
     );
-    let (_temporary, storage, tasks, book, media) = analyzed_media_bytes_fixture(&source, "Volume.MoBi").await;
+    let (_temporary, storage, tasks, book, media) = analyzed_media_bytes_fixture(&source, file_name).await;
     assert_eq!(media.status, komga_core::MediaStatus::Ready);
-    assert_eq!(media.media_type.as_deref(), Some(komga_core::MOBI_MEDIA_TYPE));
+    assert_eq!(media.media_type.as_deref(), Some(expected_media_type));
     assert_eq!(media.profile(), Some(komga_core::MediaProfile::Epub));
     assert!(!media.epub_divina_compatible);
     assert!(!media.epub_is_kepub);
@@ -46,7 +56,7 @@ async fn mobi_uses_epub_webpub_resources_and_preserves_original_download() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|link| link["type"] == komga_core::MOBI_MEDIA_TYPE)
+            .any(|link| link["type"] == expected_media_type)
     );
 
     let resource = app
@@ -78,7 +88,7 @@ async fn mobi_uses_epub_webpub_resources_and_preserves_original_download() {
         .await
         .unwrap();
     assert_eq!(download.status(), StatusCode::OK);
-    assert_eq!(download.headers()[header::CONTENT_TYPE], komga_core::MOBI_MEDIA_TYPE);
+    assert_eq!(download.headers()[header::CONTENT_TYPE], expected_media_type);
     assert_eq!(body_bytes(download).await, source);
 }
 

@@ -485,7 +485,7 @@ fn is_supported(path: &Path, library: &Library) -> bool {
     (library.scan_cbx && matches!(extension.as_str(), "cbz" | "zip" | "cbr" | "rar"))
         || (library.scan_pdf && extension == "pdf")
         || (library.scan_epub && extension == "epub")
-        || (library.scan_mobi && extension == "mobi")
+        || (library.scan_mobi && matches!(extension.as_str(), "mobi" | "azw" | "azw3"))
 }
 
 fn updated_time(metadata: &fs::Metadata) -> NaiveDateTime {
@@ -566,16 +566,26 @@ mod tests {
     }
 
     #[test]
-    fn mobi_scanning_is_case_insensitive_and_independently_configurable() {
+    fn mobi_and_azw_scanning_is_case_insensitive_and_independently_configurable() {
         let temporary = tempfile::tempdir().unwrap();
         let root = temporary.path().join("library");
         let series = root.join("Series");
         fs::create_dir_all(&series).unwrap();
         fs::write(series.join("Book.mObI"), []).unwrap();
+        fs::write(series.join("Legacy.AzW"), []).unwrap();
+        fs::write(series.join("Modern.aZw3"), []).unwrap();
+        fs::write(series.join("Ignored.prc"), []).unwrap();
         let mut config = library(&root);
 
         let enabled = scan_library_files(&config, || false).unwrap();
-        assert_eq!(enabled.series[0].books[0].name, "Book");
+        assert_eq!(
+            enabled.series[0]
+                .books
+                .iter()
+                .map(|book| book.name.as_str())
+                .collect::<Vec<_>>(),
+            ["Book", "Legacy", "Modern"]
+        );
 
         config.scan_mobi = false;
         let disabled = scan_library_files(&config, || false).unwrap();

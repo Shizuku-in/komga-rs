@@ -1,12 +1,12 @@
 use std::collections::BTreeSet;
 
 use komga_core::{
-    AlternateTitleDto, AuthorDto, AuthorMatch, BookCondition, BookDto, BookMetadataAggregationDto, BookMetadataDto,
-    BookSearch, BooleanOperator, ContentPage, DateOperator, EPUB_MEDIA_TYPE, EqualityOperator, GroupCountDto,
-    MOBI_MEDIA_TYPE, MediaDto, MediaProfile, MediaStatus, NullableEqualityOperator, NullableNumericOperator,
-    NumericOperator, PDF_MEDIA_TYPE, PageRequest, PosterMatch, RAR_MEDIA_TYPE, RAR4_MEDIA_TYPE, RAR5_MEDIA_TYPE,
-    ReadProgressDto, ReadStatus, SeriesCondition, SeriesDto, SeriesMetadataDto, SeriesSearch, SeriesStatus,
-    SortDirection, StringOperator, User, WebLinkDto, ZIP_MEDIA_TYPE,
+    AZW_MEDIA_TYPE, AZW3_MEDIA_TYPE, AlternateTitleDto, AuthorDto, AuthorMatch, BookCondition, BookDto,
+    BookMetadataAggregationDto, BookMetadataDto, BookSearch, BooleanOperator, ContentPage, DateOperator,
+    EPUB_MEDIA_TYPE, EqualityOperator, GroupCountDto, MOBI_MEDIA_TYPE, MediaDto, MediaProfile, MediaStatus,
+    NullableEqualityOperator, NullableNumericOperator, NumericOperator, PDF_MEDIA_TYPE, PageRequest, PosterMatch,
+    RAR_MEDIA_TYPE, RAR4_MEDIA_TYPE, RAR5_MEDIA_TYPE, ReadProgressDto, ReadStatus, SeriesCondition, SeriesDto,
+    SeriesMetadataDto, SeriesSearch, SeriesStatus, SortDirection, StringOperator, User, WebLinkDto, ZIP_MEDIA_TYPE,
 };
 use serde::Deserialize;
 use sqlx::{FromRow, QueryBuilder, Sqlite};
@@ -1147,7 +1147,7 @@ fn push_media_profile(query: &mut QueryBuilder<'static, Sqlite>, operator: &Equa
     let media_types: &[&str] = match profile {
         MediaProfile::Divina => &[ZIP_MEDIA_TYPE, RAR_MEDIA_TYPE, RAR4_MEDIA_TYPE, RAR5_MEDIA_TYPE],
         MediaProfile::Pdf => &[PDF_MEDIA_TYPE],
-        MediaProfile::Epub => &[EPUB_MEDIA_TYPE, MOBI_MEDIA_TYPE],
+        MediaProfile::Epub => &[EPUB_MEDIA_TYPE, MOBI_MEDIA_TYPE, AZW_MEDIA_TYPE, AZW3_MEDIA_TYPE],
     };
     query.push("m.MEDIA_TYPE").push(negation).push(" IN (");
     for (index, media_type) in media_types.iter().enumerate() {

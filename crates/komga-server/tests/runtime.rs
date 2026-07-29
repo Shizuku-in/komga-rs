@@ -22,21 +22,21 @@ use zip::{ZipArchive, ZipWriter, write::SimpleFileOptions};
 mod support;
 
 #[tokio::test]
-async fn runtime_scans_and_materializes_mobi_to_ready_epub_profile() {
+async fn runtime_scans_and_materializes_azw3_to_ready_epub_profile() {
     let storage = Storage::connect_memory().await.unwrap();
     let tasks = TaskStorage::connect_memory().await.unwrap();
     let temporary = tempfile::tempdir().unwrap();
     let root = temporary.path().join("library");
     fs::create_dir_all(root.join("Series")).unwrap();
     fs::write(
-        root.join("Series/Volume.MOBI"),
+        root.join("Series/Volume.AZW3"),
         support::minimal_mobi(
             "<html><head><title>运行时</title></head><body><p>内容</p></body></html>".as_bytes(),
             false,
         ),
     )
     .unwrap();
-    let mut library = Library::new("MOBI".into(), Url::from_directory_path(&root).unwrap());
+    let mut library = Library::new("AZW".into(), Url::from_directory_path(&root).unwrap());
     library.import_comic_info_book = false;
     library.import_comic_info_series = false;
     library.import_comic_info_collection = false;
@@ -77,11 +77,11 @@ async fn runtime_scans_and_materializes_mobi_to_ready_epub_profile() {
         }
     })
     .await
-    .expect("MOBI analysis did not complete");
+    .expect("AZW3 analysis did not complete");
     runtime.shutdown().await;
 
     let media = storage.find_media_by_book_id(&book.id).await.unwrap().unwrap();
-    assert_eq!(media.media_type.as_deref(), Some(komga_core::MOBI_MEDIA_TYPE));
+    assert_eq!(media.media_type.as_deref(), Some(komga_core::AZW3_MEDIA_TYPE));
     assert_eq!(media.profile(), Some(komga_core::MediaProfile::Epub));
     assert!(!media.files.is_empty());
     assert!(matches!(media.extension, Some(MediaExtension::Epub(_))));

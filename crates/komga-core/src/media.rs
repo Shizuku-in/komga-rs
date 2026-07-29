@@ -11,6 +11,10 @@ pub const PDF_MEDIA_TYPE: &str = "application/pdf";
 pub const EPUB_MEDIA_TYPE: &str = "application/epub+zip";
 /// Canonical MOBI media type stored by Komga.
 pub const MOBI_MEDIA_TYPE: &str = "application/x-mobipocket-ebook";
+/// Canonical Kindle AZW media type stored by Komga.
+pub const AZW_MEDIA_TYPE: &str = "application/vnd.amazon.ebook";
+/// Canonical Kindle AZW3/KF8 media type stored by Komga.
+pub const AZW3_MEDIA_TYPE: &str = "application/vnd.amazon.mobi8-ebook";
 /// Generic RAR media type used by older detectors.
 pub const RAR_MEDIA_TYPE: &str = "application/x-rar-compressed";
 /// RAR 1.5 through 4.x media type stored by the Rust analyzer.
@@ -46,7 +50,7 @@ impl MediaProfile {
                 Some(Self::Divina)
             }
             PDF_MEDIA_TYPE => Some(Self::Pdf),
-            EPUB_MEDIA_TYPE | MOBI_MEDIA_TYPE => Some(Self::Epub),
+            EPUB_MEDIA_TYPE | MOBI_MEDIA_TYPE | AZW_MEDIA_TYPE | AZW3_MEDIA_TYPE => Some(Self::Epub),
             _ => None,
         }
     }
@@ -487,6 +491,8 @@ mod tests {
             (PDF_MEDIA_TYPE, MediaProfile::Pdf),
             (EPUB_MEDIA_TYPE, MediaProfile::Epub),
             (MOBI_MEDIA_TYPE, MediaProfile::Epub),
+            (AZW_MEDIA_TYPE, MediaProfile::Epub),
+            (AZW3_MEDIA_TYPE, MediaProfile::Epub),
         ] {
             assert_eq!(MediaProfile::from_media_type(media_type), Some(expected));
         }
