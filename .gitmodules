@@ -1,3 +1,7 @@
 [submodule "komga"]
 	path = komga
 	url = https://github.com/gotson/komga
+[submodule "upstream/komga-next-ui"]
+	path = upstream/komga-next-ui
+	url = https://github.com/gotson/komga.git
+	branch = next-ui
