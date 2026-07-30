@@ -19,6 +19,15 @@ The server includes the Komga Web UI and targets the behavior and SQLite schema 
 - Kobo and KOReader synchronization
 - Persistent background tasks, search, metrics, and event streaming
 
+## Unique Features
+
+Compared with the pinned Kotlin baseline:
+
+- Built-in KEPUB conversion without Calibre or `kepubify`
+- DRM-free MOBI, AZW, and AZW3 support
+- Chinese pinyin and Japanese romaji title sorting
+- Extended duplicate-page handling for CBR, PDF, and fixed-layout EPUB
+
 ## Installation
 
 ### Docker Compose
