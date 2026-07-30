@@ -2873,7 +2873,7 @@ dependencies = [
 
 [[package]]
 name = "komga-core"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "chrono",
  "iso8601-duration",
@@ -2891,7 +2891,7 @@ dependencies = [
 
 [[package]]
 name = "komga-media"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "boko",
  "chrono",
@@ -2936,7 +2936,7 @@ dependencies = [
 
 [[package]]
 name = "komga-search"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "komga-core",
  "tantivy",
@@ -2949,7 +2949,7 @@ dependencies = [
 
 [[package]]
 name = "komga-server"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -3004,7 +3004,7 @@ dependencies = [
 
 [[package]]
 name = "komga-storage"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "chrono",
  "flate2",
