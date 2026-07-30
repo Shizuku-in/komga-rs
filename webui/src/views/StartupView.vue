@@ -10,6 +10,20 @@
 
 <script lang="ts">
 import Vue from 'vue'
+import {isNavigationFailure} from 'vue-router'
+
+function getRedirectTarget(redirect: unknown): string {
+  if (typeof redirect !== 'string' || !redirect.startsWith('/') || redirect.startsWith('//')) {
+    return '/dashboard'
+  }
+
+  const path = redirect.split(/[?#]/, 1)[0]
+  if (path === '/startup' || path === '/login') {
+    return '/dashboard'
+  }
+
+  return redirect
+}
 
 export default Vue.extend({
   name: 'StartupView',
@@ -31,6 +45,8 @@ export default Vue.extend({
     },
   },
   async mounted() {
+    const redirect = this.$route.query.redirect
+
     try {
       if (this.$route.query.xAuthToken) {
         try {
@@ -44,9 +60,15 @@ export default Vue.extend({
       await this.$store.dispatch('getLibraries')
       await this.$store.dispatch('getClientSettingsGlobal')
       await this.$store.dispatch('getClientSettingsUser')
-      this.$router.back()
     } catch (e) {
-      this.$router.push({name: 'login', query: {redirect: this.$route.query.redirect}})
+      await this.$router.replace({name: 'login', query: {redirect}})
+      return
+    }
+
+    try {
+      await this.$router.replace(getRedirectTarget(redirect))
+    } catch (e) {
+      if (!isNavigationFailure(e)) throw e
     }
   },
 })

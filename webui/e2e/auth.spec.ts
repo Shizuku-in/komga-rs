@@ -1,4 +1,4 @@
-import {claimThroughUi, signIn, signInWithOAuth} from './helpers'
+import {claimThroughUi, signIn, signInAt, signInWithOAuth} from './helpers'
 import {expect, test} from './test'
 
 test.use({claimServer: false})
@@ -29,4 +29,21 @@ test('OAuth login is recorded in authentication activity', async ({page, server}
 
   await page.goto(`${server.url}/account/authentication-activity`)
   await expect(page.getByText('OAuth2:E2E OAuth', {exact: true})).toBeVisible()
+})
+
+test.describe('existing browser session', () => {
+  test.use({claimServer: true, seedLibrary: true})
+
+  test('reopens the dashboard after the application page is closed', async ({page, server}) => {
+    await signInAt(page, server.url)
+    await expect(page).toHaveURL(`${server.url}/dashboard`)
+
+    const browserContext = page.context()
+    const reopenedPage = await browserContext.newPage()
+    await page.close()
+
+    await reopenedPage.goto(server.url)
+    await expect(reopenedPage).toHaveURL(`${server.url}/dashboard`)
+    await expect(reopenedPage.getByPlaceholder('Search')).toBeVisible()
+  })
 })
