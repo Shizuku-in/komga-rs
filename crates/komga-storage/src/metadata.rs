@@ -5,8 +5,9 @@ use std::collections::{BTreeSet, HashMap};
 use chrono::{NaiveDate, NaiveDateTime};
 use komga_core::{
     AlternateTitle, Author, BookMetadata, BookMetadataAggregation, ReadingDirection, SeriesMetadata, SeriesStatus,
-    WebLink, aggregate_book_metadata,
+    TitleSortSource, WebLink, aggregate_book_metadata,
 };
+use komga_media::generate_title_sort;
 use sqlx::{FromRow, SqliteConnection};
 
 use crate::{Result, Storage, StorageError};
@@ -42,6 +43,7 @@ struct SeriesMetadataRow {
     title_lock: bool,
     title_sort: String,
     title_sort_lock: bool,
+    title_sort_source: String,
     summary: String,
     summary_lock: bool,
     reading_direction: Option<String>,
@@ -108,6 +110,7 @@ const SERIES_METADATA_SELECT: &str = r#"
     SELECT SERIES_ID AS series_id, STATUS AS status, STATUS_LOCK AS status_lock,
            TITLE AS title, TITLE_LOCK AS title_lock,
            TITLE_SORT AS title_sort, TITLE_SORT_LOCK AS title_sort_lock,
+           TITLE_SORT_SOURCE AS title_sort_source,
            SUMMARY AS summary, SUMMARY_LOCK AS summary_lock,
            READING_DIRECTION AS reading_direction,
            READING_DIRECTION_LOCK AS reading_direction_lock,
@@ -144,15 +147,30 @@ impl Storage {
     /// Returns a database error when the transaction cannot be completed.
     pub async fn save_book_metadata(&self, metadata: &BookMetadata) -> Result<bool> {
         let mut tx = self.pool.begin().await?;
+        let language = sqlx::query_scalar::<_, String>(
+            r#"SELECT sm.LANGUAGE
+                 FROM BOOK b
+                 JOIN SERIES_METADATA sm ON sm.SERIES_ID = b.SERIES_ID
+                WHERE b.ID = ?"#,
+        )
+        .bind(&metadata.book_id)
+        .fetch_optional(&mut *tx)
+        .await?;
+        let Some(language) = language else {
+            tx.rollback().await?;
+            return Ok(false);
+        };
+        let title_sort = generate_title_sort(&metadata.title, &language);
         let updated = sqlx::query(
             r#"UPDATE BOOK_METADATA SET
-                   TITLE = ?, TITLE_LOCK = ?, SUMMARY = ?, SUMMARY_LOCK = ?,
+                   TITLE = ?, TITLE_SORT = ?, TITLE_LOCK = ?, SUMMARY = ?, SUMMARY_LOCK = ?,
                    NUMBER = ?, NUMBER_LOCK = ?, NUMBER_SORT = ?, NUMBER_SORT_LOCK = ?,
                    RELEASE_DATE = ?, RELEASE_DATE_LOCK = ?, AUTHORS_LOCK = ?, TAGS_LOCK = ?,
                    ISBN = ?, ISBN_LOCK = ?, LINKS_LOCK = ?, LAST_MODIFIED_DATE = CURRENT_TIMESTAMP
                  WHERE BOOK_ID = ?"#,
         )
         .bind(&metadata.title)
+        .bind(title_sort)
         .bind(metadata.title_lock)
         .bind(&metadata.summary)
         .bind(metadata.summary_lock)
@@ -204,7 +222,8 @@ impl Storage {
         let updated = sqlx::query(
             r#"UPDATE SERIES_METADATA SET
                    STATUS = ?, STATUS_LOCK = ?, TITLE = ?, TITLE_LOCK = ?,
-                   TITLE_SORT = ?, TITLE_SORT_LOCK = ?, SUMMARY = ?, SUMMARY_LOCK = ?,
+                   TITLE_SORT = ?, TITLE_SORT_LOCK = ?, TITLE_SORT_SOURCE = ?,
+                   SUMMARY = ?, SUMMARY_LOCK = ?,
                    READING_DIRECTION = ?, READING_DIRECTION_LOCK = ?,
                    PUBLISHER = ?, PUBLISHER_LOCK = ?, AGE_RATING = ?, AGE_RATING_LOCK = ?,
                    LANGUAGE = ?, LANGUAGE_LOCK = ?, GENRES_LOCK = ?, TAGS_LOCK = ?,
@@ -219,6 +238,7 @@ impl Storage {
         .bind(metadata.title_lock)
         .bind(&metadata.title_sort)
         .bind(metadata.title_sort_lock)
+        .bind(metadata.title_sort_source.as_str())
         .bind(&metadata.summary)
         .bind(metadata.summary_lock)
         .bind(metadata.reading_direction.map(ReadingDirection::as_str))
@@ -245,6 +265,7 @@ impl Storage {
             return Ok(false);
         }
         replace_series_relations(&mut tx, metadata).await?;
+        refresh_book_title_sorts(&mut tx, &metadata.series_id, &metadata.language).await?;
         tx.commit().await?;
         Ok(true)
     }
@@ -435,6 +456,26 @@ async fn load_series_metadata(connection: &mut SqliteConnection, series_id: &str
         links,
         alternate_titles,
     )?))
+}
+
+async fn refresh_book_title_sorts(connection: &mut SqliteConnection, series_id: &str, language: &str) -> Result<()> {
+    let books = sqlx::query_as::<_, (String, String)>(
+        r#"SELECT bm.BOOK_ID, bm.TITLE
+             FROM BOOK_METADATA bm
+             JOIN BOOK b ON b.ID = bm.BOOK_ID
+            WHERE b.SERIES_ID = ?"#,
+    )
+    .bind(series_id)
+    .fetch_all(&mut *connection)
+    .await?;
+    for (book_id, title) in books {
+        sqlx::query("UPDATE BOOK_METADATA SET TITLE_SORT = ? WHERE BOOK_ID = ?")
+            .bind(generate_title_sort(&title, language))
+            .bind(book_id)
+            .execute(&mut *connection)
+            .await?;
+    }
+    Ok(())
 }
 
 async fn string_set(
@@ -641,6 +682,7 @@ impl SeriesMetadataRow {
             title_lock: self.title_lock,
             title_sort: self.title_sort,
             title_sort_lock: self.title_sort_lock,
+            title_sort_source: TitleSortSource::try_from(self.title_sort_source.as_str()).map_err(invalid_metadata)?,
             summary: self.summary,
             summary_lock: self.summary_lock,
             reading_direction: self
@@ -776,6 +818,70 @@ mod tests {
         assert_eq!(loaded.sharing_labels, ["teen".into()].into());
         assert_eq!(loaded.links, updated.links);
         assert_eq!(loaded.alternate_titles, updated.alternate_titles);
+    }
+
+    #[tokio::test]
+    async fn title_sort_keys_follow_book_titles_and_series_language() {
+        let storage = Storage::connect_memory().await.unwrap();
+        let temporary = tempfile::tempdir().unwrap();
+        let (series_id, books) = fixture(&storage, temporary.path()).await;
+
+        for (book, title) in books.iter().zip(["重庆森林", "北京故事"]) {
+            let metadata = storage
+                .find_book_metadata(&book.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .apply_patch(BookMetadataPatch {
+                    title: Some(title.into()),
+                    ..Default::default()
+                })
+                .unwrap();
+            storage.save_book_metadata(&metadata).await.unwrap();
+        }
+        let initial =
+            sqlx::query_as::<_, (String, String)>("SELECT BOOK_ID, TITLE_SORT FROM BOOK_METADATA ORDER BY BOOK_ID")
+                .fetch_all(&storage.pool)
+                .await
+                .unwrap();
+        assert!(initial.iter().any(|(_, title)| title == "重庆森林"));
+
+        let mut series = storage.find_series_metadata(&series_id).await.unwrap().unwrap();
+        series.language = "zh".into();
+        storage.save_series_metadata(&series).await.unwrap();
+        let generated = sqlx::query_as::<_, (String, String)>(
+            "SELECT TITLE, TITLE_SORT FROM BOOK_METADATA ORDER BY TITLE_SORT COLLATE NOCASE",
+        )
+        .fetch_all(&storage.pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            generated,
+            [
+                ("北京故事".into(), "beijing gushi".into()),
+                ("重庆森林".into(), "chongqing senlin".into())
+            ]
+        );
+
+        let metadata = storage
+            .find_book_metadata(&books[0].id)
+            .await
+            .unwrap()
+            .unwrap()
+            .apply_patch(BookMetadataPatch {
+                title: Some("上海故事".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        storage.save_book_metadata(&metadata).await.unwrap();
+        assert_eq!(
+            sqlx::query_scalar::<_, String>("SELECT TITLE_SORT FROM BOOK_METADATA WHERE BOOK_ID = ?")
+                .bind(&books[0].id)
+                .fetch_one(&storage.pool)
+                .await
+                .unwrap(),
+            "shanghai gushi"
+        );
     }
 
     #[tokio::test]

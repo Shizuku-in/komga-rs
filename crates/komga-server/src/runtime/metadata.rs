@@ -228,6 +228,8 @@ pub(super) async fn process_refresh_series_metadata_task(state: &AppState, task:
             return TaskOutcome::Retry;
         }
     };
+    let previous_target = target.clone();
+    let mut explicit_title_sort = false;
     let books = match state.storage.list_books_by_series_id(&series.id).await {
         Ok(v) => v
             .into_iter()
@@ -299,24 +301,35 @@ pub(super) async fn process_refresh_series_metadata_task(state: &AppState, task:
             }
         }
     }
-    if let Some(patch) = aggregate_series_provider_patches(&comic_patches)
-        && let Ok(updated) = target.apply_provider_patch(patch)
-    {
-        target = updated;
+    if let Some(patch) = aggregate_series_provider_patches(&comic_patches) {
+        let patch_has_title_sort = patch.title_sort.is_some() && !target.title_sort_lock;
+        if let Ok(updated) = target.apply_provider_patch(patch) {
+            target = updated;
+            explicit_title_sort |= patch_has_title_sort;
+        }
     }
-    if let Some(patch) = aggregate_series_provider_patches(&epub_patches)
-        && let Ok(updated) = target.apply_provider_patch(patch)
-    {
-        target = updated;
+    if let Some(patch) = aggregate_series_provider_patches(&epub_patches) {
+        let patch_has_title_sort = patch.title_sort.is_some() && !target.title_sort_lock;
+        if let Ok(updated) = target.apply_provider_patch(patch) {
+            target = updated;
+            explicit_title_sort |= patch_has_title_sort;
+        }
     }
     if series.oneshot
         && let Some(book) = books.first()
     {
         match state.storage.find_book_metadata(&book.id).await {
-            Ok(Some(metadata)) => match target.apply_provider_patch(oneshot_series_metadata_patch(&metadata)) {
-                Ok(value) => target = value,
-                Err(error) => tracing::warn!(%error, series_id=%series.id, "invalid one-shot series metadata"),
-            },
+            Ok(Some(metadata)) => {
+                let patch = oneshot_series_metadata_patch(&metadata);
+                let patch_has_title_sort = patch.title_sort.is_some() && !target.title_sort_lock;
+                match target.apply_provider_patch(patch) {
+                    Ok(value) => {
+                        target = value;
+                        explicit_title_sort |= patch_has_title_sort;
+                    }
+                    Err(error) => tracing::warn!(%error, series_id=%series.id, "invalid one-shot series metadata"),
+                }
+            }
             Ok(None) => {}
             Err(error) => {
                 tracing::error!(%error, book_id=%book.id, "could not load one-shot book metadata");
@@ -338,14 +351,21 @@ pub(super) async fn process_refresh_series_metadata_task(state: &AppState, task:
         )
     {
         match extract_mylar_metadata(&series) {
-            Ok(Some(patch)) => match target.apply_provider_patch(patch) {
-                Ok(v) => target = v,
-                Err(error) => tracing::warn!(%error, "invalid Mylar metadata"),
-            },
+            Ok(Some(patch)) => {
+                let patch_has_title_sort = patch.title_sort.is_some() && !target.title_sort_lock;
+                match target.apply_provider_patch(patch) {
+                    Ok(v) => {
+                        target = v;
+                        explicit_title_sort |= patch_has_title_sort;
+                    }
+                    Err(error) => tracing::warn!(%error, "invalid Mylar metadata"),
+                }
+            }
             Err(error) => tracing::warn!(%error, series_id=%series.id, "could not import Mylar metadata"),
             _ => {}
         }
     }
+    apply_series_title_sort(&previous_target, &mut target, explicit_title_sort);
     if let Err(error) = state.storage.save_series_metadata(&target).await {
         tracing::error!(%error, "could not persist series metadata");
         return TaskOutcome::Retry;
@@ -389,6 +409,7 @@ fn aggregate_series_provider_patches(patches: &[SeriesMetadataPatch]) -> Option<
     Some(SeriesMetadataPatch {
         status: mode(patches.iter().filter_map(|p| p.status)),
         title: mode(patches.iter().filter_map(|p| p.title.clone())),
+        title_sort: mode(patches.iter().filter_map(|p| p.title_sort.clone())),
         summary: mode(patches.iter().filter_map(|p| p.summary.clone())),
         reading_direction: mode(patches.iter().filter_map(|p| match p.reading_direction {
             MetadataUpdate::Set(v) => Some(v),

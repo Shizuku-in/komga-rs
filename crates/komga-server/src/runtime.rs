@@ -9,9 +9,9 @@ use komga_core::{
 };
 use komga_media::{
     FileHashError, KepubSpanError, MediaAnalysisError, MediaOperationError, MobipocketSource, analyze_book,
-    analyze_materialized_mobipocket, enrich_kobo_spans, extract_comic_info_metadata, extract_epub_metadata,
-    extract_isbn_barcode, extract_mylar_metadata, generate_thumbnail, hash_file, image_dimension,
-    reconcile_scan_hashes,
+    analyze_materialized_mobipocket, apply_series_title_sort, enrich_kobo_spans, extract_comic_info_metadata,
+    extract_epub_metadata, extract_isbn_barcode, extract_mylar_metadata, generate_thumbnail, hash_file,
+    image_dimension, reconcile_scan_hashes,
 };
 use komga_search::EntityKind;
 use komga_storage::{RebuildIndexEntity, StorageError, TaskRecord};

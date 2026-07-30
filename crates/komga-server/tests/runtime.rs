@@ -7,7 +7,8 @@ use axum::{
 use base64::{Engine, engine::general_purpose::STANDARD};
 use http_body_util::BodyExt;
 use komga_core::{
-    BookMetadataPatch, Library, MediaExtension, MetadataUpdate, PageRequest, ScanInterval, User, scan_library_files,
+    BookMetadataPatch, Library, MediaExtension, MetadataUpdate, PageRequest, ScanInterval, TitleSortSource, User,
+    scan_library_files,
 };
 use komga_media::analyze_book;
 use komga_search::{EntityKind, IndexState, SearchIndex};
@@ -1199,6 +1200,74 @@ async fn oneshot_series_metadata_uses_the_book_title_summary_and_ended_status() 
     assert_eq!(series_metadata.summary, "Standalone summary");
     assert_eq!(series_metadata.status, komga_core::SeriesStatus::Ended);
     assert_eq!(series_metadata.total_book_count, Some(1));
+    runtime.shutdown().await;
+}
+
+#[tokio::test]
+async fn series_provider_refresh_generates_language_aware_title_sort() {
+    let storage = Storage::connect_memory().await.unwrap();
+    let tasks = TaskStorage::connect_memory().await.unwrap();
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path().join("library");
+    fs::create_dir_all(root.join("Series")).unwrap();
+    let image =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../komga/komga/src/test/resources/barcode/komga.png");
+    let file = File::create(root.join("Series/Volume 1.cbz")).unwrap();
+    let mut archive = ZipWriter::new(file);
+    archive
+        .start_file("ComicInfo.xml", SimpleFileOptions::default())
+        .unwrap();
+    archive
+        .write_all(
+            "<ComicInfo><Series>重庆森林</Series><Title>第一卷</Title><LanguageISO>zh-Hant</LanguageISO></ComicInfo>"
+                .as_bytes(),
+        )
+        .unwrap();
+    archive.start_file("page.png", SimpleFileOptions::default()).unwrap();
+    archive.write_all(&fs::read(image).unwrap()).unwrap();
+    archive.finish().unwrap();
+
+    let mut library = Library::new("Provider".into(), Url::from_directory_path(&root).unwrap());
+    library.import_epub_series = false;
+    library.import_mylar_series = false;
+    library.scan_interval = ScanInterval::Disabled;
+    storage.create_library(&library).await.unwrap();
+    storage
+        .apply_library_scan(&library.id, &scan_library_files(&library, || false).unwrap(), false)
+        .await
+        .unwrap();
+    let series = storage.list_series_by_library_id(&library.id).await.unwrap().remove(0);
+    let book = storage.list_books_by_series_id(&series.id).await.unwrap().remove(0);
+    storage
+        .replace_media_analysis(&analyze_book(&book, false, || false).unwrap())
+        .await
+        .unwrap();
+    tasks
+        .save(&TaskRecord::refresh_series_metadata(&series.id, 5))
+        .await
+        .unwrap();
+
+    let runtime = AppState::new(storage.clone(), tasks.clone())
+        .await
+        .unwrap()
+        .start_runtime()
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let metadata = storage.find_series_metadata(&series.id).await.unwrap().unwrap();
+            if metadata.title_sort == "chongqing senlin" && tasks.list().await.unwrap().is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("provider metadata did not generate a pinyin title sort");
+    let metadata = storage.find_series_metadata(&series.id).await.unwrap().unwrap();
+    assert_eq!(metadata.title, "重庆森林");
+    assert_eq!(metadata.language, "zh-Hant");
+    assert_eq!(metadata.title_sort_source, TitleSortSource::Generated);
     runtime.shutdown().await;
 }
 

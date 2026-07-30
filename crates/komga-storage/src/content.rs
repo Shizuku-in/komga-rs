@@ -753,12 +753,13 @@ async fn restore_series(
     stats: &mut ScanApplyStats,
     aggregation_series_ids: &mut BTreeSet<String>,
 ) -> Result<()> {
-    let (new_created_date, new_title, new_title_sort) = sqlx::query_as::<_, (NaiveDateTime, String, String)>(
-        "SELECT CREATED_DATE, TITLE, TITLE_SORT FROM SERIES_METADATA WHERE SERIES_ID = ?",
-    )
-    .bind(&new_series.id)
-    .fetch_one(&mut **tx)
-    .await?;
+    let (new_created_date, new_title, new_title_sort, new_title_sort_source) =
+        sqlx::query_as::<_, (NaiveDateTime, String, String, String)>(
+            "SELECT CREATED_DATE, TITLE, TITLE_SORT, TITLE_SORT_SOURCE FROM SERIES_METADATA WHERE SERIES_ID = ?",
+        )
+        .bind(&new_series.id)
+        .fetch_one(&mut **tx)
+        .await?;
     sqlx::query("DELETE FROM SERIES_METADATA WHERE SERIES_ID = ?")
         .bind(&new_series.id)
         .execute(&mut **tx)
@@ -767,6 +768,7 @@ async fn restore_series(
         r#"INSERT INTO SERIES_METADATA
              (CREATED_DATE, LAST_MODIFIED_DATE, STATUS, STATUS_LOCK, TITLE, TITLE_LOCK,
               TITLE_SORT, TITLE_SORT_LOCK, SERIES_ID, PUBLISHER, PUBLISHER_LOCK,
+              TITLE_SORT_SOURCE,
               READING_DIRECTION, READING_DIRECTION_LOCK, AGE_RATING, AGE_RATING_LOCK,
               SUMMARY, SUMMARY_LOCK, LANGUAGE, LANGUAGE_LOCK, GENRES_LOCK, TAGS_LOCK,
               TOTAL_BOOK_COUNT, TOTAL_BOOK_COUNT_LOCK, SHARING_LABELS_LOCK, LINKS_LOCK,
@@ -774,7 +776,9 @@ async fn restore_series(
            SELECT ?, CURRENT_TIMESTAMP, STATUS, STATUS_LOCK,
                   CASE WHEN TITLE_LOCK = 1 THEN TITLE ELSE ? END, TITLE_LOCK,
                   CASE WHEN TITLE_SORT_LOCK = 1 THEN TITLE_SORT ELSE ? END, TITLE_SORT_LOCK,
-                  ?, PUBLISHER, PUBLISHER_LOCK, READING_DIRECTION, READING_DIRECTION_LOCK,
+                  ?, PUBLISHER, PUBLISHER_LOCK,
+                  CASE WHEN TITLE_SORT_LOCK = 1 THEN TITLE_SORT_SOURCE ELSE ? END,
+                  READING_DIRECTION, READING_DIRECTION_LOCK,
                   AGE_RATING, AGE_RATING_LOCK, SUMMARY, SUMMARY_LOCK, LANGUAGE, LANGUAGE_LOCK,
                   GENRES_LOCK, TAGS_LOCK, TOTAL_BOOK_COUNT, TOTAL_BOOK_COUNT_LOCK,
                   SHARING_LABELS_LOCK, LINKS_LOCK, ALTERNATE_TITLES_LOCK
@@ -784,6 +788,7 @@ async fn restore_series(
     .bind(new_title)
     .bind(new_title_sort)
     .bind(&new_series.id)
+    .bind(new_title_sort_source)
     .bind(&previous.id)
     .execute(&mut **tx)
     .await?;
@@ -980,11 +985,12 @@ async fn restore_book(
     .execute(&mut **tx)
     .await?;
 
-    let (new_metadata_created, new_title) =
-        sqlx::query_as::<_, (NaiveDateTime, String)>("SELECT CREATED_DATE, TITLE FROM BOOK_METADATA WHERE BOOK_ID = ?")
-            .bind(&new_book.id)
-            .fetch_one(&mut **tx)
-            .await?;
+    let (new_metadata_created, new_title, new_title_sort) = sqlx::query_as::<_, (NaiveDateTime, String, String)>(
+        "SELECT CREATED_DATE, TITLE, TITLE_SORT FROM BOOK_METADATA WHERE BOOK_ID = ?",
+    )
+    .bind(&new_book.id)
+    .fetch_one(&mut **tx)
+    .await?;
     let (old_number, number_locked, old_number_sort, number_sort_locked, title_locked) =
         sqlx::query_as::<_, (String, bool, f32, bool, bool)>(
             "SELECT NUMBER, NUMBER_LOCK, NUMBER_SORT, NUMBER_SORT_LOCK, TITLE_LOCK \
@@ -1005,12 +1011,13 @@ async fn restore_book(
         r#"INSERT INTO BOOK_METADATA
              (CREATED_DATE, LAST_MODIFIED_DATE, NUMBER, NUMBER_LOCK, NUMBER_SORT,
               NUMBER_SORT_LOCK, RELEASE_DATE, RELEASE_DATE_LOCK, SUMMARY, SUMMARY_LOCK,
-              TITLE, TITLE_LOCK, AUTHORS_LOCK, TAGS_LOCK, BOOK_ID, ISBN, ISBN_LOCK, LINKS_LOCK)
+              TITLE, TITLE_SORT, TITLE_LOCK, AUTHORS_LOCK, TAGS_LOCK, BOOK_ID, ISBN, ISBN_LOCK, LINKS_LOCK)
            SELECT ?, CURRENT_TIMESTAMP,
                   CASE WHEN NUMBER_LOCK = 1 THEN NUMBER ELSE ? END, NUMBER_LOCK,
                   CASE WHEN NUMBER_SORT_LOCK = 1 THEN NUMBER_SORT ELSE ? END, NUMBER_SORT_LOCK,
                   RELEASE_DATE, RELEASE_DATE_LOCK, SUMMARY, SUMMARY_LOCK,
-                  CASE WHEN TITLE_LOCK = 1 THEN TITLE ELSE ? END, TITLE_LOCK,
+                  CASE WHEN TITLE_LOCK = 1 THEN TITLE ELSE ? END,
+                  CASE WHEN TITLE_LOCK = 1 THEN TITLE_SORT ELSE ? END, TITLE_LOCK,
                   AUTHORS_LOCK, TAGS_LOCK, ?, ISBN, ISBN_LOCK, LINKS_LOCK
              FROM BOOK_METADATA WHERE BOOK_ID = ?"#,
     )
@@ -1018,6 +1025,7 @@ async fn restore_book(
     .bind(new_number)
     .bind(new_number_sort)
     .bind(new_title)
+    .bind(new_title_sort)
     .bind(&new_book.id)
     .bind(&previous.id)
     .execute(&mut **tx)
@@ -1158,9 +1166,10 @@ pub(crate) async fn insert_book(
         .bind(&book.id)
         .execute(&mut **tx)
         .await?;
-    sqlx::query("INSERT INTO BOOK_METADATA (NUMBER, NUMBER_SORT, TITLE, BOOK_ID) VALUES (?, ?, ?, ?)")
+    sqlx::query("INSERT INTO BOOK_METADATA (NUMBER, NUMBER_SORT, TITLE, TITLE_SORT, BOOK_ID) VALUES (?, ?, ?, ?, ?)")
         .bind(book.number.to_string())
         .bind(f64::from(book.number))
+        .bind(&book.name)
         .bind(&book.name)
         .bind(&book.id)
         .execute(&mut **tx)

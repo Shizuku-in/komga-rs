@@ -11,6 +11,7 @@ use axum::{
     http::StatusCode,
 };
 use komga_core::{BookEvent, BookMetadata, DomainEvent, MetadataError, SeriesEvent};
+use komga_media::apply_series_title_sort;
 use komga_storage::TaskRecord;
 
 use crate::{
@@ -114,7 +115,9 @@ pub(crate) async fn update_series_metadata(
         .find_series_metadata(&series_id)
         .await?
         .ok_or_else(|| ApiError::not_found("Series not found"))?;
-    let updated = existing.apply_patch(update.into_patch()).map_err(map_metadata_error)?;
+    let explicit_title_sort = update.has_explicit_title_sort();
+    let mut updated = existing.apply_patch(update.into_patch()).map_err(map_metadata_error)?;
+    apply_series_title_sort(&existing, &mut updated, explicit_title_sort);
     let series = state
         .storage
         .find_series_by_id(&series_id)

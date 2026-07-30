@@ -1327,7 +1327,7 @@ fn book_sort_column(property: &str) -> Option<&'static str> {
         "media.comment" => Some("m.COMMENT COLLATE NOCASE"),
         "media.mediaType" => Some("m.MEDIA_TYPE COLLATE NOCASE"),
         "media.pagesCount" => Some("m.PAGE_COUNT"),
-        "metadata.title" => Some("bm.TITLE COLLATE NOCASE"),
+        "metadata.title" => Some("bm.TITLE_SORT COLLATE NOCASE"),
         "metadata.numberSort" => Some("bm.NUMBER_SORT"),
         "metadata.releaseDate" => Some("bm.RELEASE_DATE"),
         "readProgress.lastModified" => Some("rp.LAST_MODIFIED_DATE"),
@@ -1651,5 +1651,10 @@ mod tests {
             content_datetime("2026-07-24 15:42:17.003326382".into()).unwrap(),
             "2026-07-24T15:42:17Z"
         );
+    }
+
+    #[test]
+    fn book_title_sort_uses_the_internal_language_aware_key() {
+        assert_eq!(book_sort_column("metadata.title"), Some("bm.TITLE_SORT COLLATE NOCASE"));
     }
 }

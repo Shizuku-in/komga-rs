@@ -426,6 +426,10 @@ pub(crate) struct SeriesMetadataUpdateDto {
 }
 
 impl SeriesMetadataUpdateDto {
+    pub(crate) fn has_explicit_title_sort(&self) -> bool {
+        matches!(self.title_sort, Patch::Value(_))
+    }
+
     pub(crate) fn into_patch(self) -> SeriesMetadataPatch {
         SeriesMetadataPatch {
             status: self.status.preserve_null(),

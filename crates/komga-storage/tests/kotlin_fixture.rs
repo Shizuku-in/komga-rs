@@ -265,6 +265,17 @@ async fn scalar_i64(path: &Path, query: &str) -> i64 {
     value
 }
 
+async fn scalar_string(path: &Path, query: &str) -> String {
+    let pool = sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(SqliteConnectOptions::new().filename(path).read_only(true))
+        .await
+        .unwrap();
+    let value = sqlx::query_scalar(query).fetch_one(&pool).await.unwrap();
+    pool.close().await;
+    value
+}
+
 async fn execute_sql(path: &Path, query: &str) {
     let pool = sqlx::sqlite::SqlitePoolOptions::new()
         .max_connections(1)
@@ -344,7 +355,12 @@ async fn fresh_and_kotlin_databases_share_the_supported_schema_contract() {
     assert_supported_schema(&baseline, &kotlin_contract);
     assert_supported_schema(&task_baseline, &fresh_task_contract);
     assert_supported_schema(&task_baseline, &kotlin_task_contract);
-
+    for contract in [&fresh_contract, &kotlin_contract] {
+        assert!(contract.tables["BOOK_METADATA"].contains_key("TITLE_SORT"));
+        assert!(contract.tables["SERIES_METADATA"].contains_key("TITLE_SORT_SOURCE"));
+        assert!(contract.indexes.contains_key("IDX__BOOK_METADATA__TITLE_SORT"));
+        assert!(contract.indexes.contains_key("IDX__SERIES_METADATA__TITLE_SORT"));
+    }
     drop((fresh_storage, fresh_task_storage, kotlin_storage, kotlin_task_storage));
     let fresh_before_reopen = schema_contract(&fresh_main).await;
     let tasks_before_reopen = schema_contract(&fresh_tasks).await;
@@ -381,11 +397,11 @@ async fn fresh_and_kotlin_databases_share_the_supported_schema_contract() {
     );
     assert_eq!(
         scalar_i64(&fresh_main, "SELECT COUNT(*) FROM _sqlx_migrations WHERE success=1").await,
-        18
+        19
     );
     assert_eq!(
         scalar_i64(&kotlin_main, "SELECT COUNT(*) FROM _sqlx_migrations WHERE success=1").await,
-        18
+        19
     );
     assert_eq!(
         scalar_i64(&fresh_tasks, "SELECT COUNT(*) FROM _sqlx_migrations WHERE success=1").await,
@@ -394,6 +410,75 @@ async fn fresh_and_kotlin_databases_share_the_supported_schema_contract() {
     assert_eq!(
         scalar_i64(&kotlin_tasks, "SELECT COUNT(*) FROM _sqlx_migrations WHERE success=1").await,
         1
+    );
+}
+
+#[tokio::test]
+async fn language_title_sort_migration_preserves_legacy_titles_and_adds_indexes() {
+    let temporary = tempfile::tempdir().unwrap();
+    let main_database = temporary.path().join("database.sqlite");
+    fs::copy(fixture("database.sqlite"), &main_database).unwrap();
+    let url = format!("sqlite://{}", main_database.display());
+    let pool = sqlx::SqlitePool::connect(&url).await.unwrap();
+    sqlx::query(
+        r#"INSERT INTO SERIES
+             (ID, FILE_LAST_MODIFIED, NAME, URL, LIBRARY_ID, BOOK_COUNT)
+           VALUES ('legacy-series', CURRENT_TIMESTAMP, '重庆森林',
+                   'file:///tmp/legacy-series', 'kotlin-library', 1)"#,
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"INSERT INTO SERIES_METADATA (STATUS, TITLE, TITLE_SORT, SERIES_ID)
+           VALUES ('ONGOING', '重庆森林', '重庆森林', 'legacy-series')"#,
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"INSERT INTO BOOK
+             (ID, FILE_LAST_MODIFIED, NAME, URL, SERIES_ID, LIBRARY_ID)
+           VALUES ('legacy-book', CURRENT_TIMESTAMP, '第一巻',
+                   'file:///tmp/legacy-series/book.cbz', 'legacy-series', 'kotlin-library')"#,
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"INSERT INTO BOOK_METADATA (NUMBER, NUMBER_SORT, TITLE, BOOK_ID)
+           VALUES ('1', 1, '第一巻', 'legacy-book')"#,
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    pool.close().await;
+
+    drop(Storage::connect_path(&main_database).await.unwrap());
+    assert_eq!(
+        scalar_string(
+            &main_database,
+            "SELECT TITLE_SORT FROM BOOK_METADATA WHERE BOOK_ID='legacy-book'"
+        )
+        .await,
+        "第一巻"
+    );
+    assert_eq!(
+        scalar_string(
+            &main_database,
+            "SELECT TITLE_SORT_SOURCE FROM SERIES_METADATA WHERE SERIES_ID='legacy-series'"
+        )
+        .await,
+        "LEGACY"
+    );
+    assert_eq!(
+        scalar_i64(
+            &main_database,
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name IN \
+             ('idx__book_metadata__title_sort','idx__series_metadata__title_sort')"
+        )
+        .await,
+        2
     );
 }
 

@@ -6,7 +6,7 @@ use axum::{
     http::{Request, Response, StatusCode, header},
 };
 use base64::{Engine, engine::general_purpose::STANDARD};
-use komga_core::{Book, Library, ScanInterval, Series, User, scan_library_files};
+use komga_core::{Book, Library, ScanInterval, Series, TitleSortSource, User, scan_library_files};
 use komga_server::{AppState, build_app};
 use komga_storage::{Storage, TaskStorage};
 use serde_json::Value;
@@ -117,6 +117,14 @@ async fn search_ids(app: &Router, authorization: &str, entity: &str, query: &str
         .iter()
         .map(|item| item["id"].as_str().unwrap().to_owned())
         .collect()
+}
+
+async fn response_json(response: Response<Body>) -> Value {
+    let bytes = http_body_util::BodyExt::collect(response.into_body())
+        .await
+        .unwrap()
+        .to_bytes();
+    serde_json::from_slice(&bytes).unwrap()
 }
 
 fn object(entries: impl IntoIterator<Item = (String, Value)>) -> Value {
@@ -436,6 +444,7 @@ async fn series_metadata_patch_handles_nulls_normalization_and_validation() {
     assert_eq!(metadata.status.as_str(), "ENDED");
     assert_eq!(metadata.title, "Updated series");
     assert_eq!(metadata.title_sort, "Series updated");
+    assert_eq!(metadata.title_sort_source, TitleSortSource::Custom);
     assert_eq!(metadata.summary, "Series summary");
     assert_eq!(metadata.publisher, "Publisher");
     assert_eq!(metadata.reading_direction.unwrap().as_str(), "RIGHT_TO_LEFT");
@@ -505,5 +514,119 @@ async fn series_metadata_patch_handles_nulls_normalization_and_validation() {
     assert_eq!(
         fixture.storage.find_series_metadata(&series.id).await.unwrap().unwrap(),
         preserved
+    );
+}
+
+#[tokio::test]
+async fn language_aware_title_sort_updates_series_books_and_alphabetical_groups() {
+    let fixture = metadata_fixture().await;
+    let chinese_series = &fixture.series[0];
+    let japanese_series = &fixture.series[1];
+
+    for (book, title) in fixture.books[0].iter().zip(["重庆故事", "北京故事"]) {
+        let response = patch_json(
+            &fixture.app,
+            &format!("/api/v1/books/{}/metadata", book.id),
+            Some(&fixture.admin),
+            serde_json::json!({"title": title}),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    }
+    for (series, title, language) in [
+        (chinese_series, "重庆森林", "zh-Hant"),
+        (japanese_series, "進撃の巨人", "ja-JP"),
+    ] {
+        let response = patch_json(
+            &fixture.app,
+            &format!("/api/v1/series/{}/metadata", series.id),
+            Some(&fixture.admin),
+            serde_json::json!({"title": title, "language": language}),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    }
+
+    let chinese_metadata = fixture
+        .storage
+        .find_series_metadata(&chinese_series.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(chinese_metadata.title_sort, "chongqing senlin");
+    assert_eq!(chinese_metadata.title_sort_source, TitleSortSource::Generated);
+    let japanese_metadata = fixture
+        .storage
+        .find_series_metadata(&japanese_series.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(japanese_metadata.title_sort, "shingeki no kyojin");
+
+    let books = fixture
+        .app
+        .clone()
+        .oneshot(
+            Request::get(format!(
+                "/api/v1/series/{}/books?sort=metadata.title,asc",
+                chinese_series.id
+            ))
+            .header(header::AUTHORIZATION, &fixture.admin)
+            .body(Body::empty())
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(books.status(), StatusCode::OK);
+    let books = response_json(books).await;
+    let titles = books["content"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|book| book["metadata"]["title"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(titles, ["北京故事", "重庆故事"]);
+    assert!(
+        books["content"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|book| book["metadata"].get("titleSort").is_none())
+    );
+
+    let series = fixture
+        .app
+        .clone()
+        .oneshot(
+            Request::post("/api/v1/series/list?sort=metadata.titleSort,asc")
+                .header(header::AUTHORIZATION, &fixture.admin)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from("{}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let series = response_json(series).await;
+    assert_eq!(series["content"][0]["metadata"]["title"], "重庆森林");
+    assert_eq!(series["content"][1]["metadata"]["title"], "進撃の巨人");
+
+    let groups = fixture
+        .app
+        .clone()
+        .oneshot(
+            Request::post("/api/v1/series/list/alphabetical-groups")
+                .header(header::AUTHORIZATION, &fixture.admin)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from("{}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        response_json(groups).await,
+        serde_json::json!([
+            {"group": "c", "count": 1},
+            {"group": "s", "count": 1}
+        ])
     );
 }

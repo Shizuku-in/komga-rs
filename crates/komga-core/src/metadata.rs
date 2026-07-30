@@ -79,6 +79,41 @@ impl TryFrom<&str> for SeriesStatus {
     }
 }
 
+/// Provenance of a persisted series sorting title.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TitleSortSource {
+    /// Value predates automatic language-aware sorting.
+    Legacy,
+    /// Value was produced by the language-aware generator.
+    Generated,
+    /// Value was explicitly supplied or detected as user-managed.
+    Custom,
+}
+
+impl TitleSortSource {
+    /// Returns the database representation.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Legacy => "LEGACY",
+            Self::Generated => "GENERATED",
+            Self::Custom => "CUSTOM",
+        }
+    }
+}
+
+impl TryFrom<&str> for TitleSortSource {
+    type Error = MetadataError;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        match value {
+            "LEGACY" => Ok(Self::Legacy),
+            "GENERATED" => Ok(Self::Generated),
+            "CUSTOM" => Ok(Self::Custom),
+            _ => Err(MetadataError::Invalid(format!("unknown title sort source: {value}"))),
+        }
+    }
+}
+
 /// Reading direction stored in `SERIES_METADATA.READING_DIRECTION`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -314,6 +349,8 @@ pub struct SeriesMetadata {
     pub title_sort: String,
     /// Whether sorting title is locked.
     pub title_sort_lock: bool,
+    /// Internal provenance used to decide whether automatic sorting may update the value.
+    pub title_sort_source: TitleSortSource,
     /// Summary text.
     pub summary: String,
     /// Whether summary is locked.
@@ -997,6 +1034,7 @@ mod tests {
             title_lock: false,
             title_sort: "Series".into(),
             title_sort_lock: false,
+            title_sort_source: TitleSortSource::Legacy,
             summary: String::new(),
             summary_lock: false,
             reading_direction: Some(ReadingDirection::RightToLeft),
