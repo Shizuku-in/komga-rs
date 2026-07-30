@@ -47,9 +47,10 @@ Open <http://localhost:25600>. By default, Compose mounts `./config` at `/config
 KOMGA_CONFIG_HOST_DIR=/srv/komga/config
 KOMGA_LIBRARY_DIR=/srv/books
 KOMGA_HTTP_PORT=25600
+TZ=Asia/Shanghai
 ```
 
-The mounted directories must be accessible to UID/GID 1000. The library mount is writable because import, conversion, repair, source deletion, and duplicate-page removal can modify files.
+The mounted directories must be accessible to UID/GID 1000. The library mount is writable because import, conversion, repair, source deletion, and duplicate-page removal can modify files. The container uses UTC by default; set `TZ` to an IANA time zone when local timestamps should use another zone.
 
 ### From Source
 

@@ -9,6 +9,8 @@ services:
       - "${KOMGA_HTTP_PORT:-25600}:25600"
     environment:
       KOMGA_CONFIG_DIR: /config
+      # Override TZ in .env when local timestamps should use another timezone.
+      TZ: ${TZ:-UTC}
     volumes:
       # Set these host paths in .env before starting Compose, for example:
       # KOMGA_CONFIG_HOST_DIR=/srv/komga/config
