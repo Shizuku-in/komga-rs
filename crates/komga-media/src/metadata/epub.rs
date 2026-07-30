@@ -130,8 +130,7 @@ fn parse_metadata(xml: &str) -> Result<EmbeddedMetadata, MediaOperationError> {
             ..Default::default()
         },
         series: SeriesMetadataPatch {
-            title: series.clone(),
-            title_sort: series,
+            title: series,
             publisher: first("publisher").map(str::to_owned),
             language: first("language").map(str::to_owned),
             genres: set_update(subjects),
@@ -227,7 +226,7 @@ mod tests {
         assert_eq!(metadata.book.tags, MetadataUpdate::Keep);
 
         assert_eq!(metadata.series.title.as_deref(), Some("Die drei ??? Kids"));
-        assert_eq!(metadata.series.title_sort.as_deref(), Some("Die drei ??? Kids"));
+        assert_eq!(metadata.series.title_sort, None);
         assert_eq!(
             metadata.series.reading_direction,
             MetadataUpdate::Set(ReadingDirection::RightToLeft)
@@ -283,7 +282,7 @@ mod tests {
         assert_eq!(metadata.book.tags, MetadataUpdate::Keep);
 
         assert_eq!(metadata.series.title.as_deref(), Some("Die drei ??? Kids"));
-        assert_eq!(metadata.series.title_sort.as_deref(), Some("Die drei ??? Kids"));
+        assert_eq!(metadata.series.title_sort, None);
         assert_eq!(metadata.series.reading_direction, MetadataUpdate::Keep);
         assert_eq!(metadata.series.publisher.as_deref(), Some("Franckh-Kosmos Verlag"));
         assert_eq!(metadata.series.language.as_deref(), Some("de"));

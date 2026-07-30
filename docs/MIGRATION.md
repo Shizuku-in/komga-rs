@@ -103,6 +103,8 @@ Book keys in the same SQLite transaction. Migration `0019` initializes existing 
 marks existing Series values `LEGACY`; it deliberately performs no startup romanization. To update an existing library,
 run the administrator metadata refresh for the affected Book, Series, or whole Library. Existing Japanese kana navigation
 preferences are not migrated; select the existing A-Z grouping after automatic romaji titles are generated.
+EPUB collection names populate the Series title but are not treated as explicit sorting titles, so their declared
+language can generate the same language-aware key as other metadata providers.
 
 This ordering intentionally differs from Kotlin's default ICU CJK collation: all Chinese variants use Mandarin, and
 Chinese word boundaries follow Jieba's embedded default dictionary; unrecognized words can still fall back to

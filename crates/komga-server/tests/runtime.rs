@@ -10,7 +10,7 @@ use komga_core::{
     BookMetadataPatch, Library, MediaExtension, MetadataUpdate, PageRequest, ScanInterval, TitleSortSource, User,
     scan_library_files,
 };
-use komga_media::analyze_book;
+use komga_media::{analyze_book, generate_title_sort};
 use komga_search::{EntityKind, IndexState, SearchIndex};
 use komga_server::{AppState, build_app};
 use komga_storage::{Storage, TaskRecord, TaskStorage};
@@ -1269,6 +1269,131 @@ async fn series_provider_refresh_generates_language_aware_title_sort() {
     assert_eq!(metadata.language, "zh-Hant");
     assert_eq!(metadata.title_sort_source, TitleSortSource::Generated);
     runtime.shutdown().await;
+}
+
+#[tokio::test]
+async fn epub_series_refresh_generates_japanese_title_sort() {
+    assert_epub_series_title_sort(
+        r##"<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="uid">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="uid">test-id</dc:identifier>
+    <dc:title>魔技科の剣士と召喚魔王 1</dc:title>
+    <dc:language>ja</dc:language>
+    <meta property="belongs-to-collection" id="series">魔技科の剣士と召喚魔王</meta>
+    <meta refines="#series" property="collection-type">series</meta>
+    <meta refines="#series" property="group-position">1</meta>
+  </metadata>
+  <manifest><item id="page" href="page.xhtml" media-type="application/xhtml+xml"/></manifest>
+  <spine><itemref idref="page"/></spine>
+</package>"##,
+        "魔技科の剣士と召喚魔王",
+        "ja",
+        "ma waza ka no kenshi to shoukan maou",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn calibre_epub_series_refresh_generates_chinese_title_sort() {
+    assert_epub_series_title_sort(
+        r#"<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="2.0" unique-identifier="uid">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="uid">test-id</dc:identifier>
+    <dc:title>Re：從零開始的異世界生活 01</dc:title>
+    <dc:language>zh</dc:language>
+    <meta name="calibre:title_sort" content="Re：從零開始的異世界生活 01"/>
+    <meta name="calibre:series" content="Re：從零開始的異世界生活"/>
+    <meta name="calibre:series_index" content="1.0"/>
+  </metadata>
+  <manifest><item id="page" href="page.xhtml" media-type="application/xhtml+xml"/></manifest>
+  <spine><itemref idref="page"/></spine>
+</package>"#,
+        "Re：從零開始的異世界生活",
+        "zh",
+        "re : conglingkaishi de yi shijie shenghuo",
+    )
+    .await;
+}
+
+async fn assert_epub_series_title_sort(opf: &str, title: &str, language: &str, expected_title_sort: &str) {
+    let storage = Storage::connect_memory().await.unwrap();
+    let tasks = TaskStorage::connect_memory().await.unwrap();
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path().join("library");
+    fs::create_dir_all(root.join("Imported Series")).unwrap();
+    write_metadata_epub(&root.join("Imported Series/Volume 1.epub"), opf);
+
+    let mut library = Library::new("EPUB provider".into(), Url::from_directory_path(&root).unwrap());
+    library.import_comic_info_series = false;
+    library.import_mylar_series = false;
+    library.scan_interval = ScanInterval::Disabled;
+    storage.create_library(&library).await.unwrap();
+    storage
+        .apply_library_scan(&library.id, &scan_library_files(&library, || false).unwrap(), false)
+        .await
+        .unwrap();
+    let series = storage.list_series_by_library_id(&library.id).await.unwrap().remove(0);
+    let book = storage.list_books_by_series_id(&series.id).await.unwrap().remove(0);
+    storage
+        .replace_media_analysis(&analyze_book(&book, false, || false).unwrap())
+        .await
+        .unwrap();
+    tasks
+        .save(&TaskRecord::refresh_series_metadata(&series.id, 5))
+        .await
+        .unwrap();
+
+    let runtime = AppState::new(storage.clone(), tasks.clone())
+        .await
+        .unwrap()
+        .start_runtime()
+        .await
+        .unwrap();
+    let generated_title_sort = generate_title_sort(title, language);
+    assert_eq!(generated_title_sort, expected_title_sort);
+    assert_ne!(expected_title_sort, title);
+    assert!(expected_title_sort.is_ascii());
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let metadata = storage.find_series_metadata(&series.id).await.unwrap().unwrap();
+            if metadata.title_sort == expected_title_sort && tasks.list().await.unwrap().is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("EPUB metadata did not generate a language-aware title sort");
+    let metadata = storage.find_series_metadata(&series.id).await.unwrap().unwrap();
+    assert_eq!(metadata.title, title);
+    assert_eq!(metadata.language, language);
+    assert_eq!(metadata.title_sort_source, TitleSortSource::Generated);
+    runtime.shutdown().await;
+}
+
+fn write_metadata_epub(path: &std::path::Path, opf: &str) {
+    let file = File::create(path).unwrap();
+    let mut archive = ZipWriter::new(file);
+    let options = SimpleFileOptions::default();
+    archive.start_file("mimetype", options).unwrap();
+    archive.write_all(b"application/epub+zip").unwrap();
+    archive.start_file("META-INF/container.xml", options).unwrap();
+    archive
+        .write_all(
+            br#"<?xml version="1.0"?><container xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#,
+        )
+        .unwrap();
+    archive.start_file("content.opf", options).unwrap();
+    archive.write_all(opf.as_bytes()).unwrap();
+    archive.start_file("page.xhtml", options).unwrap();
+    archive
+        .write_all(
+            br#"<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml"><head><title>Page</title></head><body><p>Content</p></body></html>"#,
+        )
+        .unwrap();
+    archive.finish().unwrap();
 }
 
 #[tokio::test]
