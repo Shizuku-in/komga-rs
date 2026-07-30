@@ -43,7 +43,7 @@ pub use page_removal::{PageRemovalError, PageRemovalRewrite};
 pub use pdf::PdfPageRenderer;
 pub use pdf_edit::rewrite_hashed_pdf_pages;
 pub use rar_conversion::{RarToCbzConversion, RarToCbzError, convert_rar_to_cbz, rewrite_hashed_rar_pages_to_cbz};
-pub use title_sort::{apply_series_title_sort, generate_title_sort};
+pub use title_sort::{apply_series_title_readings, apply_series_title_sort, generate_title_sort};
 pub use zip_edit::rewrite_hashed_zip_pages;
 
 #[cfg(test)]

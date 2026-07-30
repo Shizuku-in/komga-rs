@@ -366,6 +366,7 @@ pub(super) async fn process_refresh_series_metadata_task(state: &AppState, task:
         }
     }
     apply_series_title_sort(&previous_target, &mut target, explicit_title_sort);
+    apply_series_title_readings(&mut target);
     if let Err(error) = state.storage.save_series_metadata(&target).await {
         tracing::error!(%error, "could not persist series metadata");
         return TaskOutcome::Retry;

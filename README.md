@@ -25,7 +25,7 @@ Compared with the pinned Kotlin baseline:
 
 - Built-in KEPUB conversion without Calibre or `kepubify`
 - DRM-free MOBI, AZW, and AZW3 support
-- Chinese pinyin and Japanese romaji title sorting
+- Chinese pinyin and Japanese romaji sorting with kana search
 - Extended duplicate-page handling for CBR, PDF, and fixed-layout EPUB
 
 ## Installation

@@ -96,13 +96,17 @@ Series whose normalized BCP 47 language starts with `zh` receive Jieba dictionar
 the existing public `titleSort`; Traditional Chinese is converted to Simplified Chinese for segmentation only. Syllables
 are joined within each word and words are separated by one space, for example `重庆森林` becomes `chongqing senlin`.
 Jieba's HMM inference is disabled so the same embedded dictionary produces deterministic sorting keys. `ja` Series use
-embedded IPADIC readings converted to Hepburn romaji. Book title sorting uses a new internal key and does not add a REST
-field or a Tantivy Book field. Fullwidth text is NFKC-normalized, whitespace is collapsed, and Latin text is lowercased.
-Explicit provider/API `titleSort` values and locks remain authoritative. Changing a Series language updates all of its
-Book keys in the same SQLite transaction. Migration `0019` initializes existing Book keys from their current titles and
-marks existing Series values `LEGACY`; it deliberately performs no startup romanization. To update an existing library,
-run the administrator metadata refresh for the affected Book, Series, or whole Library. Existing Japanese kana navigation
-preferences are not migrated; select the existing A-Z grouping after automatic romaji titles are generated.
+embedded IPADIC readings converted to Hepburn romaji. Unlocked Japanese Series also store compact `ja-Kana` and `ja-Hira`
+readings as alternate titles, so both scripts participate in the existing full-text search. Both romaji sorting and kana
+alternate titles require a Series language whose primary tag is `ja`. Book title sorting uses a new internal key and does
+not add a REST field or a Tantivy Book field. Fullwidth text is NFKC-normalized, whitespace is collapsed, and Latin text is
+lowercased.
+Explicit provider/API `titleSort` values and title-sort or alternate-title locks remain authoritative. Changing a Series
+language updates all of its Book keys in the same SQLite transaction. Migration `0019` initializes existing Book keys from
+their current titles and marks existing Series values `LEGACY`; it deliberately performs no startup romanization. To
+update an existing library, run the administrator metadata refresh for the affected Book, Series, or whole Library.
+Existing Japanese kana navigation preferences are not migrated; select the existing A-Z grouping after automatic romaji
+titles are generated.
 EPUB collection names populate the Series title but are not treated as explicit sorting titles, so their declared
 language can generate the same language-aware key as other metadata providers.
 

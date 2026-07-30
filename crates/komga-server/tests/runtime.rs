@@ -1278,18 +1278,18 @@ async fn epub_series_refresh_generates_japanese_title_sort() {
 <package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="uid">
   <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
     <dc:identifier id="uid">test-id</dc:identifier>
-    <dc:title>魔技科の剣士と召喚魔王 1</dc:title>
+    <dc:title>安達としまむら 1</dc:title>
     <dc:language>ja</dc:language>
-    <meta property="belongs-to-collection" id="series">魔技科の剣士と召喚魔王</meta>
+    <meta property="belongs-to-collection" id="series">安達としまむら</meta>
     <meta refines="#series" property="collection-type">series</meta>
     <meta refines="#series" property="group-position">1</meta>
   </metadata>
   <manifest><item id="page" href="page.xhtml" media-type="application/xhtml+xml"/></manifest>
   <spine><itemref idref="page"/></spine>
 </package>"##,
-        "魔技科の剣士と召喚魔王",
+        "安達としまむら",
         "ja",
-        "ma waza ka no kenshi to shoukan maou",
+        "adachi to shimamura",
     )
     .await;
 }
@@ -1370,6 +1370,16 @@ async fn assert_epub_series_title_sort(opf: &str, title: &str, language: &str, e
     assert_eq!(metadata.title, title);
     assert_eq!(metadata.language, language);
     assert_eq!(metadata.title_sort_source, TitleSortSource::Generated);
+    if language == "ja" {
+        assert_eq!(
+            metadata
+                .alternate_titles
+                .iter()
+                .map(|title| (title.label.as_str(), title.title.as_str()))
+                .collect::<Vec<_>>(),
+            [("ja-Kana", "アダチトシマムラ"), ("ja-Hira", "あだちとしまむら"),]
+        );
+    }
     runtime.shutdown().await;
 }
 

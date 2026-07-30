@@ -3,14 +3,17 @@
 use std::sync::OnceLock;
 
 use jieba_rs::Jieba;
-use komga_core::{SeriesMetadata, TitleSortSource};
+use komga_core::{AlternateTitle, SeriesMetadata, TitleSortSource};
 use lindera::{dictionary::load_dictionary, mode::Mode, segmenter::Segmenter, tokenizer::Tokenizer};
 use pinyin::Converter;
 use unicode_normalization::UnicodeNormalization;
-use wana_kana::{ConvertJapanese, IsJapaneseStr};
+use wana_kana::{ConvertJapanese, IsJapaneseChar, IsJapaneseStr, Options};
 
 static CHINESE_TOKENIZER: OnceLock<Jieba> = OnceLock::new();
 static JAPANESE_TOKENIZER: OnceLock<Result<Tokenizer, String>> = OnceLock::new();
+
+const JAPANESE_HIRAGANA_LABEL: &str = "ja-Hira";
+const JAPANESE_KATAKANA_LABEL: &str = "ja-Kana";
 
 /// Builds a normalized sorting key for a title and BCP 47 language tag.
 ///
@@ -63,6 +66,47 @@ pub fn apply_series_title_sort(previous: &SeriesMetadata, updated: &mut SeriesMe
     }
 }
 
+/// Regenerates Japanese kana readings in an unlocked alternate-title list.
+///
+/// IPADIC supplies a canonical katakana reading. Both compact katakana and
+/// hiragana forms are persisted so either script can participate in the
+/// existing alternate-title search. The standard `ja-Kana` and `ja-Hira`
+/// labels identify entries owned by this policy; all other entries are
+/// preserved. A locked alternate-title list is never changed.
+pub fn apply_series_title_readings(metadata: &mut SeriesMetadata) {
+    if metadata.alternate_titles_lock {
+        return;
+    }
+    let readings = match generate_japanese_title_readings(&metadata.title, &metadata.language) {
+        Ok(readings) => readings,
+        Err(error) => {
+            tracing::warn!(
+                %error,
+                title = metadata.title,
+                language = metadata.language,
+                "could not generate Japanese title readings"
+            );
+            return;
+        }
+    };
+    metadata
+        .alternate_titles
+        .retain(|title| !matches!(title.label.as_str(), JAPANESE_KATAKANA_LABEL | JAPANESE_HIRAGANA_LABEL));
+
+    if let Some((katakana, hiragana)) = readings {
+        metadata.alternate_titles.extend([
+            AlternateTitle {
+                label: JAPANESE_KATAKANA_LABEL.into(),
+                title: katakana,
+            },
+            AlternateTitle {
+                label: JAPANESE_HIRAGANA_LABEL.into(),
+                title: hiragana,
+            },
+        ]);
+    }
+}
+
 fn normalize(value: &str) -> String {
     value
         .nfkc()
@@ -89,6 +133,35 @@ fn chinese_title_sort(title: &str) -> String {
 }
 
 fn japanese_title_sort(title: &str) -> Result<String, String> {
+    Ok(japanese_reading_parts(title)?
+        .iter()
+        .map(|part| part.as_str().to_romaji())
+        .collect::<Vec<_>>()
+        .join(" "))
+}
+
+fn generate_japanese_title_readings(title: &str, language: &str) -> Result<Option<(String, String)>, String> {
+    let title = normalize(title);
+    if !primary_language(language).eq_ignore_ascii_case("ja") {
+        return Ok(None);
+    }
+
+    let katakana = japanese_reading_parts(&title)?.concat();
+    if !katakana.chars().any(|character| character.is_kana()) {
+        return Ok(None);
+    }
+    let hiragana = katakana.as_str().to_hiragana_with_opt(Options {
+        pass_romaji: true,
+        keep_prolonged_sound_mark: true,
+        ..Options::default()
+    });
+    Ok(Some((
+        normalize(&katakana).replace(' ', ""),
+        normalize(&hiragana).replace(' ', ""),
+    )))
+}
+
+fn japanese_reading_parts(title: &str) -> Result<Vec<String>, String> {
     let tokenizer = JAPANESE_TOKENIZER
         .get_or_init(|| {
             let dictionary = load_dictionary("embedded://ipadic").map_err(|error| error.to_string())?;
@@ -111,13 +184,12 @@ fn japanese_title_sort(title: &str) -> Result<String, String> {
                 .filter(|reading| *reading != "*")
                 .map(str::to_owned);
             match reading {
-                Some(reading) => reading.as_str().to_romaji(),
-                None if surface.as_str().is_kana() => surface.as_str().to_romaji(),
+                Some(reading) => reading,
+                None if surface.as_str().is_kana() => surface.as_str().to_katakana(),
                 None => surface,
             }
         })
-        .collect::<Vec<_>>()
-        .join(" "))
+        .collect())
 }
 
 #[cfg(test)]
@@ -171,6 +243,63 @@ mod tests {
         ] {
             assert_eq!(generate_title_sort(title, language), expected, "{title} ({language})");
         }
+    }
+
+    #[test]
+    fn japanese_readings_are_added_as_compact_alternate_titles() {
+        let mut metadata = series("安達としまむら", "adachi to shimamura", TitleSortSource::Generated);
+        metadata.language = "ja".into();
+
+        apply_series_title_readings(&mut metadata);
+
+        assert_eq!(
+            metadata.alternate_titles,
+            [
+                AlternateTitle {
+                    label: "ja-Kana".into(),
+                    title: "アダチトシマムラ".into(),
+                },
+                AlternateTitle {
+                    label: "ja-Hira".into(),
+                    title: "あだちとしまむら".into(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn japanese_readings_require_a_japanese_language_and_honor_the_lock() {
+        let mut metadata = series("雨の日", "雨の日", TitleSortSource::Legacy);
+        metadata.alternate_titles.push(AlternateTitle {
+            label: "en".into(),
+            title: "A Rainy Day".into(),
+        });
+        apply_series_title_readings(&mut metadata);
+        assert_eq!(
+            metadata
+                .alternate_titles
+                .iter()
+                .map(|title| title.label.as_str())
+                .collect::<Vec<_>>(),
+            ["en"]
+        );
+
+        metadata.language = "ja-JP".into();
+        apply_series_title_readings(&mut metadata);
+        assert_eq!(
+            metadata
+                .alternate_titles
+                .iter()
+                .map(|title| title.label.as_str())
+                .collect::<Vec<_>>(),
+            ["en", "ja-Kana", "ja-Hira"]
+        );
+
+        metadata.alternate_titles_lock = true;
+        metadata.title = "進撃の巨人".into();
+        let locked = metadata.alternate_titles.clone();
+        apply_series_title_readings(&mut metadata);
+        assert_eq!(metadata.alternate_titles, locked);
     }
 
     #[test]

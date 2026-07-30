@@ -535,7 +535,7 @@ async fn language_aware_title_sort_updates_series_books_and_alphabetical_groups(
     }
     for (series, title, language) in [
         (chinese_series, "重庆森林", "zh-Hant"),
-        (japanese_series, "進撃の巨人", "ja-JP"),
+        (japanese_series, "安達としまむら", "ja-JP"),
     ] {
         let response = patch_json(
             &fixture.app,
@@ -561,7 +561,23 @@ async fn language_aware_title_sort_updates_series_books_and_alphabetical_groups(
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(japanese_metadata.title_sort, "shingeki no kyojin");
+    assert_eq!(japanese_metadata.title_sort, "adachi to shimamura");
+    assert_eq!(
+        japanese_metadata
+            .alternate_titles
+            .iter()
+            .map(|title| (title.label.as_str(), title.title.as_str()))
+            .collect::<Vec<_>>(),
+        [("ja-Kana", "アダチトシマムラ"), ("ja-Hira", "あだちとしまむら"),]
+    );
+    for reading in ["あだち", "アダチ"] {
+        assert!(
+            search_ids(&fixture.app, &fixture.admin, "series", reading)
+                .await
+                .contains(&japanese_series.id),
+            "{reading} should match the generated alternate title"
+        );
+    }
 
     let books = fixture
         .app
@@ -607,8 +623,8 @@ async fn language_aware_title_sort_updates_series_books_and_alphabetical_groups(
         .await
         .unwrap();
     let series = response_json(series).await;
-    assert_eq!(series["content"][0]["metadata"]["title"], "重庆森林");
-    assert_eq!(series["content"][1]["metadata"]["title"], "進撃の巨人");
+    assert_eq!(series["content"][0]["metadata"]["title"], "安達としまむら");
+    assert_eq!(series["content"][1]["metadata"]["title"], "重庆森林");
 
     let groups = fixture
         .app
@@ -625,8 +641,8 @@ async fn language_aware_title_sort_updates_series_books_and_alphabetical_groups(
     assert_eq!(
         response_json(groups).await,
         serde_json::json!([
-            {"group": "c", "count": 1},
-            {"group": "s", "count": 1}
+            {"group": "a", "count": 1},
+            {"group": "c", "count": 1}
         ])
     );
 }
