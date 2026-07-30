@@ -3,10 +3,9 @@ import path from 'node:path'
 
 export interface E2eState {
   temporaryRoot: string
-  rootUrl: string
-  contextUrl: string
-  libraryRoot: string
-  importRoot: string
+  binary: string
+  oauthProviderUrl: string
+  oauthLogPath: string
   processIds: number[]
 }
 

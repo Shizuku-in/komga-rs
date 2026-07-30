@@ -417,7 +417,7 @@ export default Vue.extend({
           new SearchConditionMediaStatus(new SearchOperatorIs(MediaStatus.ERROR)),
           new SearchConditionMediaStatus(new SearchOperatorIs(MediaStatus.UNSUPPORTED)),
         ]),
-      } as BookSearch, {size: 0} as PageRequest)
+      } as BookSearch, {size: 1} as PageRequest)
         .then(x => this.$store.commit('setBooksToCheck', x.totalElements))
       this.$komgaAnnouncements.getAnnouncements()
         .then(x => this.$store.commit('setAnnouncements', x))

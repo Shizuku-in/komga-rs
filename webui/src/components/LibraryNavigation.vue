@@ -161,12 +161,12 @@ export default Vue.extend({
     },
     async loadCollectionCounts(libraryId: string) {
       const lib = libraryId !== LIBRARIES_ALL ? [libraryId] : this.$store.getters.getLibrariesPinned.map((it: LibraryDto) => it.id)
-      this.$komgaCollections.getCollections(lib, {size: 0})
+      this.$komgaCollections.getCollections(lib, {size: 1})
       .then(v => this.collectionsCount = v.totalElements)
     },
     async loadReadListCounts(libraryId: string) {
       const lib = libraryId !== LIBRARIES_ALL ? [libraryId] : this.$store.getters.getLibrariesPinned.map((it: LibraryDto) => it.id)
-      await this.$komgaReadLists.getReadLists(lib, {size: 0})
+      await this.$komgaReadLists.getReadLists(lib, {size: 1})
         .then(v => this.readListsCount = v.totalElements)
     },
   },

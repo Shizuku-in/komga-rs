@@ -1,12 +1,8 @@
 import fs from 'node:fs'
 import path from 'node:path'
+import zlib from 'node:zlib'
 
-const PNG_1X1 = Buffer.from(
-  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M/wHwAEAQH/6pyVGQAAAABJRU5ErkJggg==',
-  'base64',
-)
-
-interface FixturePaths {
+export interface FixturePaths {
   libraryRoot: string
   importRoot: string
 }
@@ -17,15 +13,45 @@ export function createFixtures(root: string): FixturePaths {
   fs.mkdirSync(path.join(libraryRoot, 'Example Series'), {recursive: true})
   fs.mkdirSync(importRoot, {recursive: true})
   writeStoredZip(path.join(libraryRoot, 'Example Series', 'Volume 1.cbz'), [
-    ['001.png', PNG_1X1],
-    ['002.png', PNG_1X1],
+    ['001.png', solidPng(64, 48, [220, 40, 40, 255])],
+    ['002.png', solidPng(48, 64, [40, 80, 220, 255])],
     ['ComicInfo.xml', Buffer.from('<ComicInfo><Series>Example Series</Series><Title>Volume 1</Title><Number>1</Number></ComicInfo>')],
   ])
   writeStoredZip(path.join(importRoot, 'Import Candidate.cbz'), [
-    ['001.png', PNG_1X1],
+    ['001.png', solidPng(56, 56, [40, 180, 80, 255])],
     ['ComicInfo.xml', Buffer.from('<ComicInfo><Series>Example Series</Series><Title>Import Candidate</Title><Number>2</Number></ComicInfo>')],
   ])
   return {libraryRoot, importRoot}
+}
+
+function solidPng(width: number, height: number, color: [number, number, number, number]): Buffer {
+  const row = Buffer.alloc(1 + width * 4)
+  row[0] = 0
+  for (let pixel = 0; pixel < width; pixel += 1) {
+    row.set(color, 1 + pixel * 4)
+  }
+  const pixels = Buffer.concat(Array.from({length: height}, () => row))
+  const header = Buffer.alloc(13)
+  header.writeUInt32BE(width, 0)
+  header.writeUInt32BE(height, 4)
+  header[8] = 8
+  header[9] = 6
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    pngChunk('IHDR', header),
+    pngChunk('IDAT', zlib.deflateSync(pixels)),
+    pngChunk('IEND', Buffer.alloc(0)),
+  ])
+}
+
+function pngChunk(type: string, contents: Buffer): Buffer {
+  const typeBytes = Buffer.from(type)
+  const chunk = Buffer.alloc(12 + contents.length)
+  chunk.writeUInt32BE(contents.length, 0)
+  typeBytes.copy(chunk, 4)
+  contents.copy(chunk, 8)
+  chunk.writeUInt32BE(crc32(Buffer.concat([typeBytes, contents])), 8 + contents.length)
+  return chunk
 }
 
 function writeStoredZip(target: string, entries: Array<[string, Buffer]>): void {

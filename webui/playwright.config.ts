@@ -11,9 +11,7 @@ export default defineConfig({
   globalSetup: './e2e/global-setup.ts',
   globalTeardown: './e2e/global-teardown.ts',
   use: {
-    ...devices['Desktop Chrome'],
     actionTimeout: 15_000,
-    viewport: {width: 1440, height: 900},
     screenshot: 'only-on-failure',
     trace: 'retain-on-failure',
     video: 'retain-on-failure',
@@ -21,7 +19,16 @@ export default defineConfig({
   projects: [
     {
       name: 'chromium',
-      use: {...devices['Desktop Chrome']},
+      testIgnore: '**/*.mobile.spec.ts',
+      use: {
+        ...devices['Desktop Chrome'],
+        viewport: {width: 1440, height: 900},
+      },
+    },
+    {
+      name: 'mobile-chromium',
+      testMatch: '**/*.mobile.spec.ts',
+      use: {...devices['Pixel 5']},
     },
   ],
 })
