@@ -53,14 +53,22 @@ use sqlx::{
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions},
 };
 use thiserror::Error;
-use unicode_normalization::UnicodeNormalization;
+use unicode_normalization::{UnicodeNormalization, char::is_combining_mark};
 
 use compatibility::{DatabaseKind, MAIN_MIGRATOR, verify_database_file};
 
 const UNICODE_NOCASE_COLLATION: &str = "KOMGA_UNICODE_NOCASE";
 
 fn unicode_nocase_compare(left: &str, right: &str) -> Ordering {
-    let normalize = |value: &str| value.nfkc().flat_map(char::to_lowercase).collect::<String>();
+    let normalize = |value: &str| {
+        value
+            .nfkd()
+            .filter(|character| !is_combining_mark(*character))
+            .flat_map(char::to_lowercase)
+            .collect::<String>()
+            .nfkc()
+            .collect::<String>()
+    };
     normalize(left).cmp(&normalize(right))
 }
 

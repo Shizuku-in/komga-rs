@@ -1044,8 +1044,8 @@ fn push_numeric(query: &mut QueryBuilder<'static, Sqlite>, column: &str, operato
     let (comparison, value) = match operator {
         NumericOperator::Is { value } => (" = ", value),
         NumericOperator::IsNot { value } => (" <> ", value),
-        NumericOperator::GreaterThan { value } => (" > ", value),
-        NumericOperator::LessThan { value } => (" < ", value),
+        NumericOperator::GreaterThan { value } => (" >= ", value),
+        NumericOperator::LessThan { value } => (" <= ", value),
     };
     query.push(column).push(comparison).push_bind(*value);
 }
@@ -1070,10 +1070,10 @@ fn push_nullable_numeric(
                 .push(" IS NULL)");
         }
         NullableNumericOperator::GreaterThan { value } => {
-            query.push(column).push(" > ").push_bind(*value);
+            query.push(column).push(" >= ").push_bind(*value);
         }
         NullableNumericOperator::LessThan { value } => {
-            query.push(column).push(" < ").push_bind(*value);
+            query.push(column).push(" <= ").push_bind(*value);
         }
         NullableNumericOperator::IsNull => {
             query.push(column).push(" IS NULL");
@@ -1174,24 +1174,31 @@ fn push_boolean(query: &mut QueryBuilder<'static, Sqlite>, column: &str, operato
 }
 
 fn push_string_operator(query: &mut QueryBuilder<'static, Sqlite>, column: &str, operator: &StringOperator) {
-    let (comparison, value) = match operator {
-        StringOperator::Is { value } => (" = ", value.to_lowercase()),
-        StringOperator::IsNot { value } => (" <> ", value.to_lowercase()),
-        StringOperator::Contains { value } => (" LIKE ", like_pattern(value, true, true)),
-        StringOperator::DoesNotContain { value } => (" NOT LIKE ", like_pattern(value, true, true)),
-        StringOperator::BeginsWith { value } => (" LIKE ", like_pattern(value, false, true)),
-        StringOperator::DoesNotBeginWith { value } => (" NOT LIKE ", like_pattern(value, false, true)),
-        StringOperator::EndsWith { value } => (" LIKE ", like_pattern(value, true, false)),
-        StringOperator::DoesNotEndWith { value } => (" NOT LIKE ", like_pattern(value, true, false)),
-    };
-    query
-        .push("lower(")
-        .push(column)
-        .push(")")
-        .push(comparison)
-        .push_bind(value);
-    if comparison.contains("LIKE") {
-        query.push(" ESCAPE '\\'");
+    match operator {
+        StringOperator::Is { value } => {
+            query.push(column).push(" COLLATE KOMGA_UNICODE_NOCASE = ").push_bind(value.clone());
+        }
+        StringOperator::IsNot { value } => {
+            query.push(column).push(" COLLATE KOMGA_UNICODE_NOCASE <> ").push_bind(value.clone());
+        }
+        _ => {
+            let (comparison, value) = match operator {
+                StringOperator::Contains { value } => (" LIKE ", like_pattern(value, true, true)),
+                StringOperator::DoesNotContain { value } => (" NOT LIKE ", like_pattern(value, true, true)),
+                StringOperator::BeginsWith { value } => (" LIKE ", like_pattern(value, false, true)),
+                StringOperator::DoesNotBeginWith { value } => (" NOT LIKE ", like_pattern(value, false, true)),
+                StringOperator::EndsWith { value } => (" LIKE ", like_pattern(value, true, false)),
+                StringOperator::DoesNotEndWith { value } => (" NOT LIKE ", like_pattern(value, true, false)),
+                StringOperator::Is { .. } | StringOperator::IsNot { .. } => unreachable!("handled above"),
+            };
+            query
+                .push("lower(")
+                .push(column)
+                .push(")")
+                .push(comparison)
+                .push_bind(value)
+                .push(" ESCAPE '\\'");
+        }
     }
 }
 
