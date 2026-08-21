@@ -28,10 +28,13 @@ const KNOWN_SORTS: &[&str] = &[
     "deleteCount",
     "deleteSize",
     "fileSize",
+    "size",
     "createdDate",
+    "created",
     "lastModifiedDate",
+    "lastModified",
 ];
-const UNKNOWN_SORTS: &[&str] = &["hash", "fileSize", "matchCount", "totalSize"];
+const UNKNOWN_SORTS: &[&str] = &["hash", "fileSize", "size", "matchCount", "totalSize"];
 const MATCH_SORTS: &[&str] = &["hash", "fileSize", "url", "bookId", "pageNumber"];
 
 #[derive(Debug, Deserialize)]
