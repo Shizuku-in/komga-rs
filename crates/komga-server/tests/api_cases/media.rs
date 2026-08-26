@@ -553,7 +553,10 @@ async fn book_thumbnail_by_id_enforces_content_restriction() {
         .clone()
         .oneshot(
             Request::get(format!("/api/v1/books/{}/thumbnails/restricted-cover", book.id))
-                .header(header::AUTHORIZATION, basic("thumbnail-age@example.org", "reader-password"))
+                .header(
+                    header::AUTHORIZATION,
+                    basic("thumbnail-age@example.org", "reader-password"),
+                )
                 .body(Body::empty())
                 .unwrap(),
         )

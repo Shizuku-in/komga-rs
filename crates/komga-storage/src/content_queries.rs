@@ -1176,10 +1176,16 @@ fn push_boolean(query: &mut QueryBuilder<'static, Sqlite>, column: &str, operato
 fn push_string_operator(query: &mut QueryBuilder<'static, Sqlite>, column: &str, operator: &StringOperator) {
     match operator {
         StringOperator::Is { value } => {
-            query.push(column).push(" COLLATE KOMGA_UNICODE_NOCASE = ").push_bind(value.clone());
+            query
+                .push(column)
+                .push(" COLLATE KOMGA_UNICODE_NOCASE = ")
+                .push_bind(value.clone());
         }
         StringOperator::IsNot { value } => {
-            query.push(column).push(" COLLATE KOMGA_UNICODE_NOCASE <> ").push_bind(value.clone());
+            query
+                .push(column)
+                .push(" COLLATE KOMGA_UNICODE_NOCASE <> ")
+                .push_bind(value.clone());
         }
         _ => {
             let (comparison, value) = match operator {
