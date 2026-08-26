@@ -4,7 +4,7 @@
 //! payloads use [`Patch`] to distinguish an omitted property from an explicit
 //! JSON `null`, because those operations have different meanings in Komga.
 
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, fmt::Display, str::FromStr};
 
 use chrono::NaiveDate;
 use komga_core::{
@@ -407,6 +407,7 @@ pub(crate) struct SeriesMetadataUpdateDto {
     publisher_lock: Patch<bool>,
     reading_direction: Patch<ReadingDirection>,
     reading_direction_lock: Patch<bool>,
+    #[serde(deserialize_with = "deserialize_numeric_patch")]
     age_rating: Patch<i32>,
     age_rating_lock: Patch<bool>,
     language: Patch<String>,
@@ -415,6 +416,7 @@ pub(crate) struct SeriesMetadataUpdateDto {
     genres_lock: Patch<bool>,
     tags: Patch<BTreeSet<String>>,
     tags_lock: Patch<bool>,
+    #[serde(deserialize_with = "deserialize_numeric_patch")]
     total_book_count: Patch<i32>,
     total_book_count_lock: Patch<bool>,
     sharing_labels: Patch<BTreeSet<String>>,
@@ -503,6 +505,26 @@ where
             Some(value) => Self::Value(value),
             None => Self::Null,
         })
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum NumericValue<T> {
+    Number(T),
+    String(String),
+}
+
+fn deserialize_numeric_patch<'de, D, T>(deserializer: D) -> Result<Patch<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de> + FromStr,
+    T::Err: Display,
+{
+    match Option::<NumericValue<T>>::deserialize(deserializer)? {
+        Some(NumericValue::Number(value)) => Ok(Patch::Value(value)),
+        Some(NumericValue::String(value)) => value.parse().map(Patch::Value).map_err(serde::de::Error::custom),
+        None => Ok(Patch::Null),
     }
 }
 
