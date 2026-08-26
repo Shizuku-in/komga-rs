@@ -12,12 +12,14 @@ The server includes the Komga Web UI and targets the behavior and SQLite schema 
 
 - Responsive Web UI for desktop, tablet, and mobile
 - Library scanning, metadata import and editing, collections, and read lists
-- CBZ/CBR, PDF, fixed-layout/reflowable EPUB, and DRM-free MOBI/AZW reading
+- CBZ/CBR, PDF, fixed-layout/reflowable EPUB, SVG-wrapped Divina pages, and DRM-free MOBI/AZW reading
 - Multiple users with library, age, and sharing-label restrictions
-- Reading progress, downloads, book import, and duplicate management
-- REST API, OAuth2/OIDC, OPDS 1.2 and OPDS 2
+- Reading progress, downloads, book import, PageHash administration, and duplicate management
+- Full-text and structured search with accent-insensitive comparisons and numeric filters
+- REST API with paginated Referential v2 filters, OAuth2/OIDC, OPDS 1.2, and OPDS 2
+- Content-restricted poster and thumbnail delivery
 - Kobo and KOReader synchronization
-- Persistent background tasks, search, metrics, and event streaming
+- Persistent background tasks, metrics, and event streaming
 
 ## Unique Features
 
