@@ -397,11 +397,11 @@ async fn fresh_and_kotlin_databases_share_the_supported_schema_contract() {
     );
     assert_eq!(
         scalar_i64(&fresh_main, "SELECT COUNT(*) FROM _sqlx_migrations WHERE success=1").await,
-        19
+        20
     );
     assert_eq!(
         scalar_i64(&kotlin_main, "SELECT COUNT(*) FROM _sqlx_migrations WHERE success=1").await,
-        19
+        20
     );
     assert_eq!(
         scalar_i64(&fresh_tasks, "SELECT COUNT(*) FROM _sqlx_migrations WHERE success=1").await,
@@ -410,6 +410,47 @@ async fn fresh_and_kotlin_databases_share_the_supported_schema_contract() {
     assert_eq!(
         scalar_i64(&kotlin_tasks, "SELECT COUNT(*) FROM _sqlx_migrations WHERE success=1").await,
         1
+    );
+}
+
+#[tokio::test]
+async fn opens_kotlin_1_26_flyway_history_and_existing_tags_view() {
+    let temporary = tempfile::tempdir().unwrap();
+    let main_database = temporary.path().join("database.sqlite");
+    fs::copy(fixture("database.sqlite"), &main_database).unwrap();
+    execute_sql(
+        &main_database,
+        r#"CREATE VIEW SERIES_AND_BOOK_TAG AS
+           SELECT BMAT.TAG, BMAT.SERIES_ID
+           FROM BOOK_METADATA_AGGREGATION_TAG BMAT
+           UNION ALL
+           SELECT SMT.TAG, SMT.SERIES_ID
+           FROM SERIES_METADATA_TAG SMT"#,
+    )
+    .await;
+    execute_sql(
+        &main_database,
+        r#"INSERT INTO flyway_schema_history
+           (installed_rank,version,description,type,script,checksum,installed_by,execution_time,success)
+           VALUES (91,'20260225161438','tags view','SQL',
+                   'V20260225161438__tags_view.sql',576355040,'test',1,1)"#,
+    )
+    .await;
+
+    let storage = Storage::connect_path(&main_database).await.unwrap();
+    storage.health_check().await.unwrap();
+    drop(storage);
+    assert_eq!(
+        scalar_i64(
+            &main_database,
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='view' AND name='SERIES_AND_BOOK_TAG'"
+        )
+        .await,
+        1
+    );
+    assert_eq!(
+        scalar_i64(&main_database, "SELECT COUNT(*) FROM _sqlx_migrations WHERE success=1").await,
+        20
     );
 }
 
