@@ -45,7 +45,7 @@ struct ApiRoute {
 #[tokio::test]
 async fn core_api_manifest_is_valid_and_every_declared_route_is_registered() {
     let manifest: ApiManifest = serde_json::from_str(MANIFEST).unwrap();
-    assert_eq!(manifest.baseline, "4ef86df");
+    assert_eq!(manifest.baseline, "cba53ed");
     assert_eq!(manifest.scope, "Core Komga HTTP protocols supported by komga-rs");
     assert!(manifest.method_probe.contains("Allow header"));
     assert!(!manifest.exclusions.is_empty());
@@ -107,7 +107,7 @@ async fn core_api_manifest_is_valid_and_every_declared_route_is_registered() {
         }
     }
 
-    assert_eq!(route_count, 207, "update the reviewed baseline count with the manifest");
+    assert_eq!(route_count, 216, "update the reviewed baseline count with the manifest");
 }
 
 #[test]
@@ -128,7 +128,7 @@ fn manifest_contains_every_operation_in_the_pinned_kotlin_openapi() {
     }
     assert_eq!(
         kotlin_operations.len(),
-        165,
+        174,
         "the pinned Kotlin OpenAPI baseline changed"
     );
 
