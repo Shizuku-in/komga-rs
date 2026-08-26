@@ -2,8 +2,8 @@ use axum::{
     Json,
     extract::{Extension, RawQuery, State},
 };
-use komga_core::AuthorDto;
-use komga_storage::{ReferentialScope, author_page_request};
+use komga_core::{AuthorDto, ContentPage};
+use komga_storage::{ReferentialFilter, ReferentialScope, ReferentialTagSource};
 
 use crate::{AppState, auth::AuthContext, error::ApiError, pagination::SpringPage, pagination::parse_page_request};
 
@@ -12,9 +12,11 @@ struct ReferentialQuery {
     search: Option<String>,
     role: Option<String>,
     library_ids: Vec<String>,
-    collection_id: Option<String>,
-    series_id: Option<String>,
-    read_list_id: Option<String>,
+    collection_ids: Vec<String>,
+    series_ids: Vec<String>,
+    read_list_ids: Vec<String>,
+    tag_source: Option<ReferentialTagSource>,
+    invalid_tag_source: bool,
 }
 
 fn parse_query(raw: Option<&str>) -> ReferentialQuery {
@@ -24,9 +26,20 @@ fn parse_query(raw: Option<&str>) -> ReferentialQuery {
             "search" => query.search = Some(value.into_owned()),
             "role" => query.role = Some(value.into_owned()),
             "library_id" => query.library_ids.push(value.into_owned()),
-            "collection_id" => query.collection_id = Some(value.into_owned()),
-            "series_id" => query.series_id = Some(value.into_owned()),
-            "readlist_id" => query.read_list_id = Some(value.into_owned()),
+            "collection_id" => query.collection_ids.push(value.into_owned()),
+            "series_id" => query.series_ids.push(value.into_owned()),
+            "readlist_id" => query.read_list_ids.push(value.into_owned()),
+            "include" => {
+                query.tag_source = match value.as_ref() {
+                    "SERIES" => Some(ReferentialTagSource::Series),
+                    "BOOK" => Some(ReferentialTagSource::Book),
+                    "BOTH" => Some(ReferentialTagSource::Both),
+                    _ => {
+                        query.invalid_tag_source = true;
+                        None
+                    }
+                }
+            }
             _ => {}
         }
     }
@@ -36,11 +49,11 @@ fn parse_query(raw: Option<&str>) -> ReferentialQuery {
 fn author_scope(query: &ReferentialQuery) -> ReferentialScope {
     if !query.library_ids.is_empty() {
         ReferentialScope::Libraries(query.library_ids.clone())
-    } else if let Some(id) = &query.collection_id {
+    } else if let Some(id) = query.collection_ids.first() {
         ReferentialScope::Collection(id.clone())
-    } else if let Some(id) = &query.series_id {
+    } else if let Some(id) = query.series_ids.first() {
         ReferentialScope::Series(id.clone())
-    } else if let Some(id) = &query.read_list_id {
+    } else if let Some(id) = query.read_list_ids.first() {
         ReferentialScope::ReadList(id.clone())
     } else {
         ReferentialScope::Global
@@ -50,7 +63,7 @@ fn author_scope(query: &ReferentialQuery) -> ReferentialScope {
 fn series_scope(query: &ReferentialQuery) -> ReferentialScope {
     if !query.library_ids.is_empty() {
         ReferentialScope::Libraries(query.library_ids.clone())
-    } else if let Some(id) = &query.collection_id {
+    } else if let Some(id) = query.collection_ids.first() {
         ReferentialScope::Collection(id.clone())
     } else {
         ReferentialScope::Global
@@ -58,15 +71,43 @@ fn series_scope(query: &ReferentialQuery) -> ReferentialScope {
 }
 
 fn book_tag_scope(query: &ReferentialQuery) -> ReferentialScope {
-    if let Some(id) = &query.series_id {
+    if let Some(id) = query.series_ids.first() {
         ReferentialScope::Series(id.clone())
-    } else if let Some(id) = &query.read_list_id {
+    } else if let Some(id) = query.read_list_ids.first() {
         ReferentialScope::ReadList(id.clone())
     } else if !query.library_ids.is_empty() {
         ReferentialScope::Libraries(query.library_ids.clone())
     } else {
         ReferentialScope::Global
     }
+}
+
+fn v2_filter(query: &ReferentialQuery) -> ReferentialFilter {
+    if !query.library_ids.is_empty() {
+        ReferentialFilter::Libraries(query.library_ids.clone())
+    } else if !query.collection_ids.is_empty() {
+        ReferentialFilter::Collections(query.collection_ids.clone())
+    } else if !query.series_ids.is_empty() {
+        ReferentialFilter::Series(query.series_ids.clone())
+    } else if !query.read_list_ids.is_empty() {
+        ReferentialFilter::ReadLists(query.read_list_ids.clone())
+    } else {
+        ReferentialFilter::Global
+    }
+}
+
+fn v2_series_filter(query: &ReferentialQuery) -> ReferentialFilter {
+    if !query.library_ids.is_empty() {
+        ReferentialFilter::Libraries(query.library_ids.clone())
+    } else if !query.collection_ids.is_empty() {
+        ReferentialFilter::Collections(query.collection_ids.clone())
+    } else {
+        ReferentialFilter::Global
+    }
+}
+
+fn spring_page<T>(page: ContentPage<T>) -> Json<SpringPage<T>> {
+    Json(SpringPage::from_content(page))
 }
 
 pub(crate) async fn authors_v1(
@@ -93,18 +134,178 @@ pub(crate) async fn authors_v2(
     RawQuery(raw): RawQuery,
 ) -> Result<Json<SpringPage<AuthorDto>>, ApiError> {
     let query = parse_query(raw.as_deref());
-    let page = author_page_request(parse_page_request(raw.as_deref())?);
+    let page = parse_page_request(raw.as_deref())?;
     let authors = state
         .storage
         .referential_v2_authors(
-            &author_scope(&query),
+            &v2_filter(&query),
             query.search.as_deref(),
             query.role.as_deref(),
             &page,
             &auth.user,
         )
         .await?;
-    Ok(Json(SpringPage::from_content(authors)))
+    Ok(spring_page(authors))
+}
+
+pub(crate) async fn author_names_v2(
+    State(state): State<AppState>,
+    Extension(auth): Extension<AuthContext>,
+    RawQuery(raw): RawQuery,
+) -> Result<Json<SpringPage<String>>, ApiError> {
+    let query = parse_query(raw.as_deref());
+    let page = state
+        .storage
+        .referential_v2_author_names(
+            &v2_filter(&query),
+            query.search.as_deref(),
+            query.role.as_deref(),
+            &parse_page_request(raw.as_deref())?,
+            &auth.user,
+        )
+        .await?;
+    Ok(spring_page(page))
+}
+
+pub(crate) async fn author_roles_v2(
+    State(state): State<AppState>,
+    Extension(auth): Extension<AuthContext>,
+    RawQuery(raw): RawQuery,
+) -> Result<Json<SpringPage<String>>, ApiError> {
+    let query = parse_query(raw.as_deref());
+    let page = state
+        .storage
+        .referential_v2_author_roles(&v2_filter(&query), &parse_page_request(raw.as_deref())?, &auth.user)
+        .await?;
+    Ok(spring_page(page))
+}
+
+pub(crate) async fn genres_v2(
+    State(state): State<AppState>,
+    Extension(auth): Extension<AuthContext>,
+    RawQuery(raw): RawQuery,
+) -> Result<Json<SpringPage<String>>, ApiError> {
+    let query = parse_query(raw.as_deref());
+    let page = state
+        .storage
+        .referential_v2_genres(
+            &v2_series_filter(&query),
+            query.search.as_deref(),
+            &parse_page_request(raw.as_deref())?,
+            &auth.user,
+        )
+        .await?;
+    Ok(spring_page(page))
+}
+
+pub(crate) async fn sharing_labels_v2(
+    State(state): State<AppState>,
+    Extension(auth): Extension<AuthContext>,
+    RawQuery(raw): RawQuery,
+) -> Result<Json<SpringPage<String>>, ApiError> {
+    let query = parse_query(raw.as_deref());
+    let page = state
+        .storage
+        .referential_v2_sharing_labels(
+            &v2_series_filter(&query),
+            query.search.as_deref(),
+            &parse_page_request(raw.as_deref())?,
+            &auth.user,
+        )
+        .await?;
+    Ok(spring_page(page))
+}
+
+pub(crate) async fn languages_v2(
+    State(state): State<AppState>,
+    Extension(auth): Extension<AuthContext>,
+    RawQuery(raw): RawQuery,
+) -> Result<Json<SpringPage<String>>, ApiError> {
+    let query = parse_query(raw.as_deref());
+    let page = state
+        .storage
+        .referential_v2_languages(
+            &v2_series_filter(&query),
+            query.search.as_deref(),
+            &parse_page_request(raw.as_deref())?,
+            &auth.user,
+        )
+        .await?;
+    Ok(spring_page(page))
+}
+
+pub(crate) async fn publishers_v2(
+    State(state): State<AppState>,
+    Extension(auth): Extension<AuthContext>,
+    RawQuery(raw): RawQuery,
+) -> Result<Json<SpringPage<String>>, ApiError> {
+    let query = parse_query(raw.as_deref());
+    let page = state
+        .storage
+        .referential_v2_publishers(
+            &v2_series_filter(&query),
+            query.search.as_deref(),
+            &parse_page_request(raw.as_deref())?,
+            &auth.user,
+        )
+        .await?;
+    Ok(spring_page(page))
+}
+
+pub(crate) async fn tags_v2(
+    State(state): State<AppState>,
+    Extension(auth): Extension<AuthContext>,
+    RawQuery(raw): RawQuery,
+) -> Result<Json<SpringPage<String>>, ApiError> {
+    let query = parse_query(raw.as_deref());
+    if query.invalid_tag_source {
+        return Err(ApiError::bad_request("include must be SERIES, BOOK, or BOTH"));
+    }
+    let page = state
+        .storage
+        .referential_v2_tags(
+            &v2_filter(&query),
+            query.search.as_deref(),
+            query.tag_source.unwrap_or(ReferentialTagSource::Both),
+            &parse_page_request(raw.as_deref())?,
+            &auth.user,
+        )
+        .await?;
+    Ok(spring_page(page))
+}
+
+pub(crate) async fn series_release_years_v2(
+    State(state): State<AppState>,
+    Extension(auth): Extension<AuthContext>,
+    RawQuery(raw): RawQuery,
+) -> Result<Json<SpringPage<String>>, ApiError> {
+    let query = parse_query(raw.as_deref());
+    let page = state
+        .storage
+        .referential_v2_release_years(
+            &v2_series_filter(&query),
+            &parse_page_request(raw.as_deref())?,
+            &auth.user,
+        )
+        .await?;
+    Ok(spring_page(page))
+}
+
+pub(crate) async fn age_ratings_v2(
+    State(state): State<AppState>,
+    Extension(auth): Extension<AuthContext>,
+    RawQuery(raw): RawQuery,
+) -> Result<Json<SpringPage<i32>>, ApiError> {
+    let query = parse_query(raw.as_deref());
+    let page = state
+        .storage
+        .referential_v2_age_ratings(
+            &v2_series_filter(&query),
+            &parse_page_request(raw.as_deref())?,
+            &auth.user,
+        )
+        .await?;
+    Ok(spring_page(page))
 }
 
 pub(crate) async fn author_names(

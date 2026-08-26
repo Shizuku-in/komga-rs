@@ -8,7 +8,7 @@ use unicode_normalization::{UnicodeNormalization, char::is_combining_mark};
 
 use crate::{
     Result, Storage, StorageError,
-    query_support::{content_page, push_library_visibility, validate_page},
+    query_support::{content_page, push_content_visibility, push_library_visibility, validate_page},
 };
 
 /// Scope selected by referential endpoint query parameters.
@@ -24,6 +24,32 @@ pub enum ReferentialScope {
     Series(String),
     /// Series represented by books in one read list.
     ReadList(String),
+}
+
+/// Multi-value scope used by the paginated v2 Referential API.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReferentialFilter {
+    /// All authorized content.
+    Global,
+    /// Content in any of the supplied libraries.
+    Libraries(Vec<String>),
+    /// Content represented by any of the supplied collections.
+    Collections(Vec<String>),
+    /// Content in any of the supplied Series.
+    Series(Vec<String>),
+    /// Content represented by any of the supplied read lists.
+    ReadLists(Vec<String>),
+}
+
+/// Tag source selected by the v2 Referential API.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReferentialTagSource {
+    /// Series metadata tags only.
+    Series,
+    /// Book metadata tags only.
+    Book,
+    /// The union of Series tags and aggregated Book tags.
+    Both,
 }
 
 impl Storage {
@@ -44,7 +70,7 @@ impl Storage {
         Ok(filter_authors(rows, Some(search), None))
     }
 
-    /// Lists and paginates v2 authors from Series author aggregation.
+    /// Lists and paginates v2 authors from direct Book metadata.
     ///
     /// # Errors
     ///
@@ -52,27 +78,74 @@ impl Storage {
     /// when author relations cannot be queried.
     pub async fn referential_v2_authors(
         &self,
-        scope: &ReferentialScope,
+        filter: &ReferentialFilter,
         search: Option<&str>,
         role: Option<&str>,
         page: &PageRequest,
         user: &User,
     ) -> Result<ContentPage<AuthorDto>> {
-        validate_page(page)?;
-        let rows = self.author_rows(scope, user, false).await?;
+        let rows = self.v2_author_rows(filter, user).await?;
         let rows = filter_authors(rows, search, role);
-        let total =
-            u64::try_from(rows.len()).map_err(|_| StorageError::InvalidData("author count is too large".into()))?;
-        let content = if page.unpaged {
-            rows
-        } else {
-            let start = usize::try_from(page.page * page.size)
-                .map_err(|_| StorageError::InvalidQuery("page offset is too large".into()))?;
-            let size =
-                usize::try_from(page.size).map_err(|_| StorageError::InvalidQuery("page size is too large".into()))?;
-            rows.into_iter().skip(start).take(size).collect()
-        };
-        Ok(content_page(content, total, page))
+        paginate_rows(rows, page, "name", SortDirection::Ascending)
+    }
+
+    /// Lists and paginates v2 author names from direct Book metadata.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-query error for invalid paging, or a database error
+    /// when author relations cannot be queried.
+    pub async fn referential_v2_author_names(
+        &self,
+        filter: &ReferentialFilter,
+        search: Option<&str>,
+        role: Option<&str>,
+        page: &PageRequest,
+        user: &User,
+    ) -> Result<ContentPage<String>> {
+        let rows = filter_authors(self.v2_author_rows(filter, user).await?, search, role);
+        let mut names = rows.into_iter().map(|author| author.name).collect::<Vec<_>>();
+        names.dedup();
+        paginate_rows(names, page, "name", SortDirection::Ascending)
+    }
+
+    /// Lists and paginates v2 author roles from direct Book metadata.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-query error for invalid paging, or a database error
+    /// when author relations cannot be queried.
+    pub async fn referential_v2_author_roles(
+        &self,
+        filter: &ReferentialFilter,
+        page: &PageRequest,
+        user: &User,
+    ) -> Result<ContentPage<String>> {
+        let mut roles = self
+            .v2_author_rows(filter, user)
+            .await?
+            .into_iter()
+            .map(|author| author.role)
+            .collect::<Vec<_>>();
+        roles.sort();
+        roles.dedup();
+        paginate_rows(roles, page, "role", SortDirection::Ascending)
+    }
+
+    async fn v2_author_rows(&self, filter: &ReferentialFilter, user: &User) -> Result<Vec<AuthorDto>> {
+        let mut query = QueryBuilder::new(
+            "SELECT DISTINCT authors.NAME, authors.ROLE FROM BOOK_METADATA_AUTHOR authors \
+             JOIN BOOK b ON b.ID = authors.BOOK_ID \
+             JOIN SERIES s ON s.ID = b.SERIES_ID \
+             JOIN SERIES_METADATA sm ON sm.SERIES_ID = s.ID ",
+        );
+        push_v2_scope_joins(&mut query, filter, "b.ID", "b.SERIES_ID", true);
+        query.push("WHERE 1 = 1");
+        push_library_visibility(&mut query, "b.LIBRARY_ID", user);
+        push_content_visibility(&mut query, "b.SERIES_ID", user);
+        push_v2_scope_filter(&mut query, filter, "b.LIBRARY_ID", "b.SERIES_ID");
+        let rows = query.build_query_as::<(String, String)>().fetch_all(&self.pool).await?;
+        Ok(rows.into_iter().map(|(name, role)| AuthorDto { name, role }).collect())
     }
 
     async fn author_rows(
@@ -294,6 +367,298 @@ impl Storage {
         years.sort_by(|left, right| right.cmp(left));
         Ok(years)
     }
+
+    /// Lists and paginates v2 genres.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-query error for invalid paging, or a database error.
+    pub async fn referential_v2_genres(
+        &self,
+        filter: &ReferentialFilter,
+        search: Option<&str>,
+        page: &PageRequest,
+        user: &User,
+    ) -> Result<ContentPage<String>> {
+        self.v2_series_string_page(("SERIES_METADATA_GENRE", "GENRE", false), filter, search, page, user)
+            .await
+    }
+
+    /// Lists and paginates v2 sharing labels.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-query error for invalid paging, or a database error.
+    pub async fn referential_v2_sharing_labels(
+        &self,
+        filter: &ReferentialFilter,
+        search: Option<&str>,
+        page: &PageRequest,
+        user: &User,
+    ) -> Result<ContentPage<String>> {
+        self.v2_series_string_page(("SERIES_METADATA_SHARING", "LABEL", false), filter, search, page, user)
+            .await
+    }
+
+    /// Lists and paginates v2 languages.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-query error for invalid paging, or a database error.
+    pub async fn referential_v2_languages(
+        &self,
+        filter: &ReferentialFilter,
+        search: Option<&str>,
+        page: &PageRequest,
+        user: &User,
+    ) -> Result<ContentPage<String>> {
+        self.v2_series_string_page(("SERIES_METADATA", "LANGUAGE", true), filter, search, page, user)
+            .await
+    }
+
+    /// Lists and paginates v2 publishers.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-query error for invalid paging, or a database error.
+    pub async fn referential_v2_publishers(
+        &self,
+        filter: &ReferentialFilter,
+        search: Option<&str>,
+        page: &PageRequest,
+        user: &User,
+    ) -> Result<ContentPage<String>> {
+        self.v2_series_string_page(("SERIES_METADATA", "PUBLISHER", true), filter, search, page, user)
+            .await
+    }
+
+    async fn v2_series_string_page(
+        &self,
+        source: (&str, &str, bool),
+        filter: &ReferentialFilter,
+        search: Option<&str>,
+        page: &PageRequest,
+        user: &User,
+    ) -> Result<ContentPage<String>> {
+        let (table, column, exclude_empty) = source;
+        let mut query = QueryBuilder::new("SELECT DISTINCT values_table.");
+        query.push(column).push(" FROM ").push(table).push(
+            " values_table JOIN SERIES s ON s.ID = values_table.SERIES_ID \
+                   JOIN SERIES_METADATA sm ON sm.SERIES_ID = s.ID ",
+        );
+        push_v2_scope_joins(&mut query, filter, "b.ID", "values_table.SERIES_ID", false);
+        query.push("WHERE 1 = 1");
+        if exclude_empty {
+            query.push(" AND values_table.").push(column).push(" <> ''");
+        }
+        push_library_visibility(&mut query, "s.LIBRARY_ID", user);
+        push_content_visibility(&mut query, "values_table.SERIES_ID", user);
+        push_v2_scope_filter(&mut query, filter, "s.LIBRARY_ID", "values_table.SERIES_ID");
+        let mut values = query.build_query_scalar::<String>().fetch_all(&self.pool).await?;
+        sort_strings(&mut values);
+        values.retain(|value| search.is_none_or(|search| contains_normalized(value, search)));
+        paginate_rows(values, page, column.to_ascii_lowercase(), SortDirection::Ascending)
+    }
+
+    /// Lists and paginates v2 tags from the requested metadata source.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-query error for invalid paging, or a database error.
+    pub async fn referential_v2_tags(
+        &self,
+        filter: &ReferentialFilter,
+        search: Option<&str>,
+        source: ReferentialTagSource,
+        page: &PageRequest,
+        user: &User,
+    ) -> Result<ContentPage<String>> {
+        let mut values = match source {
+            ReferentialTagSource::Series => self.v2_series_tags(filter, user).await?,
+            ReferentialTagSource::Book => self.v2_book_tags(filter, user).await?,
+            ReferentialTagSource::Both => {
+                let mut values = self.v2_aggregated_book_tags(filter, user).await?;
+                values.extend(self.v2_series_tags(filter, user).await?);
+                values
+            }
+        };
+        sort_strings(&mut values);
+        values.dedup();
+        values.retain(|value| search.is_none_or(|search| contains_normalized(value, search)));
+        paginate_rows(values, page, "tag", SortDirection::Ascending)
+    }
+
+    async fn v2_series_tags(&self, filter: &ReferentialFilter, user: &User) -> Result<Vec<String>> {
+        self.v2_series_values("SERIES_METADATA_TAG", "TAG", filter, user).await
+    }
+
+    async fn v2_aggregated_book_tags(&self, filter: &ReferentialFilter, user: &User) -> Result<Vec<String>> {
+        self.v2_series_values("BOOK_METADATA_AGGREGATION_TAG", "TAG", filter, user)
+            .await
+    }
+
+    async fn v2_series_values(
+        &self,
+        table: &str,
+        column: &str,
+        filter: &ReferentialFilter,
+        user: &User,
+    ) -> Result<Vec<String>> {
+        let mut query = QueryBuilder::new("SELECT DISTINCT values_table.");
+        query.push(column).push(" FROM ").push(table).push(
+            " values_table JOIN SERIES s ON s.ID = values_table.SERIES_ID \
+                   JOIN SERIES_METADATA sm ON sm.SERIES_ID = s.ID ",
+        );
+        push_v2_scope_joins(&mut query, filter, "b.ID", "values_table.SERIES_ID", false);
+        query.push("WHERE 1 = 1");
+        push_library_visibility(&mut query, "s.LIBRARY_ID", user);
+        push_content_visibility(&mut query, "values_table.SERIES_ID", user);
+        push_v2_scope_filter(&mut query, filter, "s.LIBRARY_ID", "values_table.SERIES_ID");
+        Ok(query.build_query_scalar::<String>().fetch_all(&self.pool).await?)
+    }
+
+    async fn v2_book_tags(&self, filter: &ReferentialFilter, user: &User) -> Result<Vec<String>> {
+        let mut query = QueryBuilder::new(
+            "SELECT DISTINCT tags.TAG FROM BOOK_METADATA_TAG tags \
+             JOIN BOOK b ON b.ID = tags.BOOK_ID \
+             JOIN SERIES s ON s.ID = b.SERIES_ID \
+             JOIN SERIES_METADATA sm ON sm.SERIES_ID = s.ID ",
+        );
+        push_v2_scope_joins(&mut query, filter, "b.ID", "b.SERIES_ID", true);
+        query.push("WHERE 1 = 1");
+        push_library_visibility(&mut query, "b.LIBRARY_ID", user);
+        push_content_visibility(&mut query, "b.SERIES_ID", user);
+        push_v2_scope_filter(&mut query, filter, "b.LIBRARY_ID", "b.SERIES_ID");
+        Ok(query.build_query_scalar::<String>().fetch_all(&self.pool).await?)
+    }
+
+    /// Lists and paginates non-null v2 age ratings.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-query error for invalid paging, or a database error.
+    pub async fn referential_v2_age_ratings(
+        &self,
+        filter: &ReferentialFilter,
+        page: &PageRequest,
+        user: &User,
+    ) -> Result<ContentPage<i32>> {
+        let mut query = QueryBuilder::new(
+            "SELECT DISTINCT sm.AGE_RATING FROM SERIES_METADATA sm \
+             JOIN SERIES s ON s.ID = sm.SERIES_ID ",
+        );
+        push_v2_scope_joins(&mut query, filter, "b.ID", "sm.SERIES_ID", false);
+        query.push("WHERE sm.AGE_RATING IS NOT NULL");
+        push_library_visibility(&mut query, "s.LIBRARY_ID", user);
+        push_content_visibility(&mut query, "sm.SERIES_ID", user);
+        push_v2_scope_filter(&mut query, filter, "s.LIBRARY_ID", "sm.SERIES_ID");
+        let mut values = query.build_query_scalar::<i32>().fetch_all(&self.pool).await?;
+        values.sort_unstable();
+        paginate_rows(values, page, "ageRating", SortDirection::Ascending)
+    }
+
+    /// Lists and paginates v2 Series release years in descending order.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-query error for invalid paging, or a database error.
+    pub async fn referential_v2_release_years(
+        &self,
+        filter: &ReferentialFilter,
+        page: &PageRequest,
+        user: &User,
+    ) -> Result<ContentPage<String>> {
+        let mut query = QueryBuilder::new(
+            "SELECT DISTINCT bma.RELEASE_DATE FROM BOOK_METADATA_AGGREGATION bma \
+             JOIN SERIES s ON s.ID = bma.SERIES_ID \
+             JOIN SERIES_METADATA sm ON sm.SERIES_ID = s.ID ",
+        );
+        push_v2_scope_joins(&mut query, filter, "b.ID", "bma.SERIES_ID", false);
+        query.push("WHERE bma.RELEASE_DATE IS NOT NULL");
+        push_library_visibility(&mut query, "s.LIBRARY_ID", user);
+        push_content_visibility(&mut query, "bma.SERIES_ID", user);
+        push_v2_scope_filter(&mut query, filter, "s.LIBRARY_ID", "bma.SERIES_ID");
+        let dates = query.build_query_scalar::<String>().fetch_all(&self.pool).await?;
+        let mut years = dates
+            .into_iter()
+            .filter_map(|date| date.get(..4)?.parse::<i32>().ok())
+            .collect::<Vec<_>>();
+        years.sort_by(|left, right| right.cmp(left));
+        years.dedup();
+        let years = years.into_iter().map(|year| year.to_string()).collect();
+        paginate_rows(years, page, "year", SortDirection::Descending)
+    }
+}
+
+fn push_v2_scope_joins(
+    query: &mut QueryBuilder<'static, Sqlite>,
+    filter: &ReferentialFilter,
+    book_column: &str,
+    series_column: &str,
+    has_book: bool,
+) {
+    match filter {
+        ReferentialFilter::Collections(_) => {
+            query
+                .push("JOIN COLLECTION_SERIES cs ON cs.SERIES_ID = ")
+                .push(series_column)
+                .push(' ');
+        }
+        ReferentialFilter::ReadLists(_) => {
+            if !has_book {
+                query
+                    .push("JOIN BOOK b ON b.SERIES_ID = ")
+                    .push(series_column)
+                    .push(' ');
+            }
+            query
+                .push("JOIN READLIST_BOOK rb ON rb.BOOK_ID = ")
+                .push(book_column)
+                .push(' ');
+        }
+        ReferentialFilter::Global | ReferentialFilter::Libraries(_) | ReferentialFilter::Series(_) => {}
+    }
+}
+
+fn push_v2_scope_filter(
+    query: &mut QueryBuilder<'static, Sqlite>,
+    filter: &ReferentialFilter,
+    library_column: &str,
+    series_column: &str,
+) {
+    match filter {
+        ReferentialFilter::Global => {}
+        ReferentialFilter::Libraries(ids) => push_values(query, library_column, ids),
+        ReferentialFilter::Collections(ids) => push_values(query, "cs.COLLECTION_ID", ids),
+        ReferentialFilter::Series(ids) => push_values(query, series_column, ids),
+        ReferentialFilter::ReadLists(ids) => push_values(query, "rb.READLIST_ID", ids),
+    }
+}
+
+fn paginate_rows<T>(
+    rows: Vec<T>,
+    page: &PageRequest,
+    property: impl Into<String>,
+    direction: SortDirection,
+) -> Result<ContentPage<T>> {
+    validate_page(page)?;
+    let total =
+        u64::try_from(rows.len()).map_err(|_| StorageError::InvalidData("referential count is too large".into()))?;
+    let content = if page.unpaged {
+        rows
+    } else {
+        let start = usize::try_from(page.page * page.size)
+            .map_err(|_| StorageError::InvalidQuery("page offset is too large".into()))?;
+        let size =
+            usize::try_from(page.size).map_err(|_| StorageError::InvalidQuery("page size is too large".into()))?;
+        rows.into_iter().skip(start).take(size).collect()
+    };
+    let mut request = page.clone();
+    request.sort = vec![SortOrder {
+        property: property.into(),
+        direction,
+    }];
+    Ok(content_page(content, total, &request))
 }
 
 fn scoped_series_metadata_query(column: &str, scope: &ReferentialScope) -> QueryBuilder<'static, Sqlite> {
@@ -384,15 +749,6 @@ fn normalized(value: &str) -> String {
 
 fn sort_strings(values: &mut [String]) {
     values.sort_by(|left, right| normalized(left).cmp(&normalized(right)).then_with(|| left.cmp(right)));
-}
-
-/// Returns the fixed sort metadata used by the Kotlin v2 author page.
-pub fn author_page_request(mut page: PageRequest) -> PageRequest {
-    page.sort = vec![SortOrder {
-        property: "relevance".into(),
-        direction: SortDirection::Ascending,
-    }];
-    page
 }
 
 #[cfg(test)]
@@ -520,16 +876,17 @@ mod tests {
         );
         assert_eq!(storage.referential_author_roles(&user).await.unwrap(), ["writer"]);
 
+        let unrestricted = User::new("admin@example.org".into(), "hash".into());
         let author_page = storage
             .referential_v2_authors(
-                &ReferentialScope::ReadList("readlist".into()),
+                &ReferentialFilter::ReadLists(vec!["readlist".into()]),
                 Some("JOSE"),
                 Some("writer"),
-                &author_page_request(PageRequest {
+                &PageRequest {
                     size: 1,
                     ..PageRequest::default()
-                }),
-                &user,
+                },
+                &unrestricted,
             )
             .await
             .unwrap();
