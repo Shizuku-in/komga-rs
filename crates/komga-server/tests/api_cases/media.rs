@@ -309,8 +309,8 @@ async fn avif_pages_are_analyzed_served_and_converted() {
 fn hex_fixture(value: &str) -> Vec<u8> {
     value
         .split_ascii_whitespace()
-        .flat_map(|line| line.as_bytes().chunks_exact(2))
-        .map(|byte| u8::from_str_radix(std::str::from_utf8(byte).unwrap(), 16).unwrap())
+        .flat_map(|line| line.as_bytes().as_chunks::<2>().0.iter().copied())
+        .map(|byte| u8::from_str_radix(std::str::from_utf8(&byte).unwrap(), 16).unwrap())
         .collect()
 }
 

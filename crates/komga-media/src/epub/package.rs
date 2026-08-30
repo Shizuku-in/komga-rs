@@ -258,12 +258,9 @@ pub(crate) fn decode_xml_text(bytes: &[u8]) -> Result<String, String> {
 }
 
 fn decode_utf16(bytes: &[u8], decode: fn([u8; 2]) -> u16) -> Result<String, String> {
-    let mut chunks = bytes.chunks_exact(2);
-    let code_units = chunks
-        .by_ref()
-        .map(|chunk| decode([chunk[0], chunk[1]]))
-        .collect::<Vec<_>>();
-    if !chunks.remainder().is_empty() {
+    let (chunks, remainder) = bytes.as_chunks::<2>();
+    let code_units = chunks.iter().map(|chunk| decode(*chunk)).collect::<Vec<_>>();
+    if !remainder.is_empty() {
         return Err("UTF-16 EPUB resource has an odd byte length".to_owned());
     }
     String::from_utf16(&code_units).map_err(|error| error.to_string())
