@@ -147,15 +147,71 @@ async fn referential_routes_enforce_sources_scope_priority_authorization_and_ord
     .await;
     assert_eq!(libraries_win, serde_json::json!([]));
 
-    let v2 = get_json(&app, "/api/v2/authors?search=jose&role=writer&page=0&size=1", &reader).await;
+    let v2 = get_json(&app, "/api/v2/authors?search=direct&role=editor&page=0&size=1", &admin).await;
     assert_eq!(v2["totalElements"], 1);
     assert_eq!(v2["totalPages"], 1);
     assert_eq!(v2["numberOfElements"], 1);
     assert_eq!(v2["sort"]["sorted"], true);
-    assert_eq!(v2["content"][0]["name"], "José Alvarez");
-    let v2_unpaged = get_json(&app, "/api/v2/authors?readlist_id=readlist&unpaged=true", &reader).await;
+    assert_eq!(v2["content"][0]["name"], "Direct Only");
+    let v2_unpaged = get_json(&app, "/api/v2/authors?readlist_id=readlist&unpaged=true", &admin).await;
     assert_eq!(v2_unpaged["size"], 20);
-    assert_eq!(v2_unpaged["content"][0]["name"], "José Alvarez");
+    assert_eq!(v2_unpaged["content"][0]["name"], "Direct Only");
+    assert_eq!(
+        get_json(&app, "/api/v2/authors?search=direct", &reader).await["totalElements"],
+        0
+    );
+
+    for (path, expected) in [
+        (
+            "/api/v2/authors/names?search=direct",
+            serde_json::json!(["Direct Only"]),
+        ),
+        ("/api/v2/authors/roles", serde_json::json!(["artist", "editor"])),
+        ("/api/v2/genres?search=fant", serde_json::json!(["Fantasy"])),
+        ("/api/v2/sharing-labels", serde_json::json!(["adult"])),
+        ("/api/v2/languages", serde_json::json!(["en"])),
+        ("/api/v2/publishers", serde_json::json!(["Publisher"])),
+        ("/api/v2/tags?include=SERIES", serde_json::json!(["SeriesTag"])),
+        ("/api/v2/tags?include=BOOK", serde_json::json!(["BookTag"])),
+        ("/api/v2/tags?include=BOTH", serde_json::json!(["BookTag", "SeriesTag"])),
+        ("/api/v2/series/release-years", serde_json::json!(["2024"])),
+        ("/api/v2/age-ratings", serde_json::json!([18])),
+    ] {
+        let page = get_json(&app, path, &admin).await;
+        assert_eq!(page["content"], expected, "{path}");
+        assert_eq!(page["sort"]["sorted"], true, "{path}");
+    }
+
+    let restricted_genres = get_json(&app, "/api/v2/genres", &reader).await;
+    assert_eq!(restricted_genres["content"], serde_json::json!([]));
+    let multi_collection = get_json(
+        &app,
+        "/api/v2/genres?collection_id=missing&collection_id=collection",
+        &admin,
+    )
+    .await;
+    assert_eq!(multi_collection["content"], serde_json::json!(["Fantasy"]));
+    let v2_libraries_win = get_json(
+        &app,
+        &format!("/api/v2/genres?library_id={hidden_id}&collection_id=collection"),
+        &admin,
+    )
+    .await;
+    assert_eq!(v2_libraries_win["content"], serde_json::json!([]));
+    let read_list_tags = get_json(&app, "/api/v2/tags?readlist_id=readlist&include=BOOK", &admin).await;
+    assert_eq!(read_list_tags["content"], serde_json::json!(["BookTag"]));
+
+    let invalid_include = app
+        .clone()
+        .oneshot(
+            Request::get("/api/v2/tags?include=UNKNOWN")
+                .header(header::AUTHORIZATION, &admin)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(invalid_include.status(), StatusCode::BAD_REQUEST);
 
     assert_eq!(
         get_json(&app, "/api/v1/authors/names?search=direct", &reader).await,

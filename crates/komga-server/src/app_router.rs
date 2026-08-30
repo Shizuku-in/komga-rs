@@ -238,6 +238,18 @@ fn protected_api() -> Router<AppState> {
         .route("/api/logout", get(routes::logout).post(routes::logout))
         .route("/api/v1/authors", get(referential_routes::authors_v1))
         .route("/api/v2/authors", get(referential_routes::authors_v2))
+        .route("/api/v2/authors/names", get(referential_routes::author_names_v2))
+        .route("/api/v2/authors/roles", get(referential_routes::author_roles_v2))
+        .route("/api/v2/genres", get(referential_routes::genres_v2))
+        .route("/api/v2/sharing-labels", get(referential_routes::sharing_labels_v2))
+        .route("/api/v2/languages", get(referential_routes::languages_v2))
+        .route("/api/v2/publishers", get(referential_routes::publishers_v2))
+        .route("/api/v2/tags", get(referential_routes::tags_v2))
+        .route(
+            "/api/v2/series/release-years",
+            get(referential_routes::series_release_years_v2),
+        )
+        .route("/api/v2/age-ratings", get(referential_routes::age_ratings_v2))
         .route("/api/v1/authors/names", get(referential_routes::author_names))
         .route("/api/v1/authors/roles", get(referential_routes::author_roles))
         .route("/api/v1/genres", get(referential_routes::genres))

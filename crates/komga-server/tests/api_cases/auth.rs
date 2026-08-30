@@ -499,6 +499,76 @@ async fn admin_can_create_and_restrict_users_but_cannot_mutate_itself() {
 }
 
 #[tokio::test]
+async fn user_age_restriction_accepts_webui_string_ages() {
+    let storage = Storage::connect_memory().await.unwrap();
+    let app = app_with_storage(storage.clone()).await;
+    claim(&app).await;
+    let admin = basic("admin@example.org", "password");
+
+    let created = app
+        .clone()
+        .oneshot(
+            Request::post("/api/v2/users")
+                .header(header::AUTHORIZATION, &admin)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    r#"{"email":"reader@example.org","password":"reader-password"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let reader_id = body_json(created).await["id"].as_str().unwrap().to_owned();
+
+    // The Web UI binds the age to a text input, so edits arrive as strings.
+    let updated = app
+        .clone()
+        .oneshot(
+            Request::patch(format!("/api/v2/users/{reader_id}"))
+                .header(header::AUTHORIZATION, &admin)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    r#"{"ageRestriction":{"age":"18","restriction":"ALLOW_ONLY"}}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(updated.status(), StatusCode::NO_CONTENT);
+    let reader = storage.find_user_by_id(&reader_id).await.unwrap().unwrap();
+    assert_eq!(
+        reader.restrictions.age_restriction,
+        Some(AgeRestriction {
+            age: 18,
+            restriction: AllowExclude::AllowOnly,
+        })
+    );
+
+    // An empty string maps to null like Jackson, which the non-null Kotlin age rejects.
+    let invalid = app
+        .clone()
+        .oneshot(
+            Request::patch(format!("/api/v2/users/{reader_id}"))
+                .header(header::AUTHORIZATION, &admin)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(r#"{"ageRestriction":{"age":"","restriction":"EXCLUDE"}}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(invalid.status(), StatusCode::BAD_REQUEST);
+    let reader = storage.find_user_by_id(&reader_id).await.unwrap().unwrap();
+    assert_eq!(
+        reader.restrictions.age_restriction,
+        Some(AgeRestriction {
+            age: 18,
+            restriction: AllowExclude::AllowOnly,
+        })
+    );
+}
+
+#[tokio::test]
 async fn basic_auth_accepts_spring_bcrypt_2a_hashes() {
     let storage = Storage::connect_memory().await.unwrap();
     let hash = bcrypt::hash("password", 10).unwrap().replacen("$2b$", "$2a$", 1);

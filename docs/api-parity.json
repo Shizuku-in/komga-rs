@@ -1,5 +1,5 @@
 {
-  "baseline": "4ef86df",
+  "baseline": "cba53ed",
   "scope": "Core Komga HTTP protocols supported by komga-rs",
   "methodProbe": "TRACE requests must expose the declared methods through the Allow header; Kobo routes use functional tests because their ANY fallback consumes unmatched methods.",
   "mediaTypes": {
@@ -194,7 +194,7 @@
     },
     {
       "area": "referential",
-      "kotlinSource": "ReferentialController",
+      "kotlinSource": "ReferentialV1Controller / ReferentialV2Controller",
       "access": "protected",
       "behavior": "implemented",
       "routes": [
@@ -269,6 +269,60 @@
             "GET"
           ],
           "path": "/api/v2/authors"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/api/v2/age-ratings"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/api/v2/authors/names"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/api/v2/authors/roles"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/api/v2/genres"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/api/v2/languages"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/api/v2/publishers"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/api/v2/series/release-years"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/api/v2/sharing-labels"
+        },
+        {
+          "methods": [
+            "GET"
+          ],
+          "path": "/api/v2/tags"
         }
       ]
     },

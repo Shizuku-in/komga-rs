@@ -309,8 +309,8 @@ async fn avif_pages_are_analyzed_served_and_converted() {
 fn hex_fixture(value: &str) -> Vec<u8> {
     value
         .split_ascii_whitespace()
-        .flat_map(|line| line.as_bytes().chunks_exact(2))
-        .map(|byte| u8::from_str_radix(std::str::from_utf8(byte).unwrap(), 16).unwrap())
+        .flat_map(|line| line.as_bytes().as_chunks::<2>().0.iter().copied())
+        .map(|byte| u8::from_str_radix(std::str::from_utf8(&byte).unwrap(), 16).unwrap())
         .collect()
 }
 
@@ -513,4 +513,54 @@ async fn book_and_series_thumbnail_management_contract() {
             .get("FindBookThumbnailsToRegenerate"),
         Some(&1)
     );
+}
+
+#[tokio::test]
+async fn book_thumbnail_by_id_enforces_content_restriction() {
+    let (_temporary, storage, tasks, book, media) = analyzed_media_fixture("archives/zip.zip", "Volume.cbz").await;
+    let generated = generate_thumbnail(&book, &media, 300).unwrap();
+    storage
+        .replace_generated_thumbnail(&ThumbnailBook {
+            id: "restricted-cover".into(),
+            thumbnail: Some(generated.bytes.clone()),
+            url: None,
+            selected: true,
+            thumbnail_type: "GENERATED".into(),
+            media_type: generated.media_type,
+            file_size: i64::try_from(generated.bytes.len()).unwrap(),
+            dimension: image_dimension(&generated.bytes).unwrap(),
+            book_id: book.id.clone(),
+        })
+        .await
+        .unwrap();
+
+    let app = build_app(AppState::new(storage.clone(), tasks).await.unwrap());
+    assert_eq!(claim(&app).await.status(), StatusCode::OK);
+    let password_hash = bcrypt::hash("reader-password", 4).unwrap();
+
+    let mut age_restricted = User::new("thumbnail-age@example.org".into(), password_hash);
+    age_restricted.restrictions = ContentRestrictions::new(
+        Some(AgeRestriction {
+            age: 12,
+            restriction: AllowExclude::AllowOnly,
+        }),
+        Vec::<String>::new(),
+        Vec::<String>::new(),
+    );
+    storage.create_user(&age_restricted).await.unwrap();
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::get(format!("/api/v1/books/{}/thumbnails/restricted-cover", book.id))
+                .header(
+                    header::AUTHORIZATION,
+                    basic("thumbnail-age@example.org", "reader-password"),
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
 }

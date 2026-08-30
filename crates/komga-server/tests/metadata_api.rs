@@ -520,6 +520,90 @@ async fn series_metadata_patch_handles_nulls_normalization_and_validation() {
 }
 
 #[tokio::test]
+async fn metadata_patch_accepts_webui_number_field_payloads() {
+    let fixture = metadata_fixture().await;
+    let series = &fixture.series[0];
+    let book = &fixture.books[0][0];
+    let book_path = format!("/api/v1/books/{}/metadata", book.id);
+    let series_path = format!("/api/v1/series/{}/metadata", series.id);
+
+    // The Web UI binds numeric fields to text inputs, so edits arrive as strings.
+    let book_updated = patch_json(
+        &fixture.app,
+        &book_path,
+        Some(&fixture.admin),
+        serde_json::json!({"numberSort": "4"}),
+    )
+    .await;
+    assert_eq!(book_updated.status(), StatusCode::NO_CONTENT);
+    assert_eq!(
+        fixture
+            .storage
+            .find_book_metadata(&book.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .number_sort,
+        4.0_f32
+    );
+
+    // Jackson coerces empty strings to null, and a null numberSort keeps the existing value.
+    let book_cleared = patch_json(
+        &fixture.app,
+        &book_path,
+        Some(&fixture.admin),
+        serde_json::json!({"numberSort": ""}),
+    )
+    .await;
+    assert_eq!(book_cleared.status(), StatusCode::NO_CONTENT);
+    assert_eq!(
+        fixture
+            .storage
+            .find_book_metadata(&book.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .number_sort,
+        4.0_f32
+    );
+
+    let book_invalid = patch_json(
+        &fixture.app,
+        &book_path,
+        Some(&fixture.admin),
+        serde_json::json!({"numberSort": "first"}),
+    )
+    .await;
+    assert_eq!(book_invalid.status(), StatusCode::BAD_REQUEST);
+
+    let series_updated = patch_json(
+        &fixture.app,
+        &series_path,
+        Some(&fixture.admin),
+        serde_json::json!({"ageRating": "16", "totalBookCount": "12"}),
+    )
+    .await;
+    assert_eq!(series_updated.status(), StatusCode::NO_CONTENT);
+    let series_metadata = fixture.storage.find_series_metadata(&series.id).await.unwrap().unwrap();
+    assert_eq!(series_metadata.age_rating, Some(16));
+    assert_eq!(series_metadata.total_book_count, Some(12));
+
+    // Clearing the text fields in the Web UI sends empty strings, which Jackson
+    // coerces to null; a null clears these fields.
+    let series_cleared = patch_json(
+        &fixture.app,
+        &series_path,
+        Some(&fixture.admin),
+        serde_json::json!({"ageRating": "", "totalBookCount": ""}),
+    )
+    .await;
+    assert_eq!(series_cleared.status(), StatusCode::NO_CONTENT);
+    let series_metadata = fixture.storage.find_series_metadata(&series.id).await.unwrap().unwrap();
+    assert_eq!(series_metadata.age_rating, None);
+    assert_eq!(series_metadata.total_book_count, None);
+}
+
+#[tokio::test]
 async fn language_aware_title_sort_updates_series_books_and_alphabetical_groups() {
     let fixture = metadata_fixture().await;
     let chinese_series = &fixture.series[0];

@@ -403,8 +403,11 @@ fn known_sort_column(property: &str) -> Option<&'static str> {
         "deleteCount" => Some("ph.DELETE_COUNT"),
         "deleteSize" => Some("COALESCE(ph.SIZE, 0) * ph.DELETE_COUNT"),
         "fileSize" => Some("ph.SIZE"),
+        "size" => Some("ph.SIZE"),
         "createdDate" => Some("ph.CREATED_DATE"),
+        "created" => Some("ph.CREATED_DATE"),
         "lastModifiedDate" => Some("ph.LAST_MODIFIED_DATE"),
+        "lastModified" => Some("ph.LAST_MODIFIED_DATE"),
         _ => None,
     }
 }
@@ -413,6 +416,7 @@ fn unknown_sort_column(property: &str) -> Option<&'static str> {
     match property {
         "hash" => Some("mp.FILE_HASH"),
         "fileSize" => Some("MAX(mp.FILE_SIZE)"),
+        "size" => Some("MAX(mp.FILE_SIZE)"),
         "matchCount" => Some("match_count"),
         "totalSize" => Some("COUNT(*) * COALESCE(MAX(mp.FILE_SIZE), 0)"),
         _ => None,

@@ -1,14 +1,14 @@
 # API compatibility surface
 
 The canonical machine-readable inventory is [`api-parity.json`](api-parity.json). It is pinned to
-the Kotlin baseline at commit `4ef86df` and currently contains 207 registered route templates. A
+the Kotlin baseline at commit `cba53ed` and currently contains 216 registered route templates. A
 template with multiple HTTP methods is one manifest entry.
 
 The inventory covers the core protocols used by Komga clients:
 
 | Area | Kotlin source | Route templates | Contract status |
 | --- | --- | ---: | --- |
-| REST and browser authentication | 21 REST controllers, CommonBookController, OAuth callback | 134 | Implemented or explicitly Partial by domain |
+| REST and browser authentication | 22 REST controllers, CommonBookController, OAuth callback | 143 | Implemented or explicitly Partial by domain |
 | OPDS 1.2 | OpdsController, OpdsCommonController | 19 | Implemented |
 | OPDS 2 | Opds2Controller, OpdsCommonController, CommonBookController | 33 | Implemented |
 | Kobo | KoboController | 10 | Implemented |
@@ -24,7 +24,7 @@ truth.
 ## Automated guard
 
 The server integration suite parses the pinned Kotlin `komga/docs/openapi.json` and requires every one
-of its 165 REST operations to appear in the manifest after normalizing path-parameter names. It then
+of its 174 REST operations to appear in the manifest after normalizing path-parameter names. It then
 probes every non-Kobo route at both `/` and `/komga`: a `TRACE` request must expose exactly the declared
 methods in the `Allow` response header. Every template is also called without credentials to lock its
 public, protected, conditionally public, OPDS Basic, Kobo-key, or KOReader-key boundary. DTOs and

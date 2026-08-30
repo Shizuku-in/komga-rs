@@ -16,6 +16,10 @@ const MAIN_FLYWAY_FINGERPRINT: [u8; 32] = [
     0x5f, 0x1f, 0x5e, 0xef, 0xfc, 0x26, 0x31, 0x35, 0x96, 0x33, 0x1f, 0x40, 0xec, 0x1d, 0x3c, 0x94, 0x13, 0xd2, 0x39,
     0x67, 0x29, 0x0b, 0x07, 0x51, 0xe1, 0xf5, 0xee, 0xbf, 0x02, 0xca, 0xa1, 0xa2,
 ];
+const MAIN_FLYWAY_1_26_FINGERPRINT: [u8; 32] = [
+    0xfb, 0x17, 0x35, 0x8e, 0x5d, 0xec, 0xd6, 0xa9, 0x21, 0xf9, 0x0d, 0xe5, 0xcb, 0xf3, 0x64, 0xb9, 0x9a, 0xb8, 0x78,
+    0x17, 0x96, 0x5f, 0xaa, 0xbf, 0x82, 0x57, 0xe1, 0x88, 0x16, 0x77, 0xa7, 0x21,
+];
 const TASK_FLYWAY_FINGERPRINT: [u8; 32] = [
     0x6d, 0xba, 0xe8, 0xc8, 0x8a, 0x4f, 0xa9, 0x0e, 0x7f, 0x49, 0x43, 0x96, 0xcf, 0xe3, 0xee, 0x66, 0x52, 0xbf, 0x05,
     0x02, 0x78, 0xc6, 0xdb, 0x64, 0x8d, 0xf8, 0x83, 0x08, 0xda, 0xeb, 0x42, 0xb9,
@@ -42,16 +46,16 @@ impl DatabaseKind {
         }
     }
 
-    fn flyway_fingerprint(self) -> &'static [u8; 32] {
+    fn flyway_fingerprints(self) -> &'static [[u8; 32]] {
         match self {
-            Self::Main => &MAIN_FLYWAY_FINGERPRINT,
-            Self::Tasks => &TASK_FLYWAY_FINGERPRINT,
+            Self::Main => &[MAIN_FLYWAY_FINGERPRINT, MAIN_FLYWAY_1_26_FINGERPRINT],
+            Self::Tasks => &[TASK_FLYWAY_FINGERPRINT],
         }
     }
 
     fn flyway_description(self) -> &'static str {
         match self {
-            Self::Main => "90 migrations ending at 20250730173126",
+            Self::Main => "90 migrations ending at 20250730173126 or 91 ending at 20260225161438",
             Self::Tasks => "1 migration ending at 20231013114850",
         }
     }
@@ -154,7 +158,7 @@ async fn verify_flyway_history(pool: &SqlitePool, kind: DatabaseKind) -> Result<
     let encoded = serde_json::to_vec(&entries)
         .map_err(|error| incompatible(kind, format!("could not validate Flyway history: {error}")))?;
     let fingerprint: [u8; 32] = Sha256::digest(encoded).into();
-    if &fingerprint != kind.flyway_fingerprint() {
+    if !kind.flyway_fingerprints().contains(&fingerprint) {
         let latest = entries
             .last()
             .and_then(|entry| entry.version.as_deref())

@@ -989,6 +989,37 @@ mod tests {
     }
 
     #[test]
+    fn detects_divina_epub_with_svg_image_pages() {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("svg-image.epub");
+        let opf = r#"<?xml version="1.0"?>
+            <package xmlns="http://www.idpf.org/2007/opf" version="3.0">
+              <metadata/>
+              <manifest>
+                <item id="page" href="page.xhtml" media-type="application/xhtml+xml"/>
+                <item id="img" href="page.png" media-type="image/png"/>
+              </manifest>
+              <spine><itemref idref="page"/></spine>
+            </package>"#;
+        let page = br#"<?xml version="1.0"?>
+            <html xmlns="http://www.w3.org/1999/xhtml">
+              <body>
+                <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="48" height="48">
+                  <image xlink:href="page.png" width="48" height="48"/>
+                </svg>
+              </body>
+            </html>"#;
+        write_epub(&path, opf, &[("page.xhtml", page), ("page.png", b"not-a-real-png")]);
+
+        let media = analyze_book(&book(&path), false, || false).unwrap();
+        assert_eq!(media.status, MediaStatus::Ready);
+        assert!(media.epub_divina_compatible);
+        assert_eq!(media.pages.len(), 1);
+        assert_eq!(media.pages[0].file_name, "page.png");
+        assert_eq!(media.pages[0].media_type, "image/png");
+    }
+
+    #[test]
     fn analyzes_reflowable_epub_navigation_positions_and_invalid_extension() {
         let source = book(&kotlin_epub("The Incomplete Theft - Ralph Burke.epub"));
         let media = analyze_book(&source, false, || false).unwrap();

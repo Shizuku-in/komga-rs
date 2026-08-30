@@ -90,6 +90,7 @@ pub(crate) struct ApiKeyRequestDto {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct AgeRestrictionUpdateDto {
+    #[serde(deserialize_with = "deserialize_numeric")]
     pub(crate) age: i64,
     pub(crate) restriction: RestrictionUpdate,
 }
@@ -289,13 +290,17 @@ pub(crate) struct ServerSettingsDto {
 pub(crate) struct ServerSettingsUpdateDto {
     pub(crate) delete_empty_collections: Option<bool>,
     pub(crate) delete_empty_read_lists: Option<bool>,
+    #[serde(deserialize_with = "deserialize_numeric_option")]
     pub(crate) remember_me_duration_days: Option<i64>,
     pub(crate) renew_remember_me_key: Option<bool>,
     pub(crate) thumbnail_size: Option<ThumbnailSize>,
+    #[serde(deserialize_with = "deserialize_numeric_option")]
     pub(crate) task_pool_size: Option<i32>,
+    #[serde(deserialize_with = "deserialize_numeric_patch")]
     pub(crate) server_port: Patch<u16>,
     pub(crate) server_context_path: Patch<String>,
     pub(crate) kobo_proxy: Option<bool>,
+    #[serde(deserialize_with = "deserialize_numeric_patch")]
     pub(crate) kobo_port: Patch<u16>,
     pub(crate) kepubify_path: Patch<String>,
 }
@@ -337,6 +342,7 @@ pub(crate) struct BookMetadataUpdateDto {
     summary_lock: Patch<bool>,
     number: Patch<String>,
     number_lock: Patch<bool>,
+    #[serde(deserialize_with = "deserialize_numeric_patch")]
     number_sort: Patch<f32>,
     number_sort_lock: Patch<bool>,
     release_date: Patch<NaiveDate>,
@@ -523,8 +529,40 @@ where
 {
     match Option::<NumericValue<T>>::deserialize(deserializer)? {
         Some(NumericValue::Number(value)) => Ok(Patch::Value(value)),
+        // Jackson coerces an empty string to `null` for nullable numbers, and
+        // the Web UI submits cleared number fields as empty strings.
+        Some(NumericValue::String(value)) if value.is_empty() => Ok(Patch::Null),
         Some(NumericValue::String(value)) => value.parse().map(Patch::Value).map_err(serde::de::Error::custom),
         None => Ok(Patch::Null),
+    }
+}
+
+/// Deserializes a required number, accepting numeric strings like Jackson.
+fn deserialize_numeric<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de> + FromStr,
+    T::Err: Display,
+{
+    match NumericValue::<T>::deserialize(deserializer)? {
+        NumericValue::Number(value) => Ok(value),
+        NumericValue::String(value) => value.parse().map_err(serde::de::Error::custom),
+    }
+}
+
+/// Deserializes an optional number, accepting numeric strings and mapping an
+/// empty string to `None` like Jackson.
+fn deserialize_numeric_option<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de> + FromStr,
+    T::Err: Display,
+{
+    match Option::<NumericValue<T>>::deserialize(deserializer)? {
+        Some(NumericValue::Number(value)) => Ok(Some(value)),
+        Some(NumericValue::String(value)) if value.is_empty() => Ok(None),
+        Some(NumericValue::String(value)) => value.parse().map(Some).map_err(serde::de::Error::custom),
+        None => Ok(None),
     }
 }
 

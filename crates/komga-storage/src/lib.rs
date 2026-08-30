@@ -38,7 +38,7 @@ pub use library::DeleteLibraryResult;
 pub use lifecycle::{EmptyTrashResult, NumberingRefreshTarget};
 pub use media::{PageHashTarget, PageHashUpdate};
 pub use operations::ContentMetricsSnapshot;
-pub use referential::{ReferentialScope, author_page_request};
+pub use referential::{ReferentialFilter, ReferentialScope, ReferentialTagSource};
 pub use settings::{ClientSetting, ServerSettings, ServerSettingsPatch, SettingUpdate};
 pub use source_import::BookImportCommitResult;
 pub use tasks::{RebuildIndexEntity, TaskRecord, TaskStorage};
@@ -53,14 +53,22 @@ use sqlx::{
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions},
 };
 use thiserror::Error;
-use unicode_normalization::UnicodeNormalization;
+use unicode_normalization::{UnicodeNormalization, char::is_combining_mark};
 
 use compatibility::{DatabaseKind, MAIN_MIGRATOR, verify_database_file};
 
 const UNICODE_NOCASE_COLLATION: &str = "KOMGA_UNICODE_NOCASE";
 
 fn unicode_nocase_compare(left: &str, right: &str) -> Ordering {
-    let normalize = |value: &str| value.nfkc().flat_map(char::to_lowercase).collect::<String>();
+    let normalize = |value: &str| {
+        value
+            .nfkd()
+            .filter(|character| !is_combining_mark(*character))
+            .flat_map(char::to_lowercase)
+            .collect::<String>()
+            .nfkc()
+            .collect::<String>()
+    };
     normalize(left).cmp(&normalize(right))
 }
 
