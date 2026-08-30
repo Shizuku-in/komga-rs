@@ -173,6 +173,81 @@ async fn server_settings_are_admin_only_and_follow_kotlin_patch_semantics() {
 }
 
 #[tokio::test]
+async fn server_settings_accept_webui_number_field_payloads() {
+    let storage = Storage::connect_memory().await.unwrap();
+    let app = app_with_storage(storage.clone()).await;
+    claim(&app).await;
+    let admin = basic("admin@example.org", "password");
+    let patch_settings = |body: &'static str| {
+        let app = app.clone();
+        let admin = admin.clone();
+        async move {
+            app.oneshot(
+                Request::patch("/api/v1/settings")
+                    .header(header::AUTHORIZATION, admin)
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+        }
+    };
+
+    // The Web UI binds numeric settings to text inputs, so edits arrive as strings.
+    let updated = patch_settings(
+        r#"{
+            "rememberMeDurationDays":"30",
+            "taskPoolSize":"3",
+            "serverPort":"5679",
+            "koboPort":"6790"
+        }"#,
+    )
+    .await;
+    assert_eq!(updated.status(), StatusCode::NO_CONTENT);
+    let persisted = storage.server_settings().await.unwrap();
+    assert_eq!(persisted.remember_me_duration_days, 30);
+    assert_eq!(persisted.task_pool_size, 3);
+    assert_eq!(persisted.server_port, Some(5_679));
+    assert_eq!(persisted.kobo_port, Some(6_790));
+
+    // Jackson coerces an empty string to null: a null keeps plain settings and
+    // clears the Patch-managed ports.
+    let cleared = patch_settings(
+        r#"{
+            "rememberMeDurationDays":"",
+            "taskPoolSize":"",
+            "serverPort":"",
+            "koboPort":""
+        }"#,
+    )
+    .await;
+    assert_eq!(cleared.status(), StatusCode::NO_CONTENT);
+    let persisted = storage.server_settings().await.unwrap();
+    assert_eq!(persisted.remember_me_duration_days, 30);
+    assert_eq!(persisted.task_pool_size, 3);
+    assert_eq!(persisted.server_port, None);
+    assert_eq!(persisted.kobo_port, None);
+
+    for invalid in [
+        r#"{"rememberMeDurationDays":"soon"}"#,
+        r#"{"taskPoolSize":"many"}"#,
+        r#"{"serverPort":"port"}"#,
+        r#"{"serverPort":"0"}"#,
+        r#"{"serverPort":"70000"}"#,
+        r#"{"koboPort":"70000"}"#,
+    ] {
+        let response = patch_settings(invalid).await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{invalid}");
+    }
+    let persisted_after = storage.server_settings().await.unwrap();
+    assert_eq!(persisted_after.remember_me_duration_days, 30);
+    assert_eq!(persisted_after.task_pool_size, 3);
+    assert_eq!(persisted_after.server_port, None);
+    assert_eq!(persisted_after.kobo_port, None);
+}
+
+#[tokio::test]
 async fn invalid_server_settings_are_rejected_before_any_write() {
     let storage = Storage::connect_memory().await.unwrap();
     let app = app_with_storage(storage.clone()).await;
