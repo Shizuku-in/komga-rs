@@ -99,7 +99,7 @@ COPY webui/src/styles/readium/LICENSE /usr/share/licenses/komga-rs/Readium-CSS-L
 
 ENV HOME=/config \
     KOMGA_CONFIG_DIR=/config \
-    KOMGA_HOST=0.0.0.0 \
+    KOMGA_HOST=:: \
     KOMGA_PORT=25600
 
 LABEL org.opencontainers.image.title="komga-rs" \
