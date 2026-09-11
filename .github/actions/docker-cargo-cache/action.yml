@@ -1,0 +1,31 @@
+name: Docker Cargo cache
+description: Persist Cargo cache mounts between hosted Docker builds
+inputs:
+  arch:
+    description: Docker target architecture
+    required: true
+  builder:
+    description: Buildx builder name
+    required: true
+runs:
+  using: composite
+  steps:
+    - uses: actions/cache@v4
+      id: cache
+      with:
+        path: ${{ runner.temp }}/docker-cargo-cache
+        key: docker-cargo-v1-${{ runner.os }}-${{ inputs.arch }}-${{ hashFiles('Dockerfile', 'Cargo.lock', 'Cargo.toml', 'crates/**/Cargo.toml', '.github/actions/docker-cargo-cache/action.yml') }}-${{ github.sha }}
+        restore-keys: |
+          docker-cargo-v1-${{ runner.os }}-${{ inputs.arch }}-${{ hashFiles('Dockerfile', 'Cargo.lock', 'Cargo.toml', 'crates/**/Cargo.toml', '.github/actions/docker-cargo-cache/action.yml') }}-
+    # Post steps run in reverse order: extract mounts before actions/cache saves.
+    - uses: reproducible-containers/buildkit-cache-dance@5b81f4d29dc8397a7d341dba3aeecc7ec54d6361 # v3.3.0
+      with:
+        builder: ${{ inputs.builder }}
+        scratch-dir: ${{ runner.temp }}/cache-dance
+        skip-extraction: ${{ steps.cache.outputs.cache-hit == 'true' }}
+        cache-map: |
+          {
+            "${{ runner.temp }}/docker-cargo-cache/registry": {"target": "/usr/local/cargo/registry", "id": "komga-cargo-registry"},
+            "${{ runner.temp }}/docker-cargo-cache/git": {"target": "/usr/local/cargo/git", "id": "komga-cargo-git"},
+            "${{ runner.temp }}/docker-cargo-cache/target": {"target": "/build/target", "id": "komga-cargo-target-${{ inputs.arch }}"}
+          }

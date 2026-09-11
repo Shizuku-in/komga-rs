@@ -1,0 +1,23 @@
+name: Rolling Rust cache
+description: Restore compatible build artifacts and save the completed build per commit
+runs:
+  using: composite
+  steps:
+    - name: Identify Rust compiler
+      id: compiler
+      shell: bash
+      run: |
+        echo "hash=$(rustc -vV | sha256sum | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+    - uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/registry/index
+          ~/.cargo/registry/cache
+          ~/.cargo/git/db
+          target
+        # Keep feature sets and compiler versions isolated. A new commit gets a
+        # writable entry even when it restores an older dependency/build cache.
+        key: rust-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ steps.compiler.outputs.hash }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'crates/**/Cargo.toml', '.cargo/config.toml', '.github/workflows/ci.yml', '.github/actions/rust-cache/action.yml') }}-${{ github.sha }}
+        restore-keys: |
+          rust-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ steps.compiler.outputs.hash }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'crates/**/Cargo.toml', '.cargo/config.toml', '.github/workflows/ci.yml', '.github/actions/rust-cache/action.yml') }}-
+          rust-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ steps.compiler.outputs.hash }}-
